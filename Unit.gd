@@ -81,6 +81,7 @@ func _try_attack():
 		var dist = global_position.distance_to(child.global_position)
 		if dist <= attack_range:
 			var dmg = max(1, attack - child.defense)
+			GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
 			print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [owner_name, army_id, child.owner_name, child.army_id, dist, dmg])
 			child.take_damage(dmg, owner_peer_id)
 			attack_timer = 1.0

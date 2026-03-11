@@ -85,7 +85,7 @@ func _do_move_army_1():
 		state = State.DONE
 		return
 
-	var target = Vector2(500, 300)
+	var target = Vector2(520, 220) if GameState.local_player_name == "A" else Vector2(530, 230)
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
 	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[0].army_id, int(target.x), int(target.y)])
 	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, target)
@@ -112,7 +112,7 @@ func _do_move_army_2():
 		state = State.WAIT_FOR_COMBAT
 		return
 
-	var target = Vector2(550, 400)
+	var target = Vector2(760, 480) if GameState.local_player_name == "A" else Vector2(770, 490)
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
 	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[1].army_id, int(target.x), int(target.y)])
 	world.rpc_id(1, "_server_move_army", my_armies[1].army_id, target)

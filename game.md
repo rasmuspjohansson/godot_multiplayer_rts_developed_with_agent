@@ -31,6 +31,20 @@
 | Defense | 2     |
 | Range   | 50.0  |
 
+## Capture Points & Resources
+- The map has **2 capture points**: one **Horses** and one **Spears**.
+- Capture points start **unowned**.
+- A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
+- Once captured, a point produces **1 resource** for its owner every **2 seconds**.
+- Capture points can be **taken over** by the opposing player using the same proximity rule.
+- Resources are tracked per player in `GameState` and displayed in a top-bar HUD.
+- **Seek enemy**: If an army has been at a capture point for **5 seconds** with **no combat** occurring anywhere, the server orders that army to seek and continuously follow the **closest enemy army** (move target is updated every tick so the army follows when the enemy moves). A manual move order (right-click) cancels follow.
+
+## Top Bar HUD
+- A `CanvasLayer` UI bar at the top of the screen during gameplay.
+- Shows: `Resources: <count> | Horses: <owner or "---"> | Spears: <owner or "---">`.
+- Updated every sync tick from the server.
+
 ## Rout & Win Condition
 - When an army drops below **30%** soldiers alive (3 of 10), it **routs**.
 - Routed army's remaining soldiers flee and are removed.
@@ -44,6 +58,7 @@
 | `Lobby.tscn`    | Shows connected players and ready states. "Ready" toggle button. |
 | `World.tscn`    | 2D arena with `NavigationRegion2D`. Server spawns armies here. |
 | `Unit.tscn`     | `CharacterBody2D` with `NavigationAgent2D`. Individual soldier. |
+| `CapturePoint.tscn` | Visual marker for a capture point (colored circle + label). |
 | `GameOver.tscn` | Displays winner. Clients auto-disconnect after a delay. |
 
 ## Script Files
@@ -51,9 +66,11 @@
 |-----------------|------|
 | `Main.gd`       | Networking setup, scene switching. |
 | `Lobby.gd`      | Ready-state RPCs, player list UI. |
-| `World.gd`      | Army spawning, selection, rotation input, rout/win checking, sync. |
+| `World.gd`      | Army spawning, capture points, selection, rotation input, rout/win checking, sync. |
 | `Army.gd`       | Formation math, movement, rotation, repack on death, rout detection. |
 | `Unit.gd`       | Individual soldier: navigate, auto-attack, take damage, die. |
+| `CapturePoint.gd` | Capture logic, proximity check, resource production timer. |
+| `TopBar.gd`     | HUD overlay: shows resources and capture point ownership. |
 | `GameOver.gd`   | Winner display, disconnect logic. |
 | `MockPlayer.gd` | Automated test client (activated by `--auto-test`). |
 

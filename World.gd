@@ -1,16 +1,25 @@
 extends Node2D
 
 const ARMY_CLICK_RADIUS := 80.0
+const CP_PEACE_SECONDS := 5.0
+const CAPTURE_RADIUS_SEEK := 120.0
 
 var armies: Array = []
 var all_units: Array = []
+var capture_points: Array = []
+var top_bar = null
 var game_over := false
 var sync_timer := 0.0
 var selected_army = null
+var army_time_at_cp := {}
+var army_follow_target := {}
 
 func _ready():
 	if multiplayer.is_server():
+		GameState.reset_match_state()
 		_spawn_armies()
+		_spawn_capture_points()
+	_setup_topbar()
 
 func _spawn_armies():
 	var player_ids = GameState.players.keys()
@@ -119,6 +128,106 @@ func _serialize_armies() -> Array:
 		})
 	return data
 
+func _spawn_capture_points():
+	var cp_configs = [
+		{"id": "Horses", "type": "Horses", "pos": Vector2(500, 200)},
+		{"id": "Spears", "type": "Spears", "pos": Vector2(780, 500)}
+	]
+	for cfg in cp_configs:
+		var cp = preload("res://CapturePoint.tscn").instantiate()
+		cp.name = "CP_%s" % cfg["id"]
+		cp.cp_id = cfg["id"]
+		cp.cp_type = cfg["type"]
+		cp.global_position = cfg["pos"]
+		cp.get_node("Label").text = cfg["type"]
+		cp.ownership_changed.connect(_on_capture_point_changed)
+		add_child(cp)
+		capture_points.append(cp)
+	print("TEST_CAPTURE_SPAWN: %d capture points spawned (Horses, Spears)" % capture_points.size())
+	rpc("_client_spawn_capture_points", _serialize_capture_points())
+
+func _serialize_capture_points() -> Array:
+	var data := []
+	for cp in capture_points:
+		data.append({
+			"id": cp.cp_id,
+			"type": cp.cp_type,
+			"x": cp.global_position.x,
+			"y": cp.global_position.y,
+			"owner_pid": cp.owner_pid
+		})
+	return data
+
+@rpc("authority", "reliable")
+func _client_spawn_capture_points(data: Array):
+	for d in data:
+		var cp = preload("res://CapturePoint.tscn").instantiate()
+		cp.name = "CP_%s" % d["id"]
+		cp.cp_id = d["id"]
+		cp.cp_type = d["type"]
+		cp.global_position = Vector2(d["x"], d["y"])
+		cp.owner_pid = d["owner_pid"]
+		cp.get_node("Label").text = d["type"]
+		add_child(cp)
+		capture_points.append(cp)
+	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % capture_points.size())
+
+func _on_capture_point_changed(_cp_id: String, _owner_pid: int):
+	_sync_capture_state()
+
+func _setup_topbar():
+	var tb_script = preload("res://TopBar.gd")
+	top_bar = CanvasLayer.new()
+	top_bar.set_script(tb_script)
+	top_bar.name = "TopBar"
+	top_bar.layer = 10
+	add_child(top_bar)
+
+func _sync_capture_state():
+	var cp_data := []
+	for cp in capture_points:
+		cp_data.append({"id": cp.cp_id, "owner_pid": cp.owner_pid, "owner_name": cp.get_owner_name()})
+	var res_data := {}
+	for pid in GameState.resources.keys():
+		res_data[pid] = GameState.resources[pid]
+	rpc("_client_update_capture", cp_data, res_data)
+	_update_topbar_local(cp_data, res_data)
+
+@rpc("authority", "unreliable")
+func _client_update_capture(cp_data: Array, res_data: Dictionary):
+	for d in cp_data:
+		for cp in capture_points:
+			if cp.cp_id == d["id"]:
+				cp.owner_pid = d["owner_pid"]
+				break
+		GameState.capture_points[d["id"]] = d["owner_name"]
+	for pid_str in res_data.keys():
+		var pid = int(pid_str)
+		GameState.resources[pid] = res_data[pid_str]
+	_update_topbar_local(cp_data, res_data)
+
+func _update_topbar_local(cp_data: Array, res_data):
+	if top_bar == null:
+		return
+	var my_pid = multiplayer.get_unique_id()
+	var my_res = 0
+	if res_data is Dictionary:
+		if res_data.has(my_pid):
+			my_res = res_data[my_pid]
+		elif res_data.has(str(my_pid)):
+			my_res = res_data[str(my_pid)]
+	var horses_owner = "---"
+	var spears_owner = "---"
+	for d in cp_data:
+		var oname = d.get("owner_name", "---")
+		if oname == "" or (d.get("owner_pid", 0) == 0):
+			oname = "---"
+		if d["id"] == "Horses":
+			horses_owner = oname
+		elif d["id"] == "Spears":
+			spears_owner = oname
+	top_bar.update_display(my_res, horses_owner, spears_owner)
+
 func _unhandled_input(event):
 	if multiplayer.is_server() or game_over:
 		return
@@ -177,6 +286,7 @@ func _server_move_army(aid: String, target: Vector2):
 		return
 	var marker = "TEST_009_MOVE" if army.owner_name == "A" else "TEST_009_MOVE_B"
 	print("%s: Server moving army '%s' to (%d,%d)" % [marker, aid, int(target.x), int(target.y)])
+	army_follow_target.erase(aid)
 	army.move_army(target)
 	rpc("_client_move_army", aid, target)
 
@@ -224,12 +334,73 @@ func _find_army(aid: String):
 			return army
 	return null
 
+func _get_closest_enemy_army(army) -> Node:
+	var best = null
+	var best_dist := 1e10
+	for a in armies:
+		if a.owner_peer_id == army.owner_peer_id or a.is_routed:
+			continue
+		var d = army.global_position.distance_to(a.global_position)
+		if d < best_dist:
+			best_dist = d
+			best = a
+	return best
+
+func _is_army_at_capture_point(army) -> bool:
+	for cp in capture_points:
+		if army.global_position.distance_to(cp.global_position) <= CAPTURE_RADIUS_SEEK:
+			return true
+	return false
+
+func _update_cp_seek_and_follow(delta: float):
+	var now = Time.get_ticks_msec() / 1000.0
+	if now - GameState.last_combat_time < CP_PEACE_SECONDS:
+		for a in armies:
+			if a.army_id in army_time_at_cp:
+				army_time_at_cp[a.army_id] = 0.0
+		return
+	for army in armies:
+		if army.is_routed:
+			continue
+		var aid = army.army_id
+		if _is_army_at_capture_point(army):
+			var t = army_time_at_cp.get(aid, 0.0)
+			if t >= 0:
+				t += delta
+				army_time_at_cp[aid] = t
+				if t >= CP_PEACE_SECONDS:
+					var enemy = _get_closest_enemy_army(army)
+					if enemy:
+						army_follow_target[aid] = enemy.army_id
+						army_time_at_cp[aid] = -1.0
+						print("TEST_SEEK_ENEMY: Army '%s' seeking closest enemy '%s'" % [aid, enemy.army_id])
+		else:
+			army_time_at_cp[aid] = 0.0
+
+func _apply_follow_targets():
+	var to_erase := []
+	for aid in army_follow_target.keys():
+		var target_id = army_follow_target[aid]
+		var army = _find_army(aid)
+		var target_army = _find_army(target_id)
+		if army == null or target_army == null or target_army.is_routed:
+			to_erase.append(aid)
+			continue
+		var pos = target_army.global_position
+		army.move_army(pos)
+		rpc("_client_move_army", aid, pos)
+	for aid in to_erase:
+		army_follow_target.erase(aid)
+
 func _physics_process(delta):
 	if multiplayer.is_server() and not game_over:
+		_update_cp_seek_and_follow(delta)
 		sync_timer += delta
 		if sync_timer >= 0.05:
 			sync_timer = 0.0
+			_apply_follow_targets()
 			_sync_unit_positions()
+			_sync_capture_state()
 
 func _notify_unit_death(unit_name: String):
 	rpc("_client_unit_died", unit_name)
