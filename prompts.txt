@@ -1,0 +1,18 @@
+I want to create a godot multiplayer game. 
+i want to do it testdrivven with an agent building the game acording to game.md 
+one server and two clients will then be started 
+the two clients will instead of beeing controlled by a human player be controlled by a mockupplayer (code) that implements a serie of actions (conect to server , click ok , selct the unit , send it to a coordinate ) 
+comands will then be run to collect logs from server and the two client (so the logs need to be saved to separate logg files )
+agent will read the logs check if there are problems, fix the problems . stop all processes , delete the logs and runn everythng from scratch, repeat.
+
+
+skills.md is meant to list comands that can be run to start server  and clients 
+game.md is meant to describe the game taht will be developed 
+events.md lists what events should happen in sequence when testing the game (when creating the code that will make up the mockupplayer this file needs to be taken in consideration
+
+tests.md should list things that needs to be tested and should initially be a list of thigns taht needs to be tested in order to check if the things in events.md happens or not
+
+start by reading all files in this repo, then come with suggestions to improvements to the .md files , then make the game , then use the comands in skills.md to start the server and the two clients (we will run server an both clients locally from this pc for now but the game should eventually be posible to deploy so taht server is on a pc open to the interanet and both clients can conect to it over internet)
+run for maximum 5 iterations of the run , extract logs , fix errorrs run again loop if not asked for more
+
+ 

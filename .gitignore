@@ -1,0 +1,35 @@
+# Ignore log and process ID files
+*.log
+*.pid
+# Godot 4+ specific
+.godot/
+
+# Godot import cache
+.import/
+
+# Imported resources
+*.import
+
+# Mono / C# build files
+.mono/
+data_*/
+mono_crash.*
+
+# Build output
+export_presets.cfg
+*.pck
+*.apk
+*.ipa
+*.exe
+*.app
+*.x86_64
+*.x86
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/

@@ -1,0 +1,31 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Unit.gd" id="1_unit"]
+
+[node name="Unit" type="CharacterBody2D"]
+script = ExtResource("1_unit")
+
+[node name="ColorRect" type="ColorRect" parent="."]
+mouse_filter = 2
+offset_left = -15.0
+offset_top = -15.0
+offset_right = 15.0
+offset_bottom = 15.0
+color = Color(0.6, 0.8, 0.2, 1)
+
+[node name="HPLabel" type="Label" parent="."]
+mouse_filter = 2
+offset_left = -30.0
+offset_top = -40.0
+offset_right = 30.0
+offset_bottom = -15.0
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NavigationAgent2D" type="NavigationAgent2D" parent="."]
+path_desired_distance = 4.0
+target_desired_distance = 4.0
+
+[node name="SyncTimer" type="Timer" parent="."]
+wait_time = 0.05
+autostart = true
