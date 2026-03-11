@@ -4,15 +4,18 @@ enum State {
 	WAIT_FOR_LOBBY,
 	IN_LOBBY,
 	WAIT_FOR_WORLD,
-	SELECT_UNIT,
-	SEND_MOVE,
+	SELECT_ARMY_1,
+	MOVE_ARMY_1,
+	SELECT_ARMY_2,
+	MOVE_ARMY_2,
 	WAIT_FOR_COMBAT,
 	DONE
 }
 
 var state := State.WAIT_FOR_LOBBY
 var timer := 0.0
-var my_unit = null
+var world = null
+var my_armies: Array = []
 
 func _ready():
 	print("MockPlayer: Automated testing active for '%s'" % GameState.local_player_name)
@@ -22,17 +25,9 @@ func _process(delta):
 	match state:
 		State.WAIT_FOR_LOBBY:
 			_check_lobby()
-		State.IN_LOBBY:
-			pass
 		State.WAIT_FOR_WORLD:
 			_check_world()
-		State.SELECT_UNIT:
-			_do_select()
-		State.SEND_MOVE:
-			_do_move()
-		State.WAIT_FOR_COMBAT:
-			pass
-		State.DONE:
+		_:
 			pass
 
 func _check_lobby():
@@ -65,45 +60,61 @@ func _check_world():
 	if level == null:
 		return
 	for child in level.get_children():
-		if child.has_method("get_my_unit"):
+		if child.has_method("get_my_armies"):
+			world = child
 			print("MockPlayer: World scene detected")
-			state = State.SELECT_UNIT
+			state = State.SELECT_ARMY_1
 			timer = 0.0
-			get_tree().create_timer(1.0).timeout.connect(_delayed_select.bind(child))
+			get_tree().create_timer(1.5).timeout.connect(_do_select_army_1)
 			return
 
-func _delayed_select(world):
-	_do_select_in_world(world)
-
-func _do_select():
-	pass
-
-func _do_select_in_world(world):
-	my_unit = world.get_my_unit()
-	if my_unit == null:
-		print("MockPlayer: ERROR - Could not find my unit!")
+func _do_select_army_1():
+	my_armies = world.get_my_armies()
+	if my_armies.size() == 0:
+		print("MockPlayer: ERROR - no armies found!")
 		state = State.DONE
 		return
 
-	my_unit.select()
-	print("MockPlayer: Selected unit '%s'" % my_unit.owner_name)
-	state = State.SEND_MOVE
-	timer = 0.0
-	get_tree().create_timer(0.5).timeout.connect(_do_move_cmd)
+	my_armies[0].select()
+	print("MockPlayer: Selected army '%s'" % my_armies[0].army_id)
+	state = State.MOVE_ARMY_1
+	get_tree().create_timer(0.5).timeout.connect(_do_move_army_1)
 
-func _do_move_cmd():
-	_do_move()
-
-func _do_move():
-	if my_unit == null:
-		return
-	if state != State.SEND_MOVE:
+func _do_move_army_1():
+	if my_armies.size() == 0 or my_armies[0].is_routed:
+		state = State.DONE
 		return
 
-	var target = Vector2(300, 300)
+	var target = Vector2(500, 300)
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
-	print("%s: MockPlayer issuing move to (%d,%d)" % [marker, int(target.x), int(target.y)])
+	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[0].army_id, int(target.x), int(target.y)])
+	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, target)
 
-	my_unit.rpc_id(1, "request_move", target)
+	state = State.SELECT_ARMY_2
+	get_tree().create_timer(0.5).timeout.connect(_do_select_army_2)
+
+func _do_select_army_2():
+	my_armies = world.get_my_armies()
+	if my_armies.size() < 2:
+		print("MockPlayer: Only %d armies available, skipping second" % my_armies.size())
+		state = State.WAIT_FOR_COMBAT
+		return
+
+	my_armies[0].deselect()
+	my_armies[1].select()
+	print("MockPlayer: Selected army '%s'" % my_armies[1].army_id)
+	state = State.MOVE_ARMY_2
+	get_tree().create_timer(0.5).timeout.connect(_do_move_army_2)
+
+func _do_move_army_2():
+	my_armies = world.get_my_armies()
+	if my_armies.size() < 2 or my_armies[1].is_routed:
+		state = State.WAIT_FOR_COMBAT
+		return
+
+	var target = Vector2(550, 400)
+	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
+	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[1].army_id, int(target.x), int(target.y)])
+	world.rpc_id(1, "_server_move_army", my_armies[1].army_id, target)
+
 	state = State.WAIT_FOR_COMBAT
-	timer = 0.0

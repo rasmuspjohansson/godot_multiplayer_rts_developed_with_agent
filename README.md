@@ -2,6 +2,45 @@
 
 A minimal multiplayer RTS where two players each control one unit on a 2D arena. Units auto-attack when close. Last unit standing wins.
 
+## Agent-Driven Development
+
+This project is designed to be developed and tested iteratively by an AI agent (e.g. Cursor Agent mode). The workflow is driven by a set of markdown files that each serve a specific purpose:
+
+| File | Purpose |
+|------|---------|
+| `prompts.txt` | Master instructions for the agent. Describes the overall workflow: read all files, improve docs, build the game, run automated tests, read logs, fix errors, repeat. Point the agent here to kick off a full development cycle. |
+| `game.md` | Game design document. Describes architecture, scenes, unit stats, controls, and automation strategy. The agent builds the game according to this spec. |
+| `events.md` | Ordered sequence of events that should happen during an automated test match (connect, ready, spawn, select, move, combat, game over, disconnect). Each event has a `TEST_XXX` log marker. |
+| `tests.md` | Checklist of test markers derived from `events.md`. Each marker maps to a log file where it should appear. The agent uses this to verify pass/fail. |
+| `skills.md` | Shell commands for starting the server, clients, extracting logs, and cleaning up. The agent runs these commands directly. |
+
+### How to use with an agent
+
+1. Open the project in Cursor (or similar AI-assisted editor).
+2. Switch to Agent mode.
+3. Tell the agent: *"Read all the files in this repo. In the prompts.txt file are instructions for you to implement."*
+4. The agent will:
+   - Read all `.md` files and `prompts.txt`
+   - Suggest improvements to the documentation
+   - Implement or update the game code according to `game.md`
+   - Run the server and two mock-player clients using commands from `skills.md`
+   - Extract logs and check for `TEST_` markers listed in `tests.md`
+   - Fix any errors found in the logs
+   - Repeat the test-fix loop (up to 5 iterations or until all tests pass)
+
+### Adding new features
+
+To extend the game with the agent:
+
+1. Update `game.md` with the new feature description.
+2. Add the expected event sequence to `events.md` with new `TEST_` markers.
+3. Add corresponding test entries to `tests.md`.
+4. Tell the agent to re-read the files and implement the changes.
+
+The agent will follow the same build-test-fix loop for the new feature.
+
+---
+
 ## Requirements
 
 - Godot 4.6.x (standalone binary or installed via package manager)
@@ -11,7 +50,7 @@ A minimal multiplayer RTS where two players each control one unit on a 2D arena.
 
 One **dedicated server** (headless, no player) and **two clients** that connect to it. The server is authoritative over movement and combat.
 
-## How to Test
+## How to Test Manually
 
 ### 1. Start the Dedicated Server
 
