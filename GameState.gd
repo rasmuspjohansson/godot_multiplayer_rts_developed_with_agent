@@ -1,5 +1,13 @@
 extends Node
 
+const PLAYER_COLORS: Array = [
+	Color.RED,
+	Color.BLUE,
+	Color.GREEN,
+	Color.ORANGE,
+	Color.PURPLE
+]
+
 var players := {}
 var local_player_name := ""
 var is_auto_test := false

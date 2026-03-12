@@ -89,11 +89,39 @@ func _on_peer_disconnected(id: int):
 	if is_server:
 		GameState.players.erase(id)
 
+func _get_first_available_color() -> int:
+	var used := []
+	for pid in GameState.players:
+		var idx = GameState.players[pid].get("color_index", 0)
+		if idx >= 0 and idx < GameState.PLAYER_COLORS.size() and idx not in used:
+			used.append(idx)
+	for i in range(GameState.PLAYER_COLORS.size()):
+		if i not in used:
+			return i
+	return 0
+
 @rpc("any_peer", "reliable")
 func register_player(p_name: String):
 	var sender_id = multiplayer.get_remote_sender_id()
-	GameState.players[sender_id] = {"name": p_name, "ready": false}
-	print("Server: Player '%s' registered (id=%d)" % [p_name, sender_id])
+	var color_index = _get_first_available_color()
+	GameState.players[sender_id] = {"name": p_name, "ready": false, "color_index": color_index}
+	print("Server: Player '%s' registered (id=%d) color=%d" % [p_name, sender_id, color_index])
+	rpc("_sync_players_from_main", GameState.players)
+
+@rpc("any_peer", "reliable")
+func set_my_color(color_index: int):
+	if not multiplayer.is_server():
+		return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id not in GameState.players:
+		return
+	if color_index < 0 or color_index >= GameState.PLAYER_COLORS.size():
+		return
+	for pid in GameState.players:
+		if pid != sender_id and GameState.players[pid].get("color_index", 0) == color_index:
+			return
+	GameState.players[sender_id]["color_index"] = color_index
+	rpc("_sync_players_from_main", GameState.players)
 
 @rpc("any_peer", "reliable")
 func update_player_name(p_name: String):

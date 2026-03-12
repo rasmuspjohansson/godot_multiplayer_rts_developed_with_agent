@@ -228,7 +228,12 @@ func _update_topbar_local(cp_data: Array, res_data):
 	var player_name = GameState.local_player_name
 	if player_name == "":
 		player_name = "Unknown Player"
-	top_bar.update_display(stables_count, blacksmith_count, my_horses, my_spears, player_name)
+	var player_color = Color.WHITE
+	if GameState.players.has(my_pid) and GameState.players[my_pid].has("color_index"):
+		var ci = GameState.players[my_pid]["color_index"]
+		if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
+			player_color = GameState.PLAYER_COLORS[ci]
+	top_bar.update_display(stables_count, blacksmith_count, my_horses, my_spears, player_name, player_color)
 
 func _unhandled_input(event):
 	if multiplayer.is_server() or game_over:
@@ -447,6 +452,7 @@ func _cleanup_client_unit(unit_name: String):
 func _on_army_routed(army):
 	if game_over:
 		return
+	rpc("_client_army_routed", army.army_id)
 	var loser_pid = army.owner_peer_id
 	var loser_name = army.owner_name
 	var all_routed = true
@@ -465,6 +471,21 @@ func _on_army_routed(army):
 		print("TEST_011: Both armies of '%s' routed. Winner: %s" % [loser_name, winner_name])
 		rpc("_announce_winner", winner_name)
 		_announce_winner(winner_name)
+
+@rpc("authority", "reliable")
+func _client_army_routed(army_id: String):
+	var army = _find_army(army_id)
+	if army == null:
+		return
+	army.is_routed = true
+	if selected_army == army:
+		selected_army = null
+	for s in army.soldiers:
+		if s and is_instance_valid(s) and not s.is_dead:
+			s.is_dead = true
+			if s.sprite:
+				s.sprite.color = Color.DARK_RED
+			s.queue_free()
 
 @rpc("authority", "reliable")
 func _announce_winner(winner_name: String):

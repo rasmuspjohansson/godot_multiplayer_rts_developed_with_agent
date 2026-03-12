@@ -22,3 +22,11 @@ GameState="*res://GameState.gd"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
+
+[physics]
+
+2d/default_gravity = 0.0
+
+[layer_names]
+
+2d_physics/layer_1 = "units"

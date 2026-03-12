@@ -22,6 +22,9 @@
 - Soldier positions are calculated from the army center + grid offset rotated by facing angle.
 - When soldiers die, surviving soldiers **repack** to fill gaps (grid shrinks).
 
+## Physics / collision
+- Units have a collision shape and **collide with each other** (they block each other; no pass-through).
+
 ## Unit Stats (Defaults)
 | Stat    | Value |
 |---------|-------|
@@ -42,6 +45,7 @@
 
 ## Lobby
 - **Name input field**: Player can enter display name. Pre-filled from `--name=<value>` if provided, otherwise **Unknown Player**. Name is sent to the server when pressing Ready (duplicate names are allowed; army identity uses peer id).
+- **Color picker**: Players choose one of 5 colors by clicking a colored box. First player gets the first color preselected; each new player gets the first not-already-used color. Taken colors are greyed out; players can change to any free color. Units in the game use the chosen color.
 
 ## Top Bar HUD
 - A `CanvasLayer` UI bar at the top of the screen during gameplay.
@@ -59,7 +63,7 @@
 | Scene           | Purpose |
 |-----------------|---------|
 | `Main.tscn`     | Entry point: parses CLI args, creates network peer, switches to Lobby. |
-| `Lobby.tscn`    | Shows name input, connected players, ready states. "Ready" toggle button. |
+| `Lobby.tscn`    | Shows name input, color picker (5 boxes), connected players, ready states. "Ready" toggle button. |
 | `World.tscn`    | 2D arena with `NavigationRegion2D`. Server spawns armies here. |
 | `Unit.tscn`     | `CharacterBody2D` with `NavigationAgent2D`. Individual soldier. |
 | `CapturePoint.tscn` | Visual marker for a capture point (colored circle + label). |

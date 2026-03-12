@@ -4,12 +4,15 @@ extends Control
 @onready var ready_button: Button = $VBoxContainer/ReadyButton
 @onready var status_label: Label = $VBoxContainer/StatusLabel
 @onready var name_edit: LineEdit = $VBoxContainer/NameEdit
+@onready var color_box_container: HBoxContainer = $VBoxContainer/ColorBoxContainer
 
 var local_ready := false
+var color_boxes: Array = []
 
 func _ready():
 	if name_edit:
 		name_edit.text = GameState.local_player_name if GameState.local_player_name else "Unknown Player"
+	_build_color_boxes()
 	ready_button.pressed.connect(_on_ready_pressed)
 	_update_ui()
 
@@ -52,9 +55,49 @@ func _sync_players(players: Dictionary):
 	GameState.players = players
 	_update_ui()
 
+func _build_color_boxes():
+	for child in color_box_container.get_children():
+		child.queue_free()
+	color_boxes.clear()
+	for i in range(GameState.PLAYER_COLORS.size()):
+		var box = ColorRect.new()
+		box.custom_minimum_size = Vector2(32, 32)
+		box.color = GameState.PLAYER_COLORS[i]
+		box.set_meta("color_index", i)
+		box.gui_input.connect(_on_color_box_gui_input.bind(i))
+		color_box_container.add_child(box)
+		color_boxes.append(box)
+
+func _on_color_box_gui_input(event: InputEvent, index: int):
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_color_box_clicked(index)
+
+func _on_color_box_clicked(index: int):
+	if multiplayer.is_server():
+		return
+	get_tree().root.get_node("Main").rpc_id(1, "set_my_color", index)
+
 func _update_ui():
 	for child in player_list.get_children():
 		child.queue_free()
+
+	var my_id = multiplayer.get_unique_id()
+	var my_color_index = GameState.players.get(my_id, {}).get("color_index", 0)
+	for i in range(color_boxes.size()):
+		var box = color_boxes[i]
+		if not is_instance_valid(box):
+			continue
+		var taken_by_other = false
+		for pid in GameState.players:
+			if pid != my_id and GameState.players[pid].get("color_index", 0) == i:
+				taken_by_other = true
+				break
+		if taken_by_other:
+			box.modulate = Color(0.4, 0.4, 0.4)
+		elif i == my_color_index:
+			box.modulate = Color(1.2, 1.2, 1.2)
+		else:
+			box.modulate = Color.WHITE
 
 	for id in GameState.players:
 		var info = GameState.players[id]

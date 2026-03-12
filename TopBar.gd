@@ -14,6 +14,7 @@ func _ready():
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bg.show_behind_parent = true
 	add_child(bg)
+	# bg is first so it stays behind the labels
 
 	label_left = Label.new()
 	label_left.name = "TopBarLabelLeft"
@@ -36,12 +37,12 @@ func _ready():
 	label_right.add_theme_color_override("font_color", Color.WHITE)
 	add_child(label_right)
 
-	bg.move_to_back()
 	label_left.move_to_front()
 	label_right.move_to_front()
 
-func update_display(stables_count: int, blacksmith_count: int, horses: int, spears: int, player_name: String):
+func update_display(stables_count: int, blacksmith_count: int, horses: int, spears: int, player_name: String, player_color: Color = Color.WHITE):
 	if label_left:
 		label_left.text = "Stables: %d  Blacksmith: %d  Horses: %d  Spears: %d" % [stables_count, blacksmith_count, horses, spears]
 	if label_right:
 		label_right.text = "Player: %s" % player_name
+		label_right.add_theme_color_override("font_color", player_color)

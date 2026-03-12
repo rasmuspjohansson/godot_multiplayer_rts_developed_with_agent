@@ -43,7 +43,10 @@ func _update_visuals():
 		elif _selected:
 			sprite.color = Color.YELLOW
 		else:
-			sprite.color = Color.GREEN_YELLOW
+			var idx = 0
+			if owner_peer_id in GameState.players:
+				idx = clampi(GameState.players[owner_peer_id].get("color_index", 0), 0, GameState.PLAYER_COLORS.size() - 1)
+			sprite.color = GameState.PLAYER_COLORS[idx]
 
 func _physics_process(delta):
 	if is_dead:

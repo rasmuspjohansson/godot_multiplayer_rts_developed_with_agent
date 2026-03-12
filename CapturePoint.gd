@@ -10,6 +10,34 @@ var cp_type: String = ""
 var owner_pid: int = 0
 var resource_timer: float = 0.0
 
+var _circle: Polygon2D = null
+var _last_owner_pid := -999
+
+func _ready():
+	_circle = get_node_or_null("Circle")
+	_update_owner_visual()
+
+func _process(_delta):
+	if _last_owner_pid != owner_pid:
+		_last_owner_pid = owner_pid
+		_update_owner_visual()
+
+func _update_owner_visual():
+	if _circle == null:
+		return
+	if owner_pid == 0:
+		_circle.color = Color(0.5, 0.5, 0.5, 0.3)
+	else:
+		if GameState.players.has(owner_pid):
+			var ci = GameState.players[owner_pid].get("color_index", 0)
+			if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
+				var c = GameState.PLAYER_COLORS[ci]
+				_circle.color = Color(c.r, c.g, c.b, 0.5)
+			else:
+				_circle.color = Color(0.5, 0.5, 0.5, 0.3)
+		else:
+			_circle.color = Color(0.5, 0.5, 0.5, 0.3)
+
 func _physics_process(delta):
 	if not multiplayer.is_server():
 		return
