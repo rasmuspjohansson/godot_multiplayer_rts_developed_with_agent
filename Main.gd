@@ -21,7 +21,7 @@ func _ready():
 				player_name = a.split("=")[1]
 				break
 		if player_name == "":
-			player_name = "Player_%d" % randi()
+			player_name = "Unknown Player"
 		GameState.local_player_name = player_name
 		GameState.is_auto_test = auto_test
 		_start_client()
@@ -94,6 +94,21 @@ func register_player(p_name: String):
 	var sender_id = multiplayer.get_remote_sender_id()
 	GameState.players[sender_id] = {"name": p_name, "ready": false}
 	print("Server: Player '%s' registered (id=%d)" % [p_name, sender_id])
+
+@rpc("any_peer", "reliable")
+func update_player_name(p_name: String):
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id in GameState.players:
+		GameState.players[sender_id]["name"] = p_name
+		print("Server: Player name updated to '%s' (id=%d)" % [p_name, sender_id])
+		rpc("_sync_players_from_main", GameState.players)
+
+@rpc("authority", "reliable")
+func _sync_players_from_main(players: Dictionary):
+	GameState.players = players
+	var lobby = get_node_or_null("UI/Lobby")
+	if lobby and lobby.has_method("_update_ui"):
+		lobby._update_ui()
 
 func _clear_scenes():
 	for child in $Level.get_children():

@@ -13,4 +13,4 @@ func reset_match_state():
 	capture_points.clear()
 	last_combat_time = -999.0
 	for pid in players.keys():
-		resources[pid] = 0
+		resources[pid] = {"horses": 0, "spears": 0}

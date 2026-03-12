@@ -11,14 +11,14 @@ Each test corresponds to an event in `events.md`. A test passes if its `TEST_XXX
 | `TEST_005` | Client B sent ready | server.log, client_B.log |
 | `TEST_006` | Match started, World scene loaded | server.log |
 | `TEST_007` | 4 armies spawned (2 per player, 10 soldiers each) | server.log |
-| `TEST_CAPTURE_SPAWN` | 2 capture points spawned (Horses, Spears) | server.log, client_A.log, client_B.log |
+| `TEST_CAPTURE_SPAWN` | 2 capture points spawned (Stables, Blacksmith) | server.log, client_A.log, client_B.log |
 | `TEST_008_SELECT` | Client A selected army | client_A.log |
 | `TEST_008_SELECT_B` | Client B selected army | client_B.log |
 | `TEST_009_MOVE` | Client A moved army to target | client_A.log, server.log |
 | `TEST_009_MOVE_B` | Client B moved army to target | client_B.log, server.log |
 | `TEST_010_COMBAT` | Combat initiated (proximity detected) | server.log |
 | `TEST_CAPTURE` | Capture point captured or taken over by a player | server.log |
-| `TEST_RESOURCE` | Captured point produced a resource | server.log |
+| `TEST_RESOURCE` | Stables/Blacksmith produced horses/spears | server.log |
 | `TEST_SEEK_ENEMY` | Army at CP 5s with no combat seeks closest enemy | server.log |
 | `TEST_UNIT_CLEANUP` | Dead units cleaned up on server and clients | server.log, client_A.log, client_B.log |
 | `TEST_ROUT` | Army routed (below 30% alive) | server.log |

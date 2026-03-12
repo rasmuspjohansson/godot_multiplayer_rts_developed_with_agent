@@ -32,17 +32,21 @@
 | Range   | 50.0  |
 
 ## Capture Points & Resources
-- The map has **2 capture points**: one **Horses** and one **Spears**.
+- The map has **2 capture points**: one **Stables** and one **Blacksmith**.
 - Capture points start **unowned**.
 - A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
-- Once captured, a point produces **1 resource** for its owner every **2 seconds**.
+- Once captured: **Stables** produces **horses** (inventory resource), **Blacksmith** produces **spears** (inventory resource), each **1** every **2 seconds**.
 - Capture points can be **taken over** by the opposing player using the same proximity rule.
-- Resources are tracked per player in `GameState` and displayed in a top-bar HUD.
+- Resources (horses, spears) are tracked per player in `GameState` and displayed in the top-bar HUD.
 - **Seek enemy**: If an army has been at a capture point for **5 seconds** with **no combat** occurring anywhere, the server orders that army to seek and continuously follow the **closest enemy army** (move target is updated every tick so the army follows when the enemy moves). A manual move order (right-click) cancels follow.
+
+## Lobby
+- **Name input field**: Player can enter display name. Pre-filled from `--name=<value>` if provided, otherwise **Unknown Player**. Name is sent to the server when pressing Ready (duplicate names are allowed; army identity uses peer id).
 
 ## Top Bar HUD
 - A `CanvasLayer` UI bar at the top of the screen during gameplay.
-- Shows: `Resources: <count> | Horses: <owner or "---"> | Spears: <owner or "---">`.
+- **Left**: `Stables: <N>  Blacksmith: <N>  Horses: <N>  Spears: <N>` (capture point counts owned by the player, then horses/spears in inventory).
+- **Right**: `Player: <display name>`.
 - Updated every sync tick from the server.
 
 ## Rout & Win Condition
@@ -55,7 +59,7 @@
 | Scene           | Purpose |
 |-----------------|---------|
 | `Main.tscn`     | Entry point: parses CLI args, creates network peer, switches to Lobby. |
-| `Lobby.tscn`    | Shows connected players and ready states. "Ready" toggle button. |
+| `Lobby.tscn`    | Shows name input, connected players, ready states. "Ready" toggle button. |
 | `World.tscn`    | 2D arena with `NavigationRegion2D`. Server spawns armies here. |
 | `Unit.tscn`     | `CharacterBody2D` with `NavigationAgent2D`. Individual soldier. |
 | `CapturePoint.tscn` | Visual marker for a capture point (colored circle + label). |

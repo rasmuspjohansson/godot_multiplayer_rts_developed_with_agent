@@ -49,11 +49,12 @@ func _check_capture():
 func _produce_resource():
 	if owner_pid == 0:
 		return
-	if GameState.resources.has(owner_pid):
-		GameState.resources[owner_pid] += 1
-	else:
-		GameState.resources[owner_pid] = 1
-	print("TEST_RESOURCE: %s '%s' produced 1 resource for pid=%d (total=%d)" % [cp_type, cp_id, owner_pid, GameState.resources[owner_pid]])
+	var key := "horses" if cp_type == "Stables" else "spears"
+	if not GameState.resources.has(owner_pid):
+		GameState.resources[owner_pid] = {"horses": 0, "spears": 0}
+	GameState.resources[owner_pid][key] += 1
+	var total = GameState.resources[owner_pid][key]
+	print("TEST_RESOURCE: %s '%s' produced 1 %s for pid=%d (total=%d)" % [cp_type, cp_id, key, owner_pid, total])
 
 func _get_player_name(pid: int) -> String:
 	if GameState.players.has(pid):

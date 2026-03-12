@@ -30,6 +30,14 @@ layout_mode = 2
 text = "LOBBY"
 horizontal_alignment = 1
 
+[node name="NameLabel" type="Label" parent="VBoxContainer"]
+layout_mode = 2
+text = "Name:"
+
+[node name="NameEdit" type="LineEdit" parent="VBoxContainer"]
+layout_mode = 2
+placeholder_text = "Your name"
+
 [node name="StatusLabel" type="Label" parent="VBoxContainer"]
 layout_mode = 2
 text = "Waiting..."

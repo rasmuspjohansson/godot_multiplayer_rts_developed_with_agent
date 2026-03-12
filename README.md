@@ -1,6 +1,6 @@
 # Automated RTS — Godot 4.6
 
-A minimal multiplayer RTS where two players each control **two armies** on a 2D arena. Each army has 10 soldiers in a formation; you select and move armies, capture **Horses** and **Spears** points for resources, and win by routing both of the opponent’s armies. If an army sits at a capture point for 5 seconds with no combat, it automatically seeks and follows the closest enemy army.
+A minimal multiplayer RTS where two players each control **two armies** on a 2D arena. Each army has 10 soldiers in a formation; you select and move armies, capture **Stables** and **Blacksmith** points (producing horses and spears), and win by routing both of the opponent’s armies. If an army sits at a capture point for 5 seconds with no combat, it automatically seeks and follows the closest enemy army.
 
 ## Agent-Driven Development
 
@@ -57,13 +57,13 @@ godot --rendering-driver opengl3 --path . -- --client --name=A
 
 Use `--rendering-driver opengl3` to avoid Vulkan issues when running several Godot instances.
 
-- **Lobby**: Click **Ready** when you want to start.
+- **Lobby**: Enter your name (pre-filled from `--name=` or "Unknown Player"), then click **Ready** when you want to start.
 - **In game**:
   - **Left-click** near an army to select it (yours only).
   - **Right-click** to move the selected army.
   - **Arrow keys** or **Q / E** to rotate the selected army.
-- **Top bar** shows your resources and how many capture points you control (Horses, Spears).
-- Two **capture points** (Horses, Spears) start unowned; when only your units are near one, you capture it and gain resources every 2 seconds.
+- **Top bar**: left side shows **Stables / Blacksmith** (capture points you control) and **Horses / Spears** (inventory); right side shows **Player: &lt;your name&gt;**.
+- Two **capture points** (Stables, Blacksmith) start unowned; when only your units are near one, you capture it. Stables produce horses and Blacksmith produces spears every 2 seconds.
 - If your army stays at a capture point for **5 seconds with no combat** anywhere, it will automatically move toward and follow the closest enemy army (until you give a new move order).
 - Armies **auto-attack** enemies in range. An army below 30% strength **routs**; you lose when **both** your armies have routed.
 

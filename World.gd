@@ -41,7 +41,7 @@ func _spawn_armies():
 	for pc in spawn_configs:
 		for i in range(pc["armies"].size()):
 			var ac = pc["armies"][i]
-			var army_id = "%s_%d" % [pc["name"], i + 1]
+			var army_id = "P%d_%d" % [pc["pid"], i + 1]
 			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"])
 			armies.append(army)
 
@@ -130,8 +130,8 @@ func _serialize_armies() -> Array:
 
 func _spawn_capture_points():
 	var cp_configs = [
-		{"id": "Horses", "type": "Horses", "pos": Vector2(500, 200)},
-		{"id": "Spears", "type": "Spears", "pos": Vector2(780, 500)}
+		{"id": "Stables", "type": "Stables", "pos": Vector2(500, 200)},
+		{"id": "Blacksmith", "type": "Blacksmith", "pos": Vector2(780, 500)}
 	]
 	for cfg in cp_configs:
 		var cp = preload("res://CapturePoint.tscn").instantiate()
@@ -143,7 +143,7 @@ func _spawn_capture_points():
 		cp.ownership_changed.connect(_on_capture_point_changed)
 		add_child(cp)
 		capture_points.append(cp)
-	print("TEST_CAPTURE_SPAWN: %d capture points spawned (Horses, Spears)" % capture_points.size())
+	print("TEST_CAPTURE_SPAWN: %d capture points spawned (Stables, Blacksmith)" % capture_points.size())
 	rpc("_client_spawn_capture_points", _serialize_capture_points())
 
 func _serialize_capture_points() -> Array:
@@ -210,23 +210,25 @@ func _update_topbar_local(cp_data: Array, res_data):
 	if top_bar == null:
 		return
 	var my_pid = multiplayer.get_unique_id()
-	var my_res = 0
-	if res_data is Dictionary:
-		if res_data.has(my_pid):
-			my_res = res_data[my_pid]
-		elif res_data.has(str(my_pid)):
-			my_res = res_data[str(my_pid)]
-	var horses_owner = "---"
-	var spears_owner = "---"
+	var stables_count := 0
+	var blacksmith_count := 0
+	var my_horses := 0
+	var my_spears := 0
 	for d in cp_data:
-		var oname = d.get("owner_name", "---")
-		if oname == "" or (d.get("owner_pid", 0) == 0):
-			oname = "---"
-		if d["id"] == "Horses":
-			horses_owner = oname
-		elif d["id"] == "Spears":
-			spears_owner = oname
-	top_bar.update_display(my_res, horses_owner, spears_owner)
+		if d.get("owner_pid", 0) == my_pid:
+			if d["id"] == "Stables":
+				stables_count += 1
+			elif d["id"] == "Blacksmith":
+				blacksmith_count += 1
+	if res_data is Dictionary:
+		var res = res_data.get(my_pid, res_data.get(str(my_pid), null))
+		if res is Dictionary:
+			my_horses = res.get("horses", 0)
+			my_spears = res.get("spears", 0)
+	var player_name = GameState.local_player_name
+	if player_name == "":
+		player_name = "Unknown Player"
+	top_bar.update_display(stables_count, blacksmith_count, my_horses, my_spears, player_name)
 
 func _unhandled_input(event):
 	if multiplayer.is_server() or game_over:
