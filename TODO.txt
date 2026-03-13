@@ -1,0 +1,15 @@
+Add a crafting and recruiting window.
+
+Add spawning of crafter armies.
+
+Add zoom in / zoom out functionality.
+
+Replace the squares used for soldiers and capture points with images.
+
+Change the viewing angle so the world is displayed like in Total War (a 3D world view).
+
+Make the unit images stand upright, like scenery pieces in a theater.
+
+Add wall building and stone capture points.
+
+Add one-time capture points that give the player a single resource boost when captured.
