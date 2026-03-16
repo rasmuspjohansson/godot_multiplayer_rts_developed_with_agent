@@ -2,6 +2,8 @@
 
 Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=1` or `--events=2`. A test passes if its `TEST_XXX` marker appears in the expected log file(s).
 
+**Invalid markers (run fails if any appear):** `TEST_3D_UNIT_HEIGHT_INVALID` and `TEST_SERVER_UNIT_POSITION_INVALID` must **not** appear in any log (server or client). If they do, the run is considered failed (unit height or position invalid).
+
 ## Events 1
 
 | Test ID | Description | Expected In |

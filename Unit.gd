@@ -21,6 +21,12 @@ var _selected := false
 var sync_target_position: Vector2 = Vector2.ZERO
 var sync_target_hp: float = 100.0
 
+# Server: bounds check (must match World.gd map size)
+const MAP_WIDTH := 1280
+const MAP_HEIGHT := 720
+const MAP_MARGIN := 200
+var _logged_position_invalid := false
+
 @onready var nav_agent: NavigationAgent2D = $NavigationAgent2D
 @onready var sprite: ColorRect = $ColorRect
 
@@ -57,14 +63,18 @@ func _physics_process(delta):
 	if multiplayer.is_server():
 		_server_process(delta)
 	else:
-		# Client: move toward sync target at fixed unit speed (matches server), no lerp
+		# Client: velocity toward sync target + move_and_slide() so physics resolves collisions
 		if sync_target_position != Vector2.ZERO:
 			var dist = global_position.distance_to(sync_target_position)
 			if dist > 1.0:
-				var dir = (sync_target_position - global_position).normalized()
-				var move = minf(speed * delta, dist)
-				global_position += dir * move
+				velocity = (sync_target_position - global_position).normalized() * speed
+			else:
+				velocity = Vector2.ZERO
+			move_and_slide()
 			hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
+		else:
+			velocity = Vector2.ZERO
+			move_and_slide()
 	_update_visuals()
 
 func _server_process(delta):
@@ -77,6 +87,11 @@ func _server_process(delta):
 			var dir = (next_pos - global_position).normalized()
 			velocity = dir * speed
 			move_and_slide()
+
+	if global_position.x < -MAP_MARGIN or global_position.x > MAP_WIDTH + MAP_MARGIN or global_position.y < -MAP_MARGIN or global_position.y > MAP_HEIGHT + MAP_MARGIN:
+		if not _logged_position_invalid:
+			_logged_position_invalid = true
+			print("TEST_SERVER_UNIT_POSITION_INVALID: %s out_of_bounds" % name)
 
 	attack_timer -= delta
 	if attack_timer <= 0:

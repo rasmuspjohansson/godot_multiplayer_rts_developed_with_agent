@@ -15,13 +15,14 @@ cd "$SCRIPT_DIR"
 
 AUTO_TEST=true
 EVENTS=1
-USE_3D=false
+USE_3D=true
 for arg in "$@"; do
   case "$arg" in
     --no_test|--no-test) AUTO_TEST=false ;;
     --events=1) EVENTS=1 ;;
     --events=2) EVENTS=2 ;;
     --3d) USE_3D=true ;;
+    --2d) USE_3D=false ;;
   esac
 done
 

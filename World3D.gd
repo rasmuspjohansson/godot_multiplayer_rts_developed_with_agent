@@ -12,6 +12,8 @@ const CAMERA_ZOOM_SPEED := 80.0
 const ARMY_CLICK_RADIUS := 80.0
 # Client: only snap to server HERE when error exceeds this (real desync only)
 const CORRECTION_THRESHOLD := 120.0
+# Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
+const UNIT_HALF_HEIGHT := 11.0
 
 var _camera: Camera3D
 var _camera_pivot: Node3D
@@ -30,9 +32,14 @@ var selected_army = null
 
 func _ready():
 	_look_at = Vector3(MAP_WIDTH / 2.0, 0, MAP_HEIGHT / 2.0)
+	var ground_collision = get_node_or_null("GroundCollision")
+	if ground_collision is StaticBody3D:
+		ground_collision.collision_layer = 2
+		ground_collision.collision_mask = 0
 	_setup_camera()
 	_setup_topbar()
 	_setup_draft_menu()
+	_add_play_boundary_line()
 
 func _setup_camera():
 	_camera = get_node_or_null("Camera3D")
@@ -219,6 +226,66 @@ func _find_army(aid: String):
 			return army
 	return null
 
+func get_ground_height_at(x: float, z: float) -> float:
+	var space = get_world_3d().direct_space_state
+	var from_vec = Vector3(x, 500.0, z)
+	var to_vec = Vector3(x, -100.0, z)
+	var query = PhysicsRayQueryParameters3D.create(from_vec, to_vec)
+	query.collision_mask = 2
+	var result = space.intersect_ray(query)
+	if result.is_empty():
+		return 0.0
+	return result["position"].y
+
+func _add_play_boundary_line():
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.15, 0.15, 0.2, 1.0)
+	var line_height := 0.2
+	var line_width := 4.0
+	# Left edge
+	var box_left = BoxMesh.new()
+	box_left.size = Vector3(line_width, line_height, MAP_HEIGHT)
+	var left = MeshInstance3D.new()
+	left.mesh = box_left
+	left.position = Vector3(0.0, 0.1, MAP_HEIGHT / 2.0)
+	left.material_override = mat
+	add_child(left)
+	# Right edge
+	var box_right = BoxMesh.new()
+	box_right.size = Vector3(line_width, line_height, MAP_HEIGHT)
+	var right = MeshInstance3D.new()
+	right.mesh = box_right
+	right.position = Vector3(MAP_WIDTH, 0.1, MAP_HEIGHT / 2.0)
+	right.material_override = mat
+	add_child(right)
+	# Bottom edge
+	var box_bottom = BoxMesh.new()
+	box_bottom.size = Vector3(MAP_WIDTH, line_height, line_width)
+	var bottom = MeshInstance3D.new()
+	bottom.mesh = box_bottom
+	bottom.position = Vector3(MAP_WIDTH / 2.0, 0.1, 0.0)
+	bottom.material_override = mat
+	add_child(bottom)
+	# Top edge
+	var box_top = BoxMesh.new()
+	box_top.size = Vector3(MAP_WIDTH, line_height, line_width)
+	var top = MeshInstance3D.new()
+	top.mesh = box_top
+	top.position = Vector3(MAP_WIDTH / 2.0, 0.1, MAP_HEIGHT)
+	top.material_override = mat
+	add_child(top)
+
+func _make_client_unit_3d() -> CharacterBody3D:
+	var unit = CharacterBody3D.new()
+	unit.collision_layer = 1
+	unit.collision_mask = 1
+	var box = BoxShape3D.new()
+	box.size = Vector3(14, 22, 14)
+	var col = CollisionShape3D.new()
+	col.shape = box
+	unit.add_child(col)
+	return unit
+
 @rpc("authority", "reliable")
 func _client_spawn_armies(data: Array):
 	for ad in data:
@@ -227,25 +294,28 @@ func _client_spawn_armies(data: Array):
 		army.army_id = ad["army_id"]
 		army.owner_peer_id = ad["pid"]
 		army.owner_name = ad["name"]
-		army.global_position = Vector3(ad["x"], 0, ad["y"])
+		var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
+		army.global_position = Vector3(ad["x"], gy, ad["y"])
 		army.direction = ad["dir"]
 		army.name = "Army_%s" % ad["army_id"]
 		add_child(army)
 		armies.append(army)
 		for sd in ad["soldiers"]:
-			var unit = Node3D.new()
+			var unit = _make_client_unit_3d()
 			unit.set_script(preload("res://Unit3D.gd"))
 			unit.name = sd["name"]
 			unit.owner_peer_id = ad["pid"]
 			unit.owner_name = ad["name"]
 			unit.army_id = ad["army_id"]
-			var pos = Vector3(sd["x"], 0, sd["y"])
+			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
+			var pos = Vector3(sd["x"], uy, sd["y"])
 			unit.global_position = pos
 			unit.sync_target_position = pos
 			add_child(unit)
 			army.soldiers.append(unit)
 			all_units.append(unit)
 	print("TEST_007: Client received %d armies" % armies.size())
+	call_deferred("_validate_units_height")
 
 @rpc("authority", "reliable")
 func _client_spawn_capture_points(data: Array):
@@ -340,19 +410,21 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.army_id = ad["army_id"]
 	army.owner_peer_id = ad["pid"]
 	army.owner_name = ad["name"]
-	army.global_position = Vector3(ad["x"], 0, ad["y"])
+	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
+	army.global_position = Vector3(ad["x"], gy, ad["y"])
 	army.direction = ad["dir"]
 	army.name = "Army_%s" % ad["army_id"]
 	add_child(army)
 	armies.append(army)
 	for sd in ad["soldiers"]:
-		var unit = Node3D.new()
+		var unit = _make_client_unit_3d()
 		unit.set_script(preload("res://Unit3D.gd"))
 		unit.name = sd["name"]
 		unit.owner_peer_id = ad["pid"]
 		unit.owner_name = ad["name"]
 		unit.army_id = ad["army_id"]
-		var pos = Vector3(sd["x"], 0, sd["y"])
+		var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
+		var pos = Vector3(sd["x"], uy, sd["y"])
 		unit.global_position = pos
 		unit.sync_target_position = pos
 		add_child(unit)
@@ -361,6 +433,15 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	if ad.has("stop_x") and ad.has("stop_y"):
 		army.move_army(Vector2(ad["stop_x"], ad["stop_y"]))
 	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s'" % army.army_id)
+	call_deferred("_validate_units_height")
+
+func _validate_units_height():
+	for unit in all_units:
+		if not is_instance_valid(unit) or not unit.is_inside_tree():
+			continue
+		var ground_y = get_ground_height_at(unit.global_position.x, unit.global_position.z)
+		if unit.global_position.y < ground_y - 0.5:
+			print("TEST_3D_UNIT_HEIGHT_INVALID: %s spawn_below_ground" % unit.name)
 
 @rpc("authority", "unreliable")
 func _receive_positions(pos_data: Array, dead_names: Array = []):
@@ -369,8 +450,12 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 		if node and is_instance_valid(node):
 			if node.get("is_dead"):
 				continue
-			var here = Vector3(pd["x"], 0, pd["y"])
-			var there = Vector3(pd.get("tx", pd["x"]), 0, pd.get("ty", pd["y"]))
+			var here_y = get_ground_height_at(pd["x"], pd["y"]) + UNIT_HALF_HEIGHT
+			var tx = pd.get("tx", pd["x"])
+			var ty = pd.get("ty", pd["y"])
+			var there_y = get_ground_height_at(tx, ty) + UNIT_HALF_HEIGHT
+			var here = Vector3(pd["x"], here_y, pd["y"])
+			var there = Vector3(tx, there_y, ty)
 			var err = node.global_position.distance_to(here)
 			if err > CORRECTION_THRESHOLD:
 				node.global_position = here
