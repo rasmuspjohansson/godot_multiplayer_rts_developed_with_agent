@@ -102,6 +102,18 @@ grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 
 See `tests.md` for the full list of markers (e.g. `TEST_007`, `TEST_CAPTURE_SPAWN`, `TEST_CAPTURE`, `TEST_RESOURCE`, `TEST_SEEK_ENEMY`, `TEST_ROUT`, `TEST_011`, etc.).
 
+## run_test.sh
+
+From the project root you can run:
+
+```bash
+./run_test.sh              # auto-test with events 1 (default)
+./run_test.sh --events=2   # auto-test with events 2 (draft sequence)
+./run_test.sh --no_test    # two human-play clients (no mock)
+```
+
+**For the two game windows to appear**, run the script from a **terminal that has a display** (e.g. gnome-terminal, not a headless SSH session). The script starts the server in the background, then two client processes; those clients need a display to open their windows. If you run the script from an IDE "Run" or a session that exits immediately, the client processes may not get a display or may be torn down. Set `GODOT_BIN` to the full path to your Godot executable if `godot` is not in your PATH.
+
 ## Test combinations
 
 | Server | Client A | Client B | Use case |

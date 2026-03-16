@@ -3,23 +3,42 @@ extends Node2D
 const ARMY_CLICK_RADIUS := 80.0
 const CP_PEACE_SECONDS := 5.0
 const CAPTURE_RADIUS_SEEK := 120.0
+const DRAFT_COST_PER_EQUIPMENT := 10
+const WEST_SPAWN := Vector2(-120.0, 360.0)
+const EAST_SPAWN := Vector2(1400.0, 360.0)
+const WEST_STOP_X := 80.0
+const EAST_STOP_X := 1200.0
 
 var armies: Array = []
 var all_units: Array = []
 var capture_points: Array = []
 var top_bar = null
+var draft_menu = null
 var game_over := false
 var sync_timer := 0.0
 var selected_army = null
 var army_time_at_cp := {}
 var army_follow_target := {}
+var player_side := {}  # pid -> "west" | "east"
+var army_index_per_player := {}  # pid -> next army index (3, 4, ...)
 
 func _ready():
 	if multiplayer.is_server():
 		GameState.reset_match_state()
+		_set_player_sides()
 		_spawn_armies()
 		_spawn_capture_points()
 	_setup_topbar()
+	_setup_draft_menu()
+
+func _set_player_sides():
+	var player_ids = GameState.players.keys()
+	if player_ids.size() >= 1:
+		player_side[player_ids[0]] = "west"
+	if player_ids.size() >= 2:
+		player_side[player_ids[1]] = "east"
+	for pid in player_ids:
+		army_index_per_player[pid] = 3  # 1 and 2 are starting armies
 
 func _spawn_armies():
 	var player_ids = GameState.players.keys()
@@ -42,7 +61,7 @@ func _spawn_armies():
 		for i in range(pc["armies"].size()):
 			var ac = pc["armies"][i]
 			var army_id = "P%d_%d" % [pc["pid"], i + 1]
-			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"])
+			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"], {})
 			armies.append(army)
 
 	print("TEST_007: %d armies spawned (2 per player, 10 soldiers each)" % armies.size())
@@ -51,7 +70,13 @@ func _spawn_armies():
 
 	rpc("_client_spawn_armies", _serialize_armies())
 
-func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float) -> Node2D:
+func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node2D:
+	var use_horse: bool = equipment.get("horse", false)
+	var use_spear: bool = equipment.get("spear", false)
+	var speed: float = 280.0 if use_horse else 200.0
+	var attack: float = 13.0 if use_spear else 10.0
+	var attack_range: float = 65.0 if use_spear else 50.0
+
 	var army_script = preload("res://Army.gd")
 	var army = Node2D.new()
 	army.set_script(army_script)
@@ -71,6 +96,9 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 		unit.owner_peer_id = pid
 		unit.owner_name = pname
 		unit.army_id = aid
+		unit.speed = speed
+		unit.attack = attack
+		unit.attack_range = attack_range
 		unit.global_position = formation_positions[idx]
 		unit.unit_died.connect(army.on_soldier_died)
 		add_child(unit)
@@ -182,6 +210,44 @@ func _setup_topbar():
 	top_bar.name = "TopBar"
 	top_bar.layer = 10
 	add_child(top_bar)
+
+func _setup_draft_menu():
+	draft_menu = CanvasLayer.new()
+	draft_menu.name = "DraftMenu"
+	draft_menu.layer = 12
+	add_child(draft_menu)
+	var panel = PanelContainer.new()
+	panel.offset_left = 10
+	panel.offset_top = 590
+	panel.offset_right = 220
+	panel.offset_bottom = 710
+	draft_menu.add_child(panel)
+	var vbox = VBoxContainer.new()
+	panel.add_child(vbox)
+	var horse_cb = CheckBox.new()
+	horse_cb.name = "HorseCheck"
+	horse_cb.text = "Horse"
+	vbox.add_child(horse_cb)
+	var spear_cb = CheckBox.new()
+	spear_cb.name = "SpearCheck"
+	spear_cb.text = "Spear"
+	vbox.add_child(spear_cb)
+	var create_btn = Button.new()
+	create_btn.name = "CreateArmyBtn"
+	create_btn.text = "Create army"
+	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb))
+	vbox.add_child(create_btn)
+
+func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox):
+	var use_horse = horse_cb.button_pressed
+	var use_spear = spear_cb.button_pressed
+	_request_draft(use_horse, use_spear)
+
+func request_draft_from_mock(use_horse: bool, use_spear: bool):
+	_request_draft(use_horse, use_spear)
+
+func _request_draft(use_horse: bool, use_spear: bool):
+	rpc_id(1, "request_draft_army", use_horse, use_spear)
 
 func _sync_capture_state():
 	var cp_data := []
@@ -302,6 +368,113 @@ func _client_move_army(aid: String, target: Vector2):
 	var army = _find_army(aid)
 	if army:
 		army.move_army(target)
+
+@rpc("any_peer", "reliable")
+func request_draft_army(use_horse: bool, use_spear: bool):
+	if not multiplayer.is_server() or game_over:
+		return
+	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0:
+		sender_id = 1
+	if sender_id not in GameState.players:
+		return
+	if not GameState.resources.has(sender_id):
+		GameState.resources[sender_id] = {"horses": 0, "spears": 0}
+	var res = GameState.resources[sender_id]
+	var need_horses = DRAFT_COST_PER_EQUIPMENT if use_horse else 0
+	var need_spears = DRAFT_COST_PER_EQUIPMENT if use_spear else 0
+	if res["horses"] < need_horses or res["spears"] < need_spears:
+		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need %d horses, %d spears)" % [sender_id, need_horses, need_spears])
+		return
+	res["horses"] -= need_horses
+	res["spears"] -= need_spears
+	var pid = sender_id
+	var pname = GameState.players[pid]["name"]
+	var idx = army_index_per_player.get(pid, 3)
+	army_index_per_player[pid] = idx + 1
+	var aid = "P%d_%d" % [pid, idx]
+	var side = player_side.get(pid, "west")
+	var spawn_pos: Vector2
+	var stop_pos: Vector2
+	var dir: float
+	if side == "west":
+		spawn_pos = WEST_SPAWN
+		stop_pos = Vector2(WEST_STOP_X, WEST_SPAWN.y)
+		dir = 0.0
+	else:
+		spawn_pos = EAST_SPAWN
+		stop_pos = Vector2(EAST_STOP_X, EAST_SPAWN.y)
+		dir = PI
+	var equipment = {"horse": use_horse, "spear": use_spear}
+	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
+	armies.append(army)
+	army.move_army(stop_pos)
+	var data = _serialize_one_army(army)
+	data["stop_x"] = stop_pos.x
+	data["stop_y"] = stop_pos.y
+	rpc("_client_spawn_drafted_army", data)
+	rpc("_client_move_army", aid, stop_pos)
+	_sync_capture_state()
+	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s)" % [aid, use_horse, use_spear])
+
+func _serialize_one_army(army) -> Dictionary:
+	var soldier_data := []
+	for s in army.soldiers:
+		soldier_data.append({
+			"name": s.name,
+			"x": s.global_position.x,
+			"y": s.global_position.y
+		})
+	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
+	var speed = s0.speed if s0 else 200.0
+	var attack = s0.attack if s0 else 10.0
+	var attack_range = s0.attack_range if s0 else 50.0
+	return {
+		"army_id": army.army_id,
+		"pid": army.owner_peer_id,
+		"name": army.owner_name,
+		"x": army.global_position.x,
+		"y": army.global_position.y,
+		"dir": army.direction,
+		"soldiers": soldier_data,
+		"speed": speed,
+		"attack": attack,
+		"attack_range": attack_range
+	}
+
+@rpc("authority", "reliable")
+func _client_spawn_drafted_army(army_data: Dictionary):
+	var ad = army_data
+	var army_script = preload("res://Army.gd")
+	var army = Node2D.new()
+	army.set_script(army_script)
+	army.army_id = ad["army_id"]
+	army.owner_peer_id = ad["pid"]
+	army.owner_name = ad["name"]
+	army.global_position = Vector2(ad["x"], ad["y"])
+	army.direction = ad["dir"]
+	army.name = "Army_%s" % ad["army_id"]
+	add_child(army)
+	armies.append(army)
+	var speed = ad.get("speed", 200.0)
+	var attack = ad.get("attack", 10.0)
+	var attack_range = ad.get("attack_range", 50.0)
+	for sd in ad["soldiers"]:
+		var unit = preload("res://Unit.tscn").instantiate()
+		unit.name = sd["name"]
+		unit.owner_peer_id = ad["pid"]
+		unit.owner_name = ad["name"]
+		unit.army_id = ad["army_id"]
+		unit.speed = speed
+		unit.attack = attack
+		unit.attack_range = attack_range
+		unit.global_position = Vector2(sd["x"], sd["y"])
+		add_child(unit)
+		army.soldiers.append(unit)
+		all_units.append(unit)
+	if ad.has("stop_x") and ad.has("stop_y"):
+		army.move_army(Vector2(ad["stop_x"], ad["stop_y"]))
+	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s'" % army.army_id)
 
 @rpc("any_peer", "reliable")
 func _server_rotate_army(aid: String, delta_angle: float):

@@ -1,6 +1,8 @@
 # Test Checklist
 
-Each test corresponds to an event in `events.md`. A test passes if its `TEST_XXX` marker appears in the expected log file(s).
+Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=1` or `--events=2`. A test passes if its `TEST_XXX` marker appears in the expected log file(s).
+
+## Events 1
 
 | Test ID | Description | Expected In |
 |---------|-------------|-------------|
@@ -24,3 +26,13 @@ Each test corresponds to an event in `events.md`. A test passes if its `TEST_XXX
 | `TEST_ROUT` | Army routed (below 30% alive) | server.log |
 | `TEST_011` | Game over, winner declared (both armies of loser routed) | server.log |
 | `TEST_012` | Both clients disconnected | client_A.log, client_B.log |
+
+## Events 2
+
+Includes all Events 1 markers up to and including capture/resources, plus:
+
+| Test ID | Description | Expected In |
+|---------|-------------|-------------|
+| `TEST_DRAFT_FAIL` | Draft attempted with insufficient resources (need 10 horses, 10 spears) | server.log |
+| `TEST_DRAFT_SUCCESS` | Draft succeeded; army created with equipment | server.log, client_A.log |
+| (then combat, rout, winner as in Events 1) | `TEST_010_COMBAT`, `TEST_ROUT`, `TEST_011`, `TEST_012` | server.log, client logs |

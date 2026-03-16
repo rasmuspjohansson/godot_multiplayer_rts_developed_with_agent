@@ -15,12 +15,21 @@
   - Left/Right arrow keys (or Q/E): Rotate selected army facing direction by 15 degrees.
   - Units auto-attack enemies within range (server-driven).
 
+## Player sides
+- For 2 players: first connected = **West** (left), second = **East** (right). Drafted armies spawn from the player's side and walk in until fully visible (stop_when_visible).
+
 ## Army System (Total War Style)
-- Each player starts with **2 armies**.
+- Each player starts with **2 armies** (no equipment).
 - Each army has **10 soldiers** arranged in a **2-row x 5-column** formation.
 - An army has a **center position** and a **facing direction** (angle in radians).
 - Soldier positions are calculated from the army center + grid offset rotated by facing angle.
 - When soldiers die, surviving soldiers **repack** to fill gaps (grid shrinks).
+
+## Drafting
+- **Draft menu**: Lower-left of screen. Checkboxes **Horse** and **Spear**, button **Create army**.
+- **Cost**: 10 horses if Horse checked, 10 spears if Spear checked (both = 10 of each). Player must have enough resources.
+- **Created army**: 10 soldiers, spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
+- **Equipment effects**: Horse → speed 200 → 280. Spear → attack 10 → 13, range 50 → 65. Both = both bonuses. Starting armies have no equipment.
 
 ## Physics / collision
 - Units have a collision shape and **collide with each other** (they block each other; no pass-through).

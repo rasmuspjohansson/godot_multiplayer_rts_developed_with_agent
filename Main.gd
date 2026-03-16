@@ -12,6 +12,27 @@ func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
+	for i in range(args.size()):
+		var a = args[i]
+		if a.begins_with("--events="):
+			GameState.test_events = int(a.split("=")[1])
+			break
+		if a == "--events" and i + 1 < args.size():
+			GameState.test_events = int(args[i + 1])
+			break
+	if OS.has_environment("GODOT_TEST_EVENTS"):
+		GameState.test_events = int(OS.get_environment("GODOT_TEST_EVENTS"))
+	var proj_path = str(ProjectSettings.globalize_path("res://"))
+	if not proj_path.ends_with("/"):
+		proj_path += "/"
+	var test_events_path = proj_path + ".test_events"
+	if FileAccess.file_exists(test_events_path):
+		var f = FileAccess.open(test_events_path, FileAccess.READ)
+		if f:
+			var s = f.get_as_text().strip_edges()
+			f.close()
+			if s.is_valid_int():
+				GameState.test_events = int(s)
 
 	if "--server" in args:
 		_start_server()
