@@ -1,6 +1,8 @@
 # Automated RTS — Godot 4.6
 
 A minimal multiplayer RTS where two players each control **two armies** on a 2D arena. Each army has 10 soldiers in a formation; you select and move armies, capture **Stables** and **Blacksmith** points (producing horses and spears), and win by routing both of the opponent’s armies. If an army sits at a capture point for 5 seconds with no combat, it automatically seeks and follows the closest enemy army.
+<img width="1915" height="1054" alt="image" src="https://github.com/user-attachments/assets/c8d8ca0a-c531-4e66-88d1-19060a02b6ad" />
+
 
 ## Agent-Driven Development
 
