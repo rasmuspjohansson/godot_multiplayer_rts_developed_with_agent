@@ -53,9 +53,15 @@ func _check_capture():
 	if world == null:
 		return
 	var nearby_pids := {}
-	for child in world.get_children():
-		if not child is CharacterBody2D:
-			continue
+	var candidates: Array
+	if world.has_method("get_units_in_radius"):
+		candidates = world.get_units_in_radius(global_position, CAPTURE_RADIUS)
+	else:
+		candidates = []
+		for child in world.get_children():
+			if child is CharacterBody2D:
+				candidates.append(child)
+	for child in candidates:
 		if child.is_dead:
 			continue
 		var dist = global_position.distance_to(child.global_position)

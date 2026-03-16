@@ -6,8 +6,8 @@ var winner_name := ""
 @onready var info_label: Label = $VBoxContainer/InfoLabel
 
 func _ready():
-	winner_label.text = "Winner: %s" % winner_name
-	print("GameOver: Displaying winner '%s'" % winner_name)
+	winner_label.text = "Winner: %s" % winner_name if winner_name else "Draw"
+	print("GameOver: Displaying winner '%s'" % (winner_name if winner_name else "Draw"))
 
 	if not multiplayer.is_server():
 		info_label.text = "Disconnecting in 3 seconds..."

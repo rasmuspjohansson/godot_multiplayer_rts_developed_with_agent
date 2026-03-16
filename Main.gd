@@ -7,6 +7,18 @@ var is_server := false
 var is_client := false
 var player_name := ""
 var auto_test := false
+var _server_host := "localhost"
+
+func _get_server_host(args: Array) -> String:
+	for i in range(args.size()):
+		var a = args[i]
+		if a.begins_with("--host="):
+			return a.split("=")[1]
+		if a == "--host" and i + 1 < args.size():
+			return args[i + 1]
+	if OS.has_environment("GODOT_SERVER_HOST"):
+		return OS.get_environment("GODOT_SERVER_HOST")
+	return "localhost"
 
 func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
@@ -34,6 +46,7 @@ func _ready():
 			if s.is_valid_int():
 				GameState.test_events = int(s)
 
+	GameState.use_3d = "--3d" in args
 	if "--server" in args:
 		_start_server()
 	elif "--client" in args:
@@ -45,6 +58,7 @@ func _ready():
 			player_name = "Unknown Player"
 		GameState.local_player_name = player_name
 		GameState.is_auto_test = auto_test
+		_server_host = _get_server_host(args)
 		_start_client()
 	else:
 		print("ERROR: Pass --server or --client")
@@ -67,7 +81,7 @@ func _start_server():
 func _start_client():
 	is_client = true
 	var peer = ENetMultiplayerPeer.new()
-	var err = peer.create_client("localhost", PORT)
+	var err = peer.create_client(_server_host, PORT)
 	if err != OK:
 		print("ERROR: Failed to connect to server: ", err)
 		get_tree().quit()
@@ -76,7 +90,7 @@ func _start_client():
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
-	print("Connecting to server as '%s'..." % player_name)
+	print("Connecting to server as '%s' at %s:%d..." % [player_name, _server_host, PORT])
 
 func _on_connected_to_server():
 	var marker = "TEST_002" if player_name == "A" else "TEST_003"
@@ -171,7 +185,8 @@ func _load_lobby():
 
 func load_world():
 	_clear_scenes()
-	var world = load("res://World.tscn").instantiate()
+	var scene_path = "res://World3D.tscn" if not multiplayer.is_server() and GameState.use_3d else "res://World.tscn"
+	var world = load(scene_path).instantiate()
 	$Level.add_child(world)
 
 func load_game_over(winner_name: String):

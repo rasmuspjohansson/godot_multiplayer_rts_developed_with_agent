@@ -9,14 +9,15 @@ godot --headless --path . -- --server > logs/server.log 2>&1 & echo $! > logs/se
 ```
 
 ## [Skill: Run Client A (events N)]
-Starts Client A with auto-test mock player. Use `--events=1` (default) or `--events=2` for the event sequence.
+Starts Client A with auto-test mock player. Use `--events=1` (default) or `--events=2` for the event sequence. Optional: `--host=IP` or env `GODOT_SERVER_HOST` to connect to a remote server (default: localhost).
 **Command:**
 ```bash
 godot --rendering-driver opengl3 --path . -- --client --name=A --auto-test --events=1 > logs/client_A.log 2>&1 & echo $! > logs/client_A.pid
 ```
+**Remote server:** add `--host=192.168.1.10` (or `GODOT_SERVER_HOST=192.168.1.10`) to connect to another machine.
 
 ## [Skill: Run Client B (events N)]
-Starts Client B with auto-test mock player. Use `--events=1` or `--events=2`.
+Starts Client B with auto-test mock player. Use `--events=1` or `--events=2`. Optional: `--host=IP` or `GODOT_SERVER_HOST` for remote server.
 **Command:**
 ```bash
 godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test --events=1 > logs/client_B.log 2>&1 & echo $! > logs/client_B.pid

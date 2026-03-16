@@ -1,13 +1,29 @@
 extends Node2D
 
+# Scaling: change these to scale the game (spawn, map, nav)
+const ARMIES_PER_PLAYER := 2
+const UNITS_PER_ARMY := 10
+const MAP_WIDTH := 1280
+const MAP_HEIGHT := 720
+
 const ARMY_CLICK_RADIUS := 80.0
 const CP_PEACE_SECONDS := 5.0
 const CAPTURE_RADIUS_SEEK := 120.0
 const DRAFT_COST_PER_EQUIPMENT := 10
-const WEST_SPAWN := Vector2(-120.0, 360.0)
-const EAST_SPAWN := Vector2(1400.0, 360.0)
+const WEST_SPAWN := Vector2(-120.0, MAP_HEIGHT / 2.0)
+const EAST_SPAWN := Vector2(float(MAP_WIDTH) + 120.0, MAP_HEIGHT / 2.0)
 const WEST_STOP_X := 80.0
-const EAST_STOP_X := 1200.0
+const EAST_STOP_X := float(MAP_WIDTH) - 80.0
+const NORTH_SPAWN := Vector2(MAP_WIDTH / 2.0, -100.0)
+const SOUTH_SPAWN := Vector2(MAP_WIDTH / 2.0, float(MAP_HEIGHT) + 100.0)
+const NORTH_STOP_Y := 80.0
+const SOUTH_STOP_Y := float(MAP_HEIGHT) - 80.0
+
+# Spatial grid for unit queries (combat/capture); cell size ~100-150 px
+const GRID_CELL_SIZE := 125.0
+# Client: only snap to server HERE when error exceeds this (real desync only)
+const CORRECTION_THRESHOLD := 120.0
+var _unit_grid: Dictionary = {}  # key "cx_cy" -> Array of unit refs
 
 var armies: Array = []
 var all_units: Array = []
@@ -23,6 +39,7 @@ var player_side := {}  # pid -> "west" | "east"
 var army_index_per_player := {}  # pid -> next army index (3, 4, ...)
 
 func _ready():
+	_setup_map_bounds()
 	if multiplayer.is_server():
 		GameState.reset_match_state()
 		_set_player_sides()
@@ -31,31 +48,65 @@ func _ready():
 	_setup_topbar()
 	_setup_draft_menu()
 
+func _setup_map_bounds():
+	var nav_region = get_node_or_null("NavigationRegion2D")
+	if nav_region and nav_region.navigation_polygon:
+		var poly = NavigationPolygon.new()
+		var w = float(MAP_WIDTH)
+		var h = float(MAP_HEIGHT)
+		poly.add_outline(PackedVector2Array([Vector2(0, 0), Vector2(w, 0), Vector2(w, h), Vector2(0, h)]))
+		poly.make_polygons_from_outlines()
+		nav_region.navigation_polygon = poly
+	var bg = get_node_or_null("Background")
+	if bg and bg is ColorRect:
+		bg.offset_right = float(MAP_WIDTH)
+		bg.offset_bottom = float(MAP_HEIGHT)
+
 func _set_player_sides():
+	var sides = ["west", "east", "north", "south"]
 	var player_ids = GameState.players.keys()
-	if player_ids.size() >= 1:
-		player_side[player_ids[0]] = "west"
-	if player_ids.size() >= 2:
-		player_side[player_ids[1]] = "east"
+	for i in range(player_ids.size()):
+		if i < sides.size():
+			player_side[player_ids[i]] = sides[i]
 	for pid in player_ids:
-		army_index_per_player[pid] = 3  # 1 and 2 are starting armies
+		army_index_per_player[pid] = ARMIES_PER_PLAYER + 1  # next army index after starting armies
 
 func _spawn_armies():
 	var player_ids = GameState.players.keys()
 	if player_ids.size() < 2:
-		print("ERROR: Need 2 players to spawn armies")
+		print("ERROR: Need at least 2 players to spawn armies")
 		return
 
-	var spawn_configs = [
-		{"pid": player_ids[0], "name": GameState.players[player_ids[0]]["name"], "armies": [
-			{"pos": Vector2(200, 250), "dir": 0.0},
-			{"pos": Vector2(200, 450), "dir": 0.0}
-		]},
-		{"pid": player_ids[1], "name": GameState.players[player_ids[1]]["name"], "armies": [
-			{"pos": Vector2(1050, 250), "dir": PI},
-			{"pos": Vector2(1050, 450), "dir": PI}
-		]}
-	]
+	var w := float(MAP_WIDTH)
+	var h := float(MAP_HEIGHT)
+	var west_x := w * 0.156
+	var east_x := w - 230.0
+	var north_y := 80.0
+	var south_y := h - 80.0
+	var mid_x := w * 0.5
+	var spawn_configs := []
+	for p in range(player_ids.size()):
+		var pid = player_ids[p]
+		var pname = GameState.players[pid]["name"]
+		var side = player_side.get(pid, "west")
+		var army_list := []
+		for i in range(ARMIES_PER_PLAYER):
+			var pos: Vector2
+			var dir: float
+			if side == "west":
+				pos = Vector2(west_x, h * (0.25 + (float(i) / max(1, ARMIES_PER_PLAYER)) * 0.5))
+				dir = 0.0
+			elif side == "east":
+				pos = Vector2(east_x, h * (0.25 + (float(i) / max(1, ARMIES_PER_PLAYER)) * 0.5))
+				dir = PI
+			elif side == "north":
+				pos = Vector2(mid_x - 100 + i * 60, north_y)
+				dir = PI / 2.0
+			else:
+				pos = Vector2(mid_x - 100 + i * 60, south_y)
+				dir = -PI / 2.0
+			army_list.append({"pos": pos, "dir": dir})
+		spawn_configs.append({"pid": pid, "name": pname, "armies": army_list})
 
 	for pc in spawn_configs:
 		for i in range(pc["armies"].size()):
@@ -64,7 +115,7 @@ func _spawn_armies():
 			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"], {})
 			armies.append(army)
 
-	print("TEST_007: %d armies spawned (2 per player, 10 soldiers each)" % armies.size())
+	print("TEST_007: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
 	for a in armies:
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s" % [a.army_id, int(a.global_position.x), int(a.global_position.y), a.direction, a.owner_name])
 
@@ -85,12 +136,13 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	army.owner_name = pname
 	army.global_position = pos
 	army.direction = dir
+	army.initial_count = UNITS_PER_ARMY
 	army.name = "Army_%s" % aid
 	army.army_routed.connect(_on_army_routed)
 	add_child(army)
 
-	var formation_positions = army.calculate_formation_positions(pos, dir, army.initial_count)
-	for idx in range(army.initial_count):
+	var formation_positions = army.calculate_formation_positions(pos, dir, UNITS_PER_ARMY)
+	for idx in range(UNITS_PER_ARMY):
 		var unit = preload("res://Unit.tscn").instantiate()
 		unit.name = "Soldier_%s_%d" % [aid, idx]
 		unit.owner_peer_id = pid
@@ -118,6 +170,7 @@ func _client_spawn_armies(data: Array):
 		army.owner_name = ad["name"]
 		army.global_position = Vector2(ad["x"], ad["y"])
 		army.direction = ad["dir"]
+		army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
 		army.name = "Army_%s" % ad["army_id"]
 		add_child(army)
 		armies.append(army)
@@ -128,7 +181,9 @@ func _client_spawn_armies(data: Array):
 			unit.owner_peer_id = ad["pid"]
 			unit.owner_name = ad["name"]
 			unit.army_id = ad["army_id"]
-			unit.global_position = Vector2(sd["x"], sd["y"])
+			var pos = Vector2(sd["x"], sd["y"])
+			unit.global_position = pos
+			unit.sync_target_position = pos
 			add_child(unit)
 			army.soldiers.append(unit)
 			all_units.append(unit)
@@ -152,14 +207,17 @@ func _serialize_armies() -> Array:
 			"x": army.global_position.x,
 			"y": army.global_position.y,
 			"dir": army.direction,
+			"initial_count": army.initial_count,
 			"soldiers": soldier_data
 		})
 	return data
 
 func _spawn_capture_points():
+	var w := float(MAP_WIDTH)
+	var h := float(MAP_HEIGHT)
 	var cp_configs = [
-		{"id": "Stables", "type": "Stables", "pos": Vector2(500, 200)},
-		{"id": "Blacksmith", "type": "Blacksmith", "pos": Vector2(780, 500)}
+		{"id": "Stables", "type": "Stables", "pos": Vector2(w * 0.39, h * 0.28)},
+		{"id": "Blacksmith", "type": "Blacksmith", "pos": Vector2(w * 0.61, h * 0.69)}
 	]
 	for cfg in cp_configs:
 		var cp = preload("res://CapturePoint.tscn").instantiate()
@@ -401,10 +459,18 @@ func request_draft_army(use_horse: bool, use_spear: bool):
 		spawn_pos = WEST_SPAWN
 		stop_pos = Vector2(WEST_STOP_X, WEST_SPAWN.y)
 		dir = 0.0
-	else:
+	elif side == "east":
 		spawn_pos = EAST_SPAWN
 		stop_pos = Vector2(EAST_STOP_X, EAST_SPAWN.y)
 		dir = PI
+	elif side == "north":
+		spawn_pos = NORTH_SPAWN
+		stop_pos = Vector2(NORTH_SPAWN.x, NORTH_STOP_Y)
+		dir = PI / 2.0
+	else:
+		spawn_pos = SOUTH_SPAWN
+		stop_pos = Vector2(SOUTH_SPAWN.x, SOUTH_STOP_Y)
+		dir = -PI / 2.0
 	var equipment = {"horse": use_horse, "spear": use_spear}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
@@ -436,6 +502,7 @@ func _serialize_one_army(army) -> Dictionary:
 		"x": army.global_position.x,
 		"y": army.global_position.y,
 		"dir": army.direction,
+		"initial_count": army.initial_count,
 		"soldiers": soldier_data,
 		"speed": speed,
 		"attack": attack,
@@ -453,6 +520,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.owner_name = ad["name"]
 	army.global_position = Vector2(ad["x"], ad["y"])
 	army.direction = ad["dir"]
+	army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
 	army.name = "Army_%s" % ad["army_id"]
 	add_child(army)
 	armies.append(army)
@@ -468,7 +536,9 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.speed = speed
 		unit.attack = attack
 		unit.attack_range = attack_range
-		unit.global_position = Vector2(sd["x"], sd["y"])
+		var pos = Vector2(sd["x"], sd["y"])
+		unit.global_position = pos
+		unit.sync_target_position = pos
 		add_child(unit)
 		army.soldiers.append(unit)
 		all_units.append(unit)
@@ -572,8 +642,42 @@ func _apply_follow_targets():
 	for aid in to_erase:
 		army_follow_target.erase(aid)
 
+func _grid_key(cell: Vector2i) -> String:
+	return "%d_%d" % [cell.x, cell.y]
+
+func _update_unit_grid():
+	_unit_grid.clear()
+	for u in all_units:
+		if not u or not is_instance_valid(u) or u.is_dead:
+			continue
+		var p = u.global_position
+		var cx = int(floor(p.x / GRID_CELL_SIZE))
+		var cy = int(floor(p.y / GRID_CELL_SIZE))
+		var k = _grid_key(Vector2i(cx, cy))
+		if not _unit_grid.has(k):
+			_unit_grid[k] = []
+		_unit_grid[k].append(u)
+
+func get_units_in_radius(center: Vector2, radius: float) -> Array:
+	var out := []
+	var cell_radius = ceili(radius / GRID_CELL_SIZE)
+	var cx0 = int(floor(center.x / GRID_CELL_SIZE))
+	var cy0 = int(floor(center.y / GRID_CELL_SIZE))
+	for dx in range(-cell_radius, cell_radius + 1):
+		for dy in range(-cell_radius, cell_radius + 1):
+			var k = _grid_key(Vector2i(cx0 + dx, cy0 + dy))
+			if not _unit_grid.has(k):
+				continue
+			for u in _unit_grid[k]:
+				if not u or not is_instance_valid(u) or u.is_dead:
+					continue
+				if center.distance_to(u.global_position) <= radius:
+					out.append(u)
+	return out
+
 func _physics_process(delta):
 	if multiplayer.is_server() and not game_over:
+		_update_unit_grid()
 		_update_cp_seek_and_follow(delta)
 		sync_timer += delta
 		if sync_timer >= 0.05:
@@ -591,7 +695,12 @@ func _sync_unit_positions():
 	for u in all_units:
 		if u and is_instance_valid(u):
 			if not u.is_dead:
-				pos_data.append({"n": u.name, "x": u.global_position.x, "y": u.global_position.y, "hp": u.hp})
+				var here = u.global_position
+				var there = u.move_target if u.is_moving else here
+				pos_data.append({
+					"n": u.name, "x": here.x, "y": here.y, "hp": u.hp,
+					"tx": there.x, "ty": there.y
+				})
 			else:
 				dead_names.append(u.name)
 	rpc("_receive_positions", pos_data, dead_names)
@@ -601,7 +710,13 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 	for pd in pos_data:
 		var node = get_node_or_null(NodePath(str(pd["n"])))
 		if node and not node.is_dead:
-			node.global_position = Vector2(pd["x"], pd["y"])
+			var here = Vector2(pd["x"], pd["y"])
+			var there = Vector2(pd.get("tx", pd["x"]), pd.get("ty", pd["y"]))
+			var err = node.global_position.distance_to(here)
+			if err > CORRECTION_THRESHOLD:
+				node.global_position = here
+			node.sync_target_position = there
+			node.sync_target_hp = pd["hp"]
 			node.hp = pd["hp"]
 	for dn in dead_names:
 		_cleanup_client_unit(str(dn))
@@ -635,15 +750,23 @@ func _on_army_routed(army):
 			break
 
 	if all_routed:
+		print("TEST_011: Player '%s' has no armies left (all routed)" % loser_name)
+	# Last player with a non-routed army wins
+	var players_with_armies := {}
+	for a in armies:
+		if not a.is_routed:
+			players_with_armies[a.owner_peer_id] = a.owner_name
+	if players_with_armies.size() == 1:
 		game_over = true
-		var winner_name := ""
-		for a in armies:
-			if a.owner_peer_id != loser_pid:
-				winner_name = a.owner_name
-				break
-		print("TEST_011: Both armies of '%s' routed. Winner: %s" % [loser_name, winner_name])
+		var winner_name = players_with_armies.values()[0]
+		print("TEST_011: Last player standing. Winner: %s" % winner_name)
 		rpc("_announce_winner", winner_name)
 		_announce_winner(winner_name)
+	elif players_with_armies.size() == 0:
+		game_over = true
+		print("TEST_011: Draw (no armies left)")
+		rpc("_announce_winner", "")
+		_announce_winner("")
 
 @rpc("authority", "reliable")
 func _client_army_routed(army_id: String):

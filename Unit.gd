@@ -17,6 +17,9 @@ var is_moving := false
 var is_dead := false
 var attack_timer: float = 0.0
 var _selected := false
+# Client: interpolate toward server position for smooth movement
+var sync_target_position: Vector2 = Vector2.ZERO
+var sync_target_hp: float = 100.0
 
 @onready var nav_agent: NavigationAgent2D = $NavigationAgent2D
 @onready var sprite: ColorRect = $ColorRect
@@ -53,6 +56,15 @@ func _physics_process(delta):
 		return
 	if multiplayer.is_server():
 		_server_process(delta)
+	else:
+		# Client: move toward sync target at fixed unit speed (matches server), no lerp
+		if sync_target_position != Vector2.ZERO:
+			var dist = global_position.distance_to(sync_target_position)
+			if dist > 1.0:
+				var dir = (sync_target_position - global_position).normalized()
+				var move = minf(speed * delta, dist)
+				global_position += dir * move
+			hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
 	_update_visuals()
 
 func _server_process(delta):
@@ -74,7 +86,15 @@ func _try_attack():
 	var world = get_parent()
 	if world == null:
 		return
-	for child in world.get_children():
+	var candidates: Array
+	if world.has_method("get_units_in_radius"):
+		candidates = world.get_units_in_radius(global_position, attack_range)
+	else:
+		candidates = []
+		for child in world.get_children():
+			if child is CharacterBody2D:
+				candidates.append(child)
+	for child in candidates:
 		if child == self or not child is CharacterBody2D:
 			continue
 		if child.is_dead:

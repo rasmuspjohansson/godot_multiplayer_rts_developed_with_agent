@@ -1,0 +1,34 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://World3D.gd" id="1_world3d"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+size = Vector2(1280, 720)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
+size = Vector3(1280, 1, 720)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.45, 0.5, 0.4, 1)
+
+[node name="World" type="Node3D"]
+script = ExtResource("1_world3d")
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 640, 0, 360)
+mesh = SubResource("PlaneMesh_ground")
+surface_material_override/0 = SubResource("StandardMaterial3D_ground")
+
+[node name="GroundCollision" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 640, 0, 360)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="GroundCollision"]
+shape = SubResource("BoxShape3D_ground")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.5, -0.7, 0.5, 0, 0.65, 0.76, -0.87, -0.3, 0.4, 0, 0, 0)
+light_energy = 1.2
+light_color = Color(1.0, 0.98, 0.95, 1)
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(0.7, -0.4, 0.6, 0, 0.83, 0.55, -0.7, -0.4, 0.6, 640, 400, 360)
