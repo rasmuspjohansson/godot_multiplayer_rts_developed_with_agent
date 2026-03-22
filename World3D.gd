@@ -4,7 +4,11 @@ extends Node3D
 
 const MAP_WIDTH := 1280
 const MAP_HEIGHT := 720  # used as Z in 3D
-const CAMERA_PITCH_DEG := 45.0
+## Zoomed out: bird's-eye; zoomed in: pitch approaches horizontal + look-at near soldier head height.
+const CAMERA_PITCH_MAX_DEG := 45.0
+const CAMERA_PITCH_MIN_DEG := 8.0
+## Added to terrain height at pivot XZ when fully zoomed in (above unit center ~11, toward head).
+const LOOK_HEIGHT_ABOVE_GROUND_MAX := 20.0
 const CAMERA_MIN_DISTANCE := 200.0
 const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
@@ -51,19 +55,33 @@ func _setup_camera():
 	_camera_pivot = Node3D.new()
 	_camera_pivot.name = "CameraPivot"
 	add_child(_camera_pivot)
-	_camera_pivot.position = _look_at
 	_camera.reparent(_camera_pivot)
-	var rad = deg_to_rad(CAMERA_PITCH_DEG)
-	_camera.position = Vector3(0, _camera_distance * sin(rad), _camera_distance * cos(rad))
-	_camera.look_at(_camera_pivot.position, Vector3.UP)
+	# Closer views: reduce clipping through nearby geometry
+	_camera.near = 0.35
 	_update_camera_position()
+
+## 0 = zoomed out (overview), 1 = zoomed in (soldier-like framing).
+func _camera_zoom_t() -> float:
+	var span := CAMERA_MAX_DISTANCE - CAMERA_MIN_DISTANCE
+	if span <= 0.001:
+		return 0.0
+	return clampf((CAMERA_MAX_DISTANCE - _camera_distance) / span, 0.0, 1.0)
+
+func _camera_pitch_deg_for_zoom() -> float:
+	var t := _camera_zoom_t()
+	return lerpf(CAMERA_PITCH_MAX_DEG, CAMERA_PITCH_MIN_DEG, t)
+
+func _camera_pivot_y_for_zoom() -> float:
+	var gy := get_ground_height_at(_look_at.x, _look_at.z)
+	var t := _camera_zoom_t()
+	return gy + lerpf(0.0, LOOK_HEIGHT_ABOVE_GROUND_MAX, t)
 
 func _update_camera_position():
 	if _camera_pivot == null:
 		return
-	_camera_pivot.position = _look_at
+	_camera_pivot.position = Vector3(_look_at.x, _camera_pivot_y_for_zoom(), _look_at.z)
 	if _camera:
-		var rad = deg_to_rad(CAMERA_PITCH_DEG)
+		var rad := deg_to_rad(_camera_pitch_deg_for_zoom())
 		_camera.position = Vector3(0, _camera_distance * sin(rad), _camera_distance * cos(rad))
 		_camera.look_at(_camera_pivot.global_position, Vector3.UP)
 
@@ -288,17 +306,22 @@ func _make_client_unit_3d() -> CharacterBody3D:
 
 @rpc("authority", "reliable")
 func _client_spawn_armies(data: Array):
+	# One frame later: ensures this node and physics/world are fully in the tree
+	# (avoids get_global_transform errors during early match setup).
+	call_deferred("_client_spawn_armies_impl", data)
+
+func _client_spawn_armies_impl(data: Array):
 	for ad in data:
 		var army = Node3D.new()
 		army.set_script(preload("res://Army3D.gd"))
+		add_child(army)
 		army.army_id = ad["army_id"]
 		army.owner_peer_id = ad["pid"]
 		army.owner_name = ad["name"]
-		var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
-		army.global_position = Vector3(ad["x"], gy, ad["y"])
 		army.direction = ad["dir"]
 		army.name = "Army_%s" % ad["army_id"]
-		add_child(army)
+		var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
+		army.position = Vector3(ad["x"], gy, ad["y"])
 		armies.append(army)
 		for sd in ad["soldiers"]:
 			var unit = _make_client_unit_3d()
@@ -309,13 +332,14 @@ func _client_spawn_armies(data: Array):
 			unit.army_id = ad["army_id"]
 			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 			var pos = Vector3(sd["x"], uy, sd["y"])
-			unit.global_position = pos
-			unit.sync_target_position = pos
 			add_child(unit)
+			unit.sync_target_position = pos
+			unit.position = pos
 			army.soldiers.append(unit)
 			all_units.append(unit)
 	print("TEST_007: Client received %d armies" % armies.size())
 	call_deferred("_validate_units_height")
+	call_deferred("_validate_unit_textures")
 
 @rpc("authority", "reliable")
 func _client_spawn_capture_points(data: Array):
@@ -407,14 +431,14 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	var ad = army_data
 	var army = Node3D.new()
 	army.set_script(preload("res://Army3D.gd"))
+	add_child(army)
 	army.army_id = ad["army_id"]
 	army.owner_peer_id = ad["pid"]
 	army.owner_name = ad["name"]
-	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
-	army.global_position = Vector3(ad["x"], gy, ad["y"])
 	army.direction = ad["dir"]
 	army.name = "Army_%s" % ad["army_id"]
-	add_child(army)
+	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
+	army.position = Vector3(ad["x"], gy, ad["y"])
 	armies.append(army)
 	for sd in ad["soldiers"]:
 		var unit = _make_client_unit_3d()
@@ -425,15 +449,32 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.army_id = ad["army_id"]
 		var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 		var pos = Vector3(sd["x"], uy, sd["y"])
-		unit.global_position = pos
-		unit.sync_target_position = pos
 		add_child(unit)
+		unit.sync_target_position = pos
+		unit.position = pos
 		army.soldiers.append(unit)
 		all_units.append(unit)
 	if ad.has("stop_x") and ad.has("stop_y"):
 		army.move_army(Vector2(ad["stop_x"], ad["stop_y"]))
 	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s'" % army.army_id)
 	call_deferred("_validate_units_height")
+	call_deferred("_validate_unit_textures")
+
+func _validate_unit_textures():
+	var ok := 0
+	var fail := 0
+	for unit in all_units:
+		if not is_instance_valid(unit) or not unit.is_inside_tree():
+			continue
+		if unit.has_method("has_valid_spearman_texture") and unit.has_valid_spearman_texture():
+			ok += 1
+		else:
+			fail += 1
+			print("TEST_3D_TEXTURE_MISSING: %s" % unit.name)
+	if fail == 0:
+		print("TEST_3D_TEXTURES_OK: count=%d" % ok)
+	else:
+		print("TEST_3D_TEXTURES_BAD: ok=%d fail=%d" % [ok, fail])
 
 func _validate_units_height():
 	for unit in all_units:

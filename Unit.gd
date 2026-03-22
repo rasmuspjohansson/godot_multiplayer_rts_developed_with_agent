@@ -6,7 +6,7 @@ signal unit_died(peer_id: int)
 @export var owner_name: String = ""
 
 var army_id: String = ""
-var speed: float = 200.0
+var speed: float = 200.0 / 3.0
 var hp: float = 100.0
 var attack: float = 10.0
 var defense: float = 2.0

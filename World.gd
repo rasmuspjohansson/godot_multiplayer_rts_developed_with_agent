@@ -124,7 +124,7 @@ func _spawn_armies():
 func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node2D:
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
-	var speed: float = 280.0 if use_horse else 200.0
+	var speed: float = (280.0 if use_horse else 200.0) / 3.0
 	var attack: float = 13.0 if use_spear else 10.0
 	var attack_range: float = 65.0 if use_spear else 50.0
 
@@ -492,7 +492,7 @@ func _serialize_one_army(army) -> Dictionary:
 			"y": s.global_position.y
 		})
 	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
-	var speed = s0.speed if s0 else 200.0
+	var speed = s0.speed if s0 else 200.0 / 3.0
 	var attack = s0.attack if s0 else 10.0
 	var attack_range = s0.attack_range if s0 else 50.0
 	return {
@@ -524,7 +524,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.name = "Army_%s" % ad["army_id"]
 	add_child(army)
 	armies.append(army)
-	var speed = ad.get("speed", 200.0)
+	var speed = ad.get("speed", 200.0 / 3.0)
 	var attack = ad.get("attack", 10.0)
 	var attack_range = ad.get("attack_range", 50.0)
 	for sd in ad["soldiers"]:

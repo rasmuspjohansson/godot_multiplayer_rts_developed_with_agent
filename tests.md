@@ -2,7 +2,13 @@
 
 Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=1` or `--events=2`. A test passes if its `TEST_XXX` marker appears in the expected log file(s).
 
-**Invalid markers (run fails if any appear):** `TEST_3D_UNIT_HEIGHT_INVALID` and `TEST_SERVER_UNIT_POSITION_INVALID` must **not** appear in any log (server or client). If they do, the run is considered failed (unit height or position invalid).
+**Invalid markers (run fails if any appear):** `TEST_3D_UNIT_HEIGHT_INVALID`, `TEST_SERVER_UNIT_POSITION_INVALID`, `TEST_3D_TEXTURE_MISSING`, `TEST_3D_TEXTURES_BAD`, and `TEST_3D_TEXTURE_LOAD_FAILED` must **not** appear in any log (server or client). If they do, the run is considered failed.
+
+**3D client textures (when running with `--3d`):** Each client log should contain `TEST_3D_TEXTURES_OK: count=<N>` after armies spawn (and again after draft in events 2 if applicable), with N equal to the number of 3D units on that client.
+
+**Headless asset check:** `godot --headless --path . -s test_texture_paths.gd` must print `TEST_TEXTURE_PATHS_OK: red_blue_png_readable` (verifies `res://images/red|blue/spearman/spearman.png` load the same way as `Unit3D`).
+
+**Bundled scripts:** `./run_tests.sh` runs the headless check. After `./run_test.sh` finishes the auto-test, `./verify_test_logs.sh` asserts both client logs contain `TEST_3D_TEXTURES_OK` and none of the invalid markers above.
 
 ## Events 1
 
