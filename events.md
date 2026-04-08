@@ -16,6 +16,9 @@ Each step has a log marker (`TEST_XXX`) that must appear in the appropriate log 
 | 8b | Client B selects its first army | `TEST_008_SELECT_B` | client_B.log | 0.5s |
 | 9a | Client A moves army to center | `TEST_009_MOVE` | client_A.log + server.log | 0s |
 | 9b | Client B moves army to center | `TEST_009_MOVE_B` | client_B.log + server.log | 0s |
+| 9c | **Group line formation** (merged multi-army move): MockPlayer sends `_server_move_group_formation` with per-soldier targets | `TEST_GROUP_FORMATION: client units=N` | client_A.log, client_B.log | 0.5s |
+| 9c2 | Server applies formation targets | `TEST_GROUP_FORMATION: server assigned=M sender=<pid>` | server.log | 0s |
+| 9d | *(Manual / not auto)* **Marquee box select**, **RMB centroid group move**, **RMB drag** with ghost preview: verify in `--no_test` play mode (2D/3D) | — | — | — |
 | 10 | Soldiers meet; server initiates combat (proximity) | `TEST_010_COMBAT` | server.log | wait |
 | 10a | Armies near capture points trigger captures | `TEST_CAPTURE` | server.log | continues |
 | 10a2 | Captured points produce horses (Stables) or spears (Blacksmith) every 2s | `TEST_RESOURCE` | server.log | continues |

@@ -1,5 +1,7 @@
 extends Node
 
+const _GroupFormation = preload("res://GroupFormation.gd")
+
 enum State {
 	WAIT_FOR_LOBBY,
 	IN_LOBBY,
@@ -8,6 +10,7 @@ enum State {
 	MOVE_ARMY_1,
 	SELECT_ARMY_2,
 	MOVE_ARMY_2,
+	GROUP_FORMATION_TEST,
 	WAIT_FOR_COMBAT,
 	DONE,
 	# Events 2
@@ -141,6 +144,30 @@ func _do_move_army_2():
 	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[1].army_id, int(target.x), int(target.y)])
 	world.rpc_id(1, "_server_move_army", my_armies[1].army_id, target)
 
+	state = State.GROUP_FORMATION_TEST
+	get_tree().create_timer(0.5).timeout.connect(_test_group_formation)
+
+func _test_group_formation():
+	## Exercises `_server_move_group_formation` (merged line layout); see events.md step 9c.
+	my_armies = world.get_my_armies()
+	if my_armies.size() < 2:
+		state = State.WAIT_FOR_COMBAT
+		return
+	var units: Array = _GroupFormation.collect_soldiers_sorted([my_armies[0], my_armies[1]])
+	if units.is_empty():
+		state = State.WAIT_FOR_COMBAT
+		return
+	var line_start := Vector2(400, 200)
+	var line_end := Vector2(520, 300)
+	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
+	var payload: Array = []
+	for i in range(units.size()):
+		var p: Vector2 = positions[i]
+		p.x = clampf(p.x, 0, 1280)
+		p.y = clampf(p.y, 0, 720)
+		payload.append({"n": str(units[i].name), "x": p.x, "y": p.y})
+	print("TEST_GROUP_FORMATION: client units=%d" % payload.size())
+	world.rpc_id(1, "_server_move_group_formation", payload)
 	state = State.WAIT_FOR_COMBAT
 
 # --- Events 2: P1 (A) ---

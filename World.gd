@@ -1,5 +1,8 @@
 extends Node2D
 
+const _GroupFormation = preload("res://GroupFormation.gd")
+const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
+
 # Scaling: change these to scale the game (spawn, map, nav)
 const ARMIES_PER_PLAYER := 2
 const UNITS_PER_ARMY := 10
@@ -32,7 +35,18 @@ var top_bar = null
 var draft_menu = null
 var game_over := false
 var sync_timer := 0.0
-var selected_army = null
+var selected_armies: Array = []
+var _marquee_start_screen: Vector2 = Vector2.ZERO
+var _marquee_end_screen: Vector2 = Vector2.ZERO
+var _marquee_active: bool = false
+var _marquee_moved: bool = false
+var _marquee_overlay: Control
+var _rmb_press_screen: Vector2 = Vector2.ZERO
+var _rmb_press_world: Vector2 = Vector2.ZERO
+var _rmb_drag_active: bool = false
+var _ghost_markers_2d: Node2D
+const MARQUEE_DRAG_THRESHOLD := 6.0
+const RMB_DRAG_CLICK_THRESHOLD := 14.0
 var army_time_at_cp := {}
 var army_follow_target := {}
 var player_side := {}  # pid -> "west" | "east"
@@ -47,6 +61,16 @@ func _ready():
 		_spawn_capture_points()
 	_setup_topbar()
 	_setup_draft_menu()
+	if not multiplayer.is_server():
+		_setup_selection_overlay()
+
+func _setup_selection_overlay():
+	var layer := CanvasLayer.new()
+	layer.layer = 50
+	layer.name = "SelectionMarqueeLayer"
+	add_child(layer)
+	_marquee_overlay = _MarqueeRectOverlay.new()
+	layer.add_child(_marquee_overlay)
 
 func _setup_map_bounds():
 	var nav_region = get_node_or_null("NavigationRegion2D")
@@ -124,7 +148,7 @@ func _spawn_armies():
 func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node2D:
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
-	var speed: float = (280.0 if use_horse else 200.0) / 3.0
+	var speed: float = (280.0 if use_horse else 200.0) / 6.0
 	var attack: float = 13.0 if use_spear else 10.0
 	var attack_range: float = 65.0 if use_spear else 50.0
 
@@ -359,51 +383,200 @@ func _update_topbar_local(cp_data: Array, res_data):
 			player_color = GameState.PLAYER_COLORS[ci]
 	top_bar.update_display(stables_count, blacksmith_count, my_horses, my_spears, player_name, player_color)
 
-func _unhandled_input(event):
+func _input(event: InputEvent):
 	if multiplayer.is_server() or game_over:
 		return
-
-	if event is InputEventMouseButton and event.pressed:
-		_handle_mouse(event)
+	if event is InputEventMouseButton or event is InputEventMouseMotion:
+		_handle_mouse_extended(event)
 	elif event is InputEventKey and event.pressed:
 		_handle_key(event)
 
-func _handle_mouse(event: InputEventMouseButton):
-	var mouse_pos = get_global_mouse_position()
-	var my_id = multiplayer.get_unique_id()
+func _world_to_screen_2d(world: Vector2) -> Vector2:
+	return get_viewport().get_canvas_transform() * world
 
-	if event.button_index == MOUSE_BUTTON_LEFT:
-		var army = _get_army_at(mouse_pos, my_id)
-		if army:
-			print("INPUT: LEFT click at (%d,%d) - selecting army '%s'" % [int(mouse_pos.x), int(mouse_pos.y), army.army_id])
-			if selected_army:
-				selected_army.deselect()
-			selected_army = army
-			selected_army.select()
-		else:
-			print("INPUT: LEFT click at (%d,%d) - no own army nearby" % [int(mouse_pos.x), int(mouse_pos.y)])
+func _screen_to_world_2d(screen: Vector2) -> Vector2:
+	return get_viewport().get_canvas_transform().affine_inverse() * screen
 
-	elif event.button_index == MOUSE_BUTTON_RIGHT:
-		if selected_army and not selected_army.is_routed:
-			var target = mouse_pos
-			var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
-			print("INPUT: RIGHT click at (%d,%d) - moving army '%s' to target" % [int(target.x), int(target.y), selected_army.army_id])
-			print("%s: Moving army '%s' to (%d,%d)" % [marker, selected_army.army_id, int(target.x), int(target.y)])
-			rpc_id(1, "_server_move_army", selected_army.army_id, target)
-		else:
-			print("INPUT: RIGHT click at (%d,%d) - ignored (no army selected or army routed)" % [int(mouse_pos.x), int(mouse_pos.y)])
+func _rect_from_points(a: Vector2, b: Vector2) -> Rect2:
+	var p := Vector2(minf(a.x, b.x), minf(a.y, b.y))
+	var s := (a - b).abs()
+	return Rect2(p, s)
+
+func _clear_selection():
+	for a in selected_armies:
+		if a and is_instance_valid(a):
+			a.deselect()
+	selected_armies.clear()
+
+func _set_selection(armies: Array):
+	_clear_selection()
+	for a in armies:
+		if a and is_instance_valid(a) and not a.is_routed:
+			selected_armies.append(a)
+			a.select()
+
+func _get_selected_non_routed() -> Array:
+	var out := []
+	for a in selected_armies:
+		if a and is_instance_valid(a) and not a.is_routed:
+			out.append(a)
+	return out
+
+func _armies_in_screen_rect(rect: Rect2, my_id: int) -> Array:
+	var out := []
+	var xf := get_viewport().get_canvas_transform()
+	for army in armies:
+		if army.owner_peer_id != my_id or army.is_routed:
+			continue
+		if not army.has_method("get_alive_soldiers"):
+			continue
+		var any_inside := false
+		for s in army.get_alive_soldiers():
+			if s == null or not is_instance_valid(s) or s.is_dead:
+				continue
+			var sp: Vector2 = xf * s.global_position
+			if rect.has_point(sp):
+				any_inside = true
+				break
+		if any_inside:
+			out.append(army)
+	return out
+
+func _clamp_map_v2(v: Vector2) -> Vector2:
+	return Vector2(clampf(v.x, 0, MAP_WIDTH), clampf(v.y, 0, MAP_HEIGHT))
+
+func _group_centroid_armies(arr: Array) -> Vector2:
+	if arr.is_empty():
+		return Vector2.ZERO
+	var s := Vector2.ZERO
+	for a in arr:
+		if a and is_instance_valid(a):
+			s += a.global_position
+	return s / float(arr.size())
+
+func _issue_group_move_centroid(click_world: Vector2):
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var gc := _group_centroid_armies(sel)
+	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
+	for army in sel:
+		var off: Vector2 = army.global_position - gc
+		var target := _clamp_map_v2(click_world + off)
+		print("%s: Group move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
+		rpc_id(1, "_server_move_army", army.army_id, target)
+
+func _update_formation_ghosts_2d(line_start: Vector2, line_end: Vector2):
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	if units.is_empty():
+		return
+	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
+	if _ghost_markers_2d == null:
+		_ghost_markers_2d = Node2D.new()
+		_ghost_markers_2d.name = "FormationGhosts2D"
+		add_child(_ghost_markers_2d)
+	for c in _ghost_markers_2d.get_children():
+		c.queue_free()
+	for p in positions:
+		var r := ColorRect.new()
+		r.size = Vector2(14, 14)
+		r.position = p - Vector2(7, 7)
+		r.color = Color(0.35, 0.85, 0.45, 0.4)
+		_ghost_markers_2d.add_child(r)
+
+func _clear_formation_ghosts_2d():
+	if _ghost_markers_2d:
+		for c in _ghost_markers_2d.get_children():
+			c.queue_free()
+
+func _commit_group_formation_line(line_start: Vector2, line_end: Vector2):
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	if units.is_empty():
+		return
+	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
+	var payload: Array = []
+	for i in range(units.size()):
+		var u = units[i]
+		var p: Vector2 = positions[i]
+		p = _clamp_map_v2(p)
+		payload.append({"n": str(u.name), "x": p.x, "y": p.y})
+	rpc_id(1, "_server_move_group_formation", payload)
+
+func _handle_mouse_extended(event: InputEvent):
+	var my_id := multiplayer.get_unique_id()
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		var screen_pos := mb.position
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed:
+				_marquee_start_screen = screen_pos
+				_marquee_end_screen = screen_pos
+				_marquee_active = true
+				_marquee_moved = false
+				if _marquee_overlay:
+					_marquee_overlay.set_marquee_rect(Rect2(), false)
+			else:
+				if _marquee_active:
+					if _marquee_moved:
+						var r := _rect_from_points(_marquee_start_screen, _marquee_end_screen)
+						var picked := _armies_in_screen_rect(r, my_id)
+						_set_selection(picked)
+					else:
+						var world_pos := _screen_to_world_2d(_marquee_start_screen)
+						var army = _get_army_at(world_pos, my_id)
+						if army:
+							_set_selection([army])
+						else:
+							_clear_selection()
+				_marquee_active = false
+				if _marquee_overlay:
+					_marquee_overlay.set_marquee_rect(Rect2(), false)
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			if mb.pressed:
+				_rmb_press_screen = screen_pos
+				_rmb_press_world = get_global_mouse_position()
+				_rmb_drag_active = true
+				_clear_formation_ghosts_2d()
+			else:
+				if _rmb_drag_active:
+					var world_now := get_global_mouse_position()
+					var drag_len := _rmb_press_screen.distance_to(screen_pos)
+					if drag_len < RMB_DRAG_CLICK_THRESHOLD:
+						_issue_group_move_centroid(world_now)
+					else:
+						_commit_group_formation_line(_rmb_press_world, world_now)
+				_rmb_drag_active = false
+				_clear_formation_ghosts_2d()
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		var screen_pos := mm.position
+		if _marquee_active:
+			_marquee_end_screen = screen_pos
+			if _marquee_start_screen.distance_to(_marquee_end_screen) >= MARQUEE_DRAG_THRESHOLD:
+				_marquee_moved = true
+				if _marquee_overlay:
+					_marquee_overlay.set_marquee_rect(_rect_from_points(_marquee_start_screen, _marquee_end_screen), true)
+		if _rmb_drag_active:
+			var world_now := get_global_mouse_position()
+			_update_formation_ghosts_2d(_rmb_press_world, world_now)
 
 func _handle_key(event: InputEventKey):
-	if selected_army == null or selected_army.is_routed:
-		print("INPUT: KEY pressed but no army selected or army routed")
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
 		return
-	var rotate_amount = deg_to_rad(15.0)
+	var rotate_amount := deg_to_rad(15.0)
 	if event.keycode == KEY_LEFT or event.keycode == KEY_Q:
-		print("INPUT: KEY_LEFT/Q - rotating army '%s' by -15 deg" % selected_army.army_id)
-		rpc_id(1, "_server_rotate_army", selected_army.army_id, -rotate_amount)
+		for army in sel:
+			rpc_id(1, "_server_rotate_army", army.army_id, -rotate_amount)
 	elif event.keycode == KEY_RIGHT or event.keycode == KEY_E:
-		print("INPUT: KEY_RIGHT/E - rotating army '%s' by +15 deg" % selected_army.army_id)
-		rpc_id(1, "_server_rotate_army", selected_army.army_id, rotate_amount)
+		for army in sel:
+			rpc_id(1, "_server_rotate_army", army.army_id, rotate_amount)
 
 @rpc("any_peer", "reliable")
 func _server_move_army(aid: String, target: Vector2):
@@ -426,6 +599,44 @@ func _client_move_army(aid: String, target: Vector2):
 	var army = _find_army(aid)
 	if army:
 		army.move_army(target)
+
+@rpc("any_peer", "reliable")
+func _server_move_group_formation(unit_targets: Array):
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var affected := {}
+	var assigned := 0
+	for entry in unit_targets:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		var uname := str(entry.get("n", ""))
+		var tx := float(entry.get("x", 0.0))
+		var ty := float(entry.get("y", 0.0))
+		var u = get_node_or_null(NodePath(uname))
+		if u == null or not u is CharacterBody2D:
+			continue
+		if u.get("is_dead"):
+			continue
+		if u.owner_peer_id != sender:
+			continue
+		u.set_move_target(Vector2(tx, ty))
+		affected[u.army_id] = true
+		assigned += 1
+	if assigned > 0:
+		print("TEST_GROUP_FORMATION: server assigned=%d sender=%d" % [assigned, sender])
+	for aid_str in affected.keys():
+		army_follow_target.erase(aid_str)
+		var army = _find_army(aid_str)
+		if army == null:
+			continue
+		var alive = army.get_alive_soldiers()
+		if alive.is_empty():
+			continue
+		var c := Vector2.ZERO
+		for s in alive:
+			c += s.move_target
+		army.global_position = c / float(alive.size())
 
 @rpc("any_peer", "reliable")
 func request_draft_army(use_horse: bool, use_spear: bool):
@@ -492,7 +703,7 @@ func _serialize_one_army(army) -> Dictionary:
 			"y": s.global_position.y
 		})
 	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
-	var speed = s0.speed if s0 else 200.0 / 3.0
+	var speed = s0.speed if s0 else 200.0 / 6.0
 	var attack = s0.attack if s0 else 10.0
 	var attack_range = s0.attack_range if s0 else 50.0
 	return {
@@ -524,7 +735,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.name = "Army_%s" % ad["army_id"]
 	add_child(army)
 	armies.append(army)
-	var speed = ad.get("speed", 200.0 / 3.0)
+	var speed = ad.get("speed", 200.0 / 6.0)
 	var attack = ad.get("attack", 10.0)
 	var attack_range = ad.get("attack_range", 50.0)
 	for sd in ad["soldiers"]:
@@ -774,8 +985,8 @@ func _client_army_routed(army_id: String):
 	if army == null:
 		return
 	army.is_routed = true
-	if selected_army == army:
-		selected_army = null
+	if army in selected_armies:
+		selected_armies.erase(army)
 	for s in army.soldiers:
 		if s and is_instance_valid(s) and not s.is_dead:
 			s.is_dead = true

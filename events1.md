@@ -16,6 +16,9 @@ Each step has a log marker (`TEST_XXX`) that must appear in the appropriate log 
 | 8b | Client B selects its first army | `TEST_008_SELECT_B` | client_B.log | 0.5s |
 | 9a | Client A moves army to center | `TEST_009_MOVE` | client_A.log + server.log | 0s |
 | 9b | Client B moves army to center | `TEST_009_MOVE_B` | client_B.log + server.log | 0s |
+| 9c | Group line formation RPC (`_server_move_group_formation`) | `TEST_GROUP_FORMATION: client units=N` | client_A.log, client_B.log | 0.5s |
+| 9c2 | Server assigns formation | `TEST_GROUP_FORMATION: server assigned=M` | server.log | 0s |
+| 9d | *(Manual)* Marquee select, RMB group move / TW drag — use `./run_test.sh --no_test` | — | — | — |
 | 10 | Soldiers meet; combat (proximity) | `TEST_010_COMBAT` | server.log | wait |
 | 10a | Capture points captured / taken over | `TEST_CAPTURE` | server.log | continues |
 | 10a2 | Resources produced (horses/spears) every 2s | `TEST_RESOURCE` | server.log | continues |

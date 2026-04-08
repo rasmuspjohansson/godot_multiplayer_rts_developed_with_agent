@@ -1,8 +1,13 @@
+
+ad horse soldier for red and blue. (test if I can do this via gemmini api )
+
+make a strategy for if soldiers should stop , slow downn or something. during combat. (dependent on waht soldier?)
+
 make ground uneven terrain.
 
 ad obsticles that cant be walked though. 
 
-Replace the qubes used for soldiers and capture points with images.(that later can be updated to sprites): images are in folder: X
+Replace capture points with images.(that later can be updated to sprites)
 
 update images to sprites 
 

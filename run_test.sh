@@ -82,8 +82,16 @@ if [ "$AUTO_TEST" = true ]; then
   echo "Clients A and B started (auto-test, events=$EVENTS). Logs: logs/client_A.log, logs/client_B.log"
 else
   echo "Starting human-play clients Player1 and Player2..."
-  nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- --client --name=Player1 > /dev/null 2>&1 &
+  export DISPLAY="${DISPLAY:-:0}"
+  CLIENT_ARGS="--client --name=Player1"
+  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
+  nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_Player1.log 2>&1 &
+  echo $! > logs/client_Player1.pid
   sleep 2
-  nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- --client --name=Player2 > /dev/null 2>&1 &
+  CLIENT_ARGS="--client --name=Player2"
+  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
+  nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_Player2.log 2>&1 &
+  echo $! > logs/client_Player2.pid
   echo "Two game windows should open. Connect, set name/color, press Ready in both."
+  echo "Logs: logs/client_Player1.log, logs/client_Player2.log"
 fi

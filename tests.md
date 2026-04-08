@@ -26,6 +26,7 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 | `TEST_008_SELECT_B` | Client B selected army | client_B.log |
 | `TEST_009_MOVE` | Client A moved army to target | client_A.log, server.log |
 | `TEST_009_MOVE_B` | Client B moved army to target | client_B.log, server.log |
+| `TEST_GROUP_FORMATION` | Group line formation RPC exercised (client + server lines) | client_A.log, client_B.log, server.log |
 | `TEST_010_COMBAT` | Combat initiated (proximity detected) | server.log |
 | `TEST_CAPTURE` | Capture point captured or taken over by a player | server.log |
 | `TEST_RESOURCE` | Stables/Blacksmith produced horses/spears | server.log |

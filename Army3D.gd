@@ -10,6 +10,13 @@ var soldiers: Array = []
 var is_routed := false
 var is_selected := false
 
+func get_alive_soldiers() -> Array:
+	var alive := []
+	for s in soldiers:
+		if s and is_instance_valid(s) and not s.get("is_dead"):
+			alive.append(s)
+	return alive
+
 func move_army(target: Vector2):
 	if is_routed:
 		return

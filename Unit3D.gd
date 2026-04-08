@@ -4,7 +4,7 @@ extends CharacterBody3D
 var owner_peer_id: int = 0
 var owner_name: String = ""
 var army_id: String = ""
-var speed: float = 200.0 / 3.0
+var speed: float = 200.0 / 6.0
 var sync_target_position: Vector3 = Vector3.ZERO
 var sync_target_hp: float = 100.0
 var hp: float = 100.0
