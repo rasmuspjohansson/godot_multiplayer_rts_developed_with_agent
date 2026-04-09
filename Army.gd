@@ -15,6 +15,11 @@ var is_routed := false
 var is_selected := false
 
 const ROUT_THRESHOLD := 0.3
+const MAP_WIDTH := 1280.0
+const MAP_HEIGHT := 720.0
+
+func _clamp_map_v2(v: Vector2) -> Vector2:
+	return Vector2(clampf(v.x, 0.0, MAP_WIDTH), clampf(v.y, 0.0, MAP_HEIGHT))
 
 func get_alive_soldiers() -> Array:
 	var alive := []
@@ -57,8 +62,11 @@ func assign_formation_targets():
 func move_army(target: Vector2):
 	if is_routed:
 		return
+	var delta := target - global_position
 	global_position = target
-	assign_formation_targets()
+	# Parallel translation — preserves line/custom layouts from formation drag (not default grid).
+	for s in get_alive_soldiers():
+		s.set_move_target(_clamp_map_v2(s.global_position + delta))
 
 func rotate_army(delta_angle: float):
 	if is_routed:

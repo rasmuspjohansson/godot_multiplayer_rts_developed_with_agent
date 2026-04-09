@@ -6,6 +6,8 @@ var owner_name: String = ""
 var army_id: String = ""
 var speed: float = 200.0 / 6.0
 var sync_target_position: Vector3 = Vector3.ZERO
+## Do not use Vector3.ZERO as "unset" — map coords can be (0, h, 0). Set false until spawn/sync assigns a goal.
+var has_move_goal: bool = false
 var sync_target_hp: float = 100.0
 var hp: float = 100.0
 var is_dead := false
@@ -13,7 +15,7 @@ var is_dead := false
 const HALF_HEIGHT := 11.0  # match collision box half-height for terrain sticking
 const EQUIPMENT_FOLDER := "spearman"
 const TEXTURE_FILE := "spearman.png"
-## QuadMesh vertical billboard: only two world-facing directions (left/right on X), no diagonal rotation.
+## QuadMesh + BILLBOARD_FIXED_Y so the sprite faces the camera (top-down view is not edge-on/invisible).
 const FACING_ROTATION_NEG_X := 0.0
 const FACING_ROTATION_POS_X := PI
 
@@ -40,6 +42,7 @@ func _build_visual_mesh():
 	if tex != null:
 		_texture_loaded = true
 		_material.albedo_texture = tex
+		_material.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
 		var tw := float(tex.get_width())
 		var th := float(tex.get_height())
 		var aspect := tw / maxf(th, 0.001)
@@ -50,6 +53,7 @@ func _build_visual_mesh():
 		_material.albedo_color = Color.WHITE
 	else:
 		print("TEST_3D_TEXTURE_LOAD_FAILED: %s path=%s" % [name, _get_texture_path()])
+		_material.billboard_mode = BaseMaterial3D.BILLBOARD_DISABLED
 		var box := BoxMesh.new()
 		box.size = Vector3(14, 22, 14)
 		_mesh.mesh = box
@@ -99,7 +103,7 @@ func has_valid_spearman_texture() -> bool:
 func _physics_process(delta: float):
 	if is_dead:
 		return
-	if sync_target_position != Vector3.ZERO:
+	if has_move_goal:
 		var to_target := Vector3(sync_target_position.x - global_position.x, 0.0, sync_target_position.z - global_position.z)
 		var dist := sqrt(to_target.x * to_target.x + to_target.z * to_target.z)
 		if dist > 1.0:
@@ -121,18 +125,24 @@ func _update_facing():
 	if _mesh == null:
 		return
 	var dir_xz := Vector2(velocity.x, velocity.z)
-	if dir_xz.length() < 0.01 and sync_target_position != Vector3.ZERO:
+	if dir_xz.length() < 0.01 and has_move_goal:
 		dir_xz = Vector2(
 			sync_target_position.x - global_position.x,
 			sync_target_position.z - global_position.z
 		)
+	# BILLBOARD_FIXED_Y orients the quad in the shader; mesh Y rotation fights it and can make units edge-on/invisible.
+	if _texture_loaded and _material != null and _material.billboard_mode == BaseMaterial3D.BILLBOARD_FIXED_Y:
+		_mesh.rotation = Vector3.ZERO
+		if dir_xz.length() > 0.01:
+			_mesh.scale.x = -1.0 if dir_xz.x < -0.01 else 1.0
+		return
 	if dir_xz.length() > 0.01:
-		# Horizontal component only: two angles. Pure-Z movement keeps previous facing.
 		if dir_xz.x > 0.01:
 			_last_facing_y = FACING_ROTATION_POS_X
 		elif dir_xz.x < -0.01:
 			_last_facing_y = FACING_ROTATION_NEG_X
 	_mesh.rotation.y = _last_facing_y
+	_mesh.scale.x = 1.0
 
 func _update_visual_tint():
 	if _material == null:

@@ -96,8 +96,9 @@ You need two clients for a match.
 ### 4. Stop
 
 ```bash
-pkill -f godot
-# or: pkill -f Godot_v4
+# Match engine only (do not use bare `pkill -f godot` from a cwd under .../godot/).
+pkill -f '[g]odot.*--path' || true
+pkill -f 'Godot.*--path' || true
 ```
 
 ## Logging

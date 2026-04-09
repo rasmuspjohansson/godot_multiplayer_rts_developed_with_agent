@@ -24,10 +24,11 @@ godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test --eve
 ```
 
 ## [Skill: Clean & Kill]
-Stops all Godot instances and clears old logs.
+Stops Godot engine instances (matches `--path` only; safe when the repo path contains `godot`) and clears old logs.
 **Command:**
 ```bash
-pkill -f godot || true
+pkill -f '[g]odot.*--path' || true
+pkill -f 'Godot.*--path' || true
 rm -rf logs/*.log logs/*.pid
 ```
 
@@ -42,7 +43,7 @@ grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 Composite: clean, start server, start both clients with `--events=1` or `--events=2`.
 **Command (events 1):**
 ```bash
-pkill -f godot || true && rm -rf logs/*.log logs/*.pid
+pkill -f '[g]odot.*--path' || true; pkill -f 'Godot.*--path' || true; rm -rf logs/*.log logs/*.pid
 mkdir -p logs
 godot --headless --path . -- --server > logs/server.log 2>&1 & echo $! > logs/server.pid
 sleep 3

@@ -45,6 +45,8 @@ var _rmb_press_screen: Vector2 = Vector2.ZERO
 var _rmb_press_world: Vector2 = Vector2.ZERO
 var _rmb_drag_active: bool = false
 var _ghost_markers_2d: Node2D
+var _move_goal_markers_2d: Node2D
+var _goal_marker_rect_by_unit: Dictionary = {}
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
 var army_time_at_cp := {}
@@ -63,6 +65,9 @@ func _ready():
 	_setup_draft_menu()
 	if not multiplayer.is_server():
 		_setup_selection_overlay()
+
+func _process(_delta: float):
+	_update_move_goal_markers_2d()
 
 func _setup_selection_overlay():
 	var layer := CanvasLayer.new()
@@ -445,35 +450,70 @@ func _armies_in_screen_rect(rect: Rect2, my_id: int) -> Array:
 func _clamp_map_v2(v: Vector2) -> Vector2:
 	return Vector2(clampf(v.x, 0, MAP_WIDTH), clampf(v.y, 0, MAP_HEIGHT))
 
-func _group_centroid_armies(arr: Array) -> Vector2:
-	if arr.is_empty():
-		return Vector2.ZERO
-	var s := Vector2.ZERO
-	for a in arr:
-		if a and is_instance_valid(a):
-			s += a.global_position
-	return s / float(arr.size())
+func _first_alive_soldier_2d(army) -> CharacterBody2D:
+	if army == null or not is_instance_valid(army):
+		return null
+	for s in army.soldiers:
+		if s and is_instance_valid(s) and not s.is_dead:
+			return s
+	return null
 
-func _issue_group_move_centroid(click_world: Vector2):
+## Single RMB click: parallel move so first alive soldier of first selected army lands on click; formation preserved.
+func _issue_group_move_first_soldier_anchor_2d(click_world: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var gc := _group_centroid_armies(sel)
+	var s0 = _first_alive_soldier_2d(sel[0])
+	if s0 == null:
+		return
+	var p0: Vector2 = s0.global_position
+	var d: Vector2 = click_world - p0
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
 	for army in sel:
-		var off: Vector2 = army.global_position - gc
-		var target := _clamp_map_v2(click_world + off)
-		print("%s: Group move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
+		var target := _clamp_map_v2(army.global_position + d)
+		print("%s: Anchor move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
 		rpc_id(1, "_server_move_army", army.army_id, target)
+
+func _update_move_goal_markers_2d():
+	if _move_goal_markers_2d == null:
+		_move_goal_markers_2d = Node2D.new()
+		_move_goal_markers_2d.name = "MoveGoalMarkers2D"
+		add_child(_move_goal_markers_2d)
+	var seen: Dictionary = {}
+	for unit in all_units:
+		if not is_instance_valid(unit) or not unit.is_inside_tree():
+			continue
+		if unit.is_dead:
+			continue
+		var st: Vector2 = unit.sync_target_position
+		if st == Vector2.ZERO:
+			continue
+		var uname: String = str(unit.name)
+		seen[uname] = true
+		if not _goal_marker_rect_by_unit.has(uname):
+			var r := ColorRect.new()
+			r.size = Vector2(12, 12)
+			r.color = Color(1.0, 0.52, 0.08, 0.65)
+			_move_goal_markers_2d.add_child(r)
+			_goal_marker_rect_by_unit[uname] = r
+		var rect: ColorRect = _goal_marker_rect_by_unit[uname]
+		rect.position = st - Vector2(6, 6)
+	for k in _goal_marker_rect_by_unit.keys().duplicate():
+		if not seen.has(k):
+			var cr: ColorRect = _goal_marker_rect_by_unit[k]
+			if is_instance_valid(cr):
+				cr.queue_free()
+			_goal_marker_rect_by_unit.erase(k)
 
 func _update_formation_ghosts_2d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
+	var units: Array = pack.get("units", [])
+	var positions: Array = pack.get("positions", [])
 	if units.is_empty():
 		return
-	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
 	if _ghost_markers_2d == null:
 		_ghost_markers_2d = Node2D.new()
 		_ghost_markers_2d.name = "FormationGhosts2D"
@@ -496,10 +536,11 @@ func _commit_group_formation_line(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
+	var units: Array = pack.get("units", [])
+	var positions: Array = pack.get("positions", [])
 	if units.is_empty():
 		return
-	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
 	var payload: Array = []
 	for i in range(units.size()):
 		var u = units[i]
@@ -548,7 +589,7 @@ func _handle_mouse_extended(event: InputEvent):
 					var world_now := get_global_mouse_position()
 					var drag_len := _rmb_press_screen.distance_to(screen_pos)
 					if drag_len < RMB_DRAG_CLICK_THRESHOLD:
-						_issue_group_move_centroid(world_now)
+						_issue_group_move_first_soldier_anchor_2d(world_now)
 					else:
 						_commit_group_formation_line(_rmb_press_world, world_now)
 				_rmb_drag_active = false

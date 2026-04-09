@@ -26,10 +26,13 @@ for arg in "$@"; do
   esac
 done
 
-# Clean up any existing instances: kill all Godot processes and free port 8910
+# Clean up any existing instances: kill Godot engines and free port 8910.
+# Do NOT use `pkill -f godot` — it matches any argv containing "godot", including
+# shells running scripts under a directory named .../godot/... (kills this script).
+# Our launches always pass --path to the engine, so match that.
 echo "Stopping any existing Godot processes..."
-pkill -9 -f godot 2>/dev/null || true
-pkill -9 -f Godot 2>/dev/null || true
+pkill -9 -f '[g]odot.*--path' 2>/dev/null || true
+pkill -9 -f 'Godot.*--path' 2>/dev/null || true
 fuser -k 8910/tcp 2>/dev/null || true
 sleep 2
 # Wait until port 8910 is actually free (up to 10s)

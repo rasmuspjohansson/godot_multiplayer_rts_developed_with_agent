@@ -8,7 +8,13 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 
 **Headless asset check:** `godot --headless --path . -s test_texture_paths.gd` must print `TEST_TEXTURE_PATHS_OK: red_blue_png_readable` (verifies `res://images/red|blue/spearman/spearman.png` load the same way as `Unit3D`).
 
-**Bundled scripts:** `./run_tests.sh` runs the headless check. After `./run_test.sh` finishes the auto-test, `./verify_test_logs.sh` asserts both client logs contain `TEST_3D_TEXTURES_OK` and none of the invalid markers above.
+**Headless 3D spawn:** `godot --headless --path . -s test_world3d_spawn.gd` must print `TEST_WORLD3D_SPAWN_OK: units=2` (instantiates `World3D` and runs `_client_spawn_armies_impl` with a minimal army).
+
+**Headless 3D goal arrival:** `godot --headless --path . -s test_world3d_goal_arrival.gd` must print `TEST_WORLD3D_GOALS_REACHED` (spawns two soldiers, issues `Army3D.move_army` with first-soldier anchor math, advances frames until every unit is within 3px of `sync_target_position` on XZ).
+
+**Move orders (2D / 3D):** A short right-click (no drag) issues an **anchor move**: the first alive soldier of the first selected army is translated so its goal lies on the click; all selected units shift by the same delta (formation preserved). Orange **MoveGoalMarkers** show each unit’s current `sync_target` until a new order updates it (separate from green RMB-drag formation ghosts).
+
+**Bundled scripts:** `./run_tests.sh` runs the headless checks above. After `./run_test.sh` finishes the auto-test, `./verify_test_logs.sh` asserts both client logs contain `TEST_3D_TEXTURES_OK`, `TEST_3D_CLIENT_UNITS_SPAWNED: units=40`, and none of the invalid markers above.
 
 ## Events 1
 
@@ -21,6 +27,9 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 | `TEST_005` | Client B sent ready | server.log, client_B.log |
 | `TEST_006` | Match started, World scene loaded | server.log |
 | `TEST_007` | 4 armies spawned (2 per player, 10 soldiers each) | server.log |
+| `TEST_3D_CLIENT_UNITS_SPAWNED` | 3D client created all units (`units=40` for 4×10) | client_A.log, client_B.log (with `--3d`) |
+| `TEST_WORLD3D_SPAWN_OK` | Headless `test_world3d_spawn.gd` passed | terminal (CI) |
+| `TEST_WORLD3D_GOALS_REACHED` | Headless `test_world3d_goal_arrival.gd` passed | terminal (CI) |
 | `TEST_CAPTURE_SPAWN` | 2 capture points spawned (Stables, Blacksmith) | server.log, client_A.log, client_B.log |
 | `TEST_008_SELECT` | Client A selected army | client_A.log |
 | `TEST_008_SELECT_B` | Client B selected army | client_B.log |

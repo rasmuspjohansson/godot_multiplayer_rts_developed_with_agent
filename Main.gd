@@ -1,4 +1,4 @@
-extends Node2D
+extends Node
 
 const PORT = 8910
 const MAX_CLIENTS = 4
@@ -186,6 +186,14 @@ func _load_lobby():
 func load_world():
 	_clear_scenes()
 	var scene_path = "res://World3D.tscn" if not multiplayer.is_server() and GameState.use_3d else "res://World.tscn"
+	#region agent log
+	GameState.agent_debug_log("H2", "Main.gd:load_world", "scene_path_selection", {
+		"scene_path": scene_path,
+		"use_3d": GameState.use_3d,
+		"is_server": multiplayer.is_server(),
+		"unique_id": multiplayer.get_unique_id()
+	})
+	#endregion
 	var world = load(scene_path).instantiate()
 	$Level.add_child(world)
 

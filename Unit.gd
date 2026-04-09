@@ -31,8 +31,8 @@ var _logged_position_invalid := false
 @onready var sprite: ColorRect = $ColorRect
 
 func _ready():
-	nav_agent.path_desired_distance = 4.0
-	nav_agent.target_desired_distance = 4.0
+	nav_agent.path_desired_distance = 1.0
+	nav_agent.target_desired_distance = 1.0
 	_update_visuals()
 
 func set_move_target(target: Vector2):
@@ -79,9 +79,26 @@ func _physics_process(delta):
 
 func _server_process(delta):
 	if is_moving and nav_agent:
-		if nav_agent.is_navigation_finished():
-			is_moving = false
+		var dist := global_position.distance_to(move_target)
+		if dist <= 0.4:
+			global_position = move_target
 			velocity = Vector2.ZERO
+			is_moving = false
+			nav_agent.target_position = move_target
+		elif dist <= 24.0:
+			# Short hops / final approach: seek straight to goal so tight formations aren't blocked by nav + collisions.
+			var to_t := move_target - global_position
+			velocity = to_t.normalized() * speed
+			move_and_slide()
+		elif nav_agent.is_navigation_finished():
+			var to_end := move_target - global_position
+			if to_end.length() > 0.6:
+				velocity = to_end.normalized() * speed
+				move_and_slide()
+			else:
+				global_position = move_target
+				velocity = Vector2.ZERO
+				is_moving = false
 		else:
 			var next_pos = nav_agent.get_next_path_position()
 			var dir = (next_pos - global_position).normalized()

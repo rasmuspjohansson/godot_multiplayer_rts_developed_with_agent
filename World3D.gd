@@ -45,6 +45,8 @@ var _rmb_press_screen: Vector2 = Vector2.ZERO
 var _rmb_press_ground: Vector2 = Vector2.ZERO
 var _rmb_drag_active: bool = false
 var _ghost_root_3d: Node3D
+var _move_goal_markers_3d: Node3D
+var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
 
@@ -59,6 +61,22 @@ func _ready():
 	_setup_draft_menu()
 	_add_play_boundary_line()
 	_setup_selection_overlay()
+	call_deferred("_agent_debug_log_world3d_ready")
+
+func _agent_debug_log_world3d_ready() -> void:
+	#region agent log
+	var vc: Camera3D = get_viewport().get_camera_3d()
+	GameState.agent_debug_log("H5", "World3D.gd:_agent_debug_log_world3d_ready", "viewport_camera", {
+		"viewport_cam_null": vc == null,
+		"viewport_cam_path": str(vc.get_path()) if vc else "",
+		"viewport_cam_is_current": vc.is_current() if vc else false,
+		"_camera_matches_viewport": (vc == _camera) if vc and _camera else false
+	})
+	GameState.agent_debug_log("H4", "World3D.gd:_agent_debug_log_world3d_ready", "world_root_visibility", {
+		"world_visible": visible,
+		"world_in_tree": is_inside_tree()
+	})
+	#endregion
 
 func _setup_selection_overlay():
 	var layer := CanvasLayer.new()
@@ -81,7 +99,16 @@ func _setup_camera():
 	_camera.reparent(_camera_pivot)
 	# Closer views: reduce clipping through nearby geometry
 	_camera.near = 0.35
+	# Default is false; without an active camera the viewport draws no 3D (ground, units, CPs all missing).
+	_camera.current = true
 	_update_camera_position()
+	#region agent log
+	GameState.agent_debug_log("H1", "World3D.gd:_setup_camera", "camera_after_setup", {
+		"camera_current": _camera.current,
+		"camera_is_current": _camera.is_current(),
+		"cam_global_origin": [ _camera.global_position.x, _camera.global_position.y, _camera.global_position.z ]
+	})
+	#endregion
 
 ## 0 = zoomed out (overview), 1 = zoomed in (soldier-like framing).
 func _camera_zoom_t() -> float:
@@ -148,6 +175,7 @@ func _input(event: InputEvent):
 		_handle_key(event)
 
 func _process(_delta: float):
+	_update_move_goal_markers_3d()
 	if _camera_pivot == null:
 		return
 	var pan := Vector3.ZERO
@@ -164,6 +192,51 @@ func _process(_delta: float):
 		_look_at.x = clampf(_look_at.x, 0, MAP_WIDTH)
 		_look_at.z = clampf(_look_at.z, 0, MAP_HEIGHT)
 		_update_camera_position()
+
+func _update_move_goal_markers_3d():
+	if _move_goal_markers_3d == null:
+		_move_goal_markers_3d = Node3D.new()
+		_move_goal_markers_3d.name = "MoveGoalMarkers3D"
+		add_child(_move_goal_markers_3d)
+	var seen: Dictionary = {}
+	for unit in all_units:
+		if not is_instance_valid(unit) or not unit.is_inside_tree():
+			continue
+		if unit.get("is_dead"):
+			continue
+		if not unit.get("has_move_goal"):
+			continue
+		if not unit.has_move_goal:
+			continue
+		var uname: String = str(unit.name)
+		seen[uname] = true
+		var st: Vector3 = unit.sync_target_position
+		var gx := st.x
+		var gz := st.z
+		var gy := get_ground_height_at(gx, gz) + 0.2
+		if not _goal_marker_mesh_by_unit.has(uname):
+			var mi := MeshInstance3D.new()
+			var cm := CylinderMesh.new()
+			cm.top_radius = 5.0
+			cm.bottom_radius = 5.0
+			cm.height = 0.25
+			mi.mesh = cm
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = Color(1.0, 0.52, 0.08, 0.7)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mi.material_override = mat
+			_move_goal_markers_3d.add_child(mi)
+			_goal_marker_mesh_by_unit[uname] = mi
+		var mesh_inst: MeshInstance3D = _goal_marker_mesh_by_unit[uname]
+		mesh_inst.position = Vector3(gx, gy, gz)
+	for k in _goal_marker_mesh_by_unit.keys().duplicate():
+		if not seen.has(k):
+			var node: MeshInstance3D = _goal_marker_mesh_by_unit[k]
+			if is_instance_valid(node):
+				node.queue_free()
+			_goal_marker_mesh_by_unit.erase(k)
 
 func _setup_topbar():
 	var tb_script = preload("res://TopBar.gd")
@@ -284,36 +357,40 @@ func _armies_in_screen_rect_3d(rect: Rect2, my_id: int) -> Array:
 func _clamp_map_v2(v: Vector2) -> Vector2:
 	return Vector2(clampf(v.x, 0, MAP_WIDTH), clampf(v.y, 0, MAP_HEIGHT))
 
-func _group_centroid_armies(arr: Array) -> Vector2:
-	if arr.is_empty():
-		return Vector2.ZERO
-	var s := Vector2.ZERO
-	for a in arr:
-		if a and is_instance_valid(a):
-			s += Vector2(a.global_position.x, a.global_position.z)
-	return s / float(arr.size())
+func _first_alive_soldier_3d(army) -> Node3D:
+	if army == null or not is_instance_valid(army):
+		return null
+	for s in army.soldiers:
+		if s and is_instance_valid(s) and not s.get("is_dead"):
+			return s
+	return null
 
-func _issue_group_move_centroid_3d(click_xz: Vector2):
+## Single RMB click: parallel move so first alive soldier of first selected army lands on click; formation preserved.
+func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var gc := _group_centroid_armies(sel)
+	var s0 = _first_alive_soldier_3d(sel[0])
+	if s0 == null:
+		return
+	var p0 := Vector2(s0.global_position.x, s0.global_position.z)
+	var d := click_xz - p0
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
 	for army in sel:
 		var a_xz := Vector2(army.global_position.x, army.global_position.z)
-		var off := a_xz - gc
-		var target := _clamp_map_v2(click_xz + off)
-		print("%s: Group move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
+		var target := _clamp_map_v2(a_xz + d)
+		print("%s: Anchor move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
 		rpc_id(1, "_server_move_army", army.army_id, target)
 
 func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
+	var units: Array = pack.get("units", [])
+	var positions: Array = pack.get("positions", [])
 	if units.is_empty():
 		return
-	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
 	if _ghost_root_3d == null:
 		_ghost_root_3d = Node3D.new()
 		_ghost_root_3d.name = "FormationGhosts3D"
@@ -344,10 +421,11 @@ func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var units: Array = _GroupFormation.collect_soldiers_sorted(sel)
+	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
+	var units: Array = pack.get("units", [])
+	var positions: Array = pack.get("positions", [])
 	if units.is_empty():
 		return
-	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
 	var payload: Array = []
 	for i in range(units.size()):
 		var u = units[i]
@@ -399,7 +477,7 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 					var world_xz := Vector2(gh2.x, gh2.z) if gh2 != Vector3.ZERO else _rmb_press_ground
 					var drag_len := _rmb_press_screen.distance_to(screen_pos)
 					if drag_len < RMB_DRAG_CLICK_THRESHOLD:
-						_issue_group_move_centroid_3d(world_xz)
+						_issue_group_move_first_soldier_anchor_3d(world_xz)
 					else:
 						_commit_group_formation_line_3d(_rmb_press_ground, world_xz)
 				_rmb_drag_active = false
@@ -538,12 +616,26 @@ func _client_spawn_armies_impl(data: Array):
 			unit.army_id = ad["army_id"]
 			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 			var pos = Vector3(sd["x"], uy, sd["y"])
-			add_child(unit)
 			unit.sync_target_position = pos
 			unit.position = pos
+			unit.has_move_goal = true
+			add_child(unit)
 			army.soldiers.append(unit)
 			all_units.append(unit)
 	print("TEST_007: Client received %d armies" % armies.size())
+	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [all_units.size(), armies.size()])
+	#region agent log
+	var u0pos: Array = []
+	if all_units.size() > 0 and is_instance_valid(all_units[0]):
+		var u = all_units[0]
+		u0pos = [ u.global_position.x, u.global_position.y, u.global_position.z ]
+	GameState.agent_debug_log("H3", "World3D.gd:_client_spawn_armies_impl", "after_army_spawn", {
+		"data_armies": data.size(),
+		"all_units": all_units.size(),
+		"armies": armies.size(),
+		"first_unit_pos": u0pos
+	})
+	#endregion
 	call_deferred("_validate_units_height")
 	call_deferred("_validate_unit_textures")
 
@@ -571,6 +663,12 @@ func _client_spawn_capture_points(data: Array):
 		add_child(pillar)
 		capture_points.append({"id": d["id"], "node": pillar, "material": mat})
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
+	#region agent log
+	GameState.agent_debug_log("H3", "World3D.gd:_client_spawn_capture_points", "after_cp_spawn", {
+		"rpc_data_size": data.size(),
+		"capture_points_nodes": capture_points.size()
+	})
+	#endregion
 
 @rpc("authority", "unreliable")
 func _client_update_capture(cp_data: Array, res_data: Dictionary):
@@ -655,9 +753,10 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.army_id = ad["army_id"]
 		var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 		var pos = Vector3(sd["x"], uy, sd["y"])
-		add_child(unit)
 		unit.sync_target_position = pos
 		unit.position = pos
+		unit.has_move_goal = true
+		add_child(unit)
 		army.soldiers.append(unit)
 		all_units.append(unit)
 	if ad.has("stop_x") and ad.has("stop_y"):
@@ -707,6 +806,7 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 			if err > CORRECTION_THRESHOLD:
 				node.global_position = here
 			node.set("sync_target_position", there)
+			node.set("has_move_goal", true)
 			if "sync_target_hp" in node:
 				node.set("sync_target_hp", pd["hp"])
 				node.set("hp", pd["hp"])

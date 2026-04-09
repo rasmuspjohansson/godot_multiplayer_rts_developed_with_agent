@@ -153,13 +153,14 @@ func _test_group_formation():
 	if my_armies.size() < 2:
 		state = State.WAIT_FOR_COMBAT
 		return
-	var units: Array = _GroupFormation.collect_soldiers_sorted([my_armies[0], my_armies[1]])
+	var line_start := Vector2(400, 200)
+	var line_end := Vector2(520, 300)
+	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, [my_armies[0], my_armies[1]])
+	var units: Array = pack.get("units", [])
+	var positions: Array = pack.get("positions", [])
 	if units.is_empty():
 		state = State.WAIT_FOR_COMBAT
 		return
-	var line_start := Vector2(400, 200)
-	var line_end := Vector2(520, 300)
-	var positions: Array = _GroupFormation.compute_line_formation(line_start, line_end, units.size())
 	var payload: Array = []
 	for i in range(units.size()):
 		var p: Vector2 = positions[i]
