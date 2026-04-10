@@ -12,7 +12,7 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 
 **Headless 3D goal arrival:** `godot --headless --path . -s test_world3d_goal_arrival.gd` must print `TEST_WORLD3D_GOALS_REACHED` (spawns two soldiers, issues `Army3D.move_army` with first-soldier anchor math, advances frames until every unit is within 3px of `sync_target_position` on XZ).
 
-**Move orders (2D / 3D):** A short right-click (no drag) issues an **anchor move**: the first alive soldier of the first selected army is translated so its goal lies on the click; all selected units shift by the same delta (formation preserved). Orange **MoveGoalMarkers** show each unit’s current `sync_target` until a new order updates it (separate from green RMB-drag formation ghosts).
+**Move orders (3D):** A short right-click (no drag) issues an **anchor goal move**: the first alive soldier of the first selected army has its **current goal** (not physical position) moved to the click (clamped to the map); every other selected soldier’s goal shifts by the same XZ delta. Orange **MoveGoalMarkers** show each unit’s current `sync_target` until a new order updates it (separate from green RMB-drag formation ghosts).
 
 **Bundled scripts:** `./run_tests.sh` runs the headless checks above. After `./run_test.sh` finishes the auto-test, `./verify_test_logs.sh` asserts both client logs contain `TEST_3D_TEXTURES_OK`, `TEST_3D_CLIENT_UNITS_SPAWNED: units=40`, and none of the invalid markers above.
 

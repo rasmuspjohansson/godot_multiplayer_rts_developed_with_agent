@@ -61,6 +61,24 @@ func set_move_target(xz: Vector2):
 		sync_target_position = Vector3(xz.x, gy + HALF_HEIGHT, xz.y)
 		has_move_goal = true
 
+## Map XZ goal for anchor moves: server uses move_target while moving, else current position.
+## Client uses sync_target while has_move_goal, else current position.
+func get_goal_xz() -> Vector2:
+	if multiplayer.is_server():
+		if is_moving:
+			return move_target
+		return Vector2(global_position.x, global_position.z)
+	if has_move_goal:
+		return Vector2(sync_target_position.x, sync_target_position.z)
+	return Vector2(global_position.x, global_position.z)
+
+## Server: after spawn, goal equals position so anchor delta uses a defined baseline.
+func initialize_goal_at_current():
+	if not multiplayer.is_server():
+		return
+	move_target = Vector2(global_position.x, global_position.z)
+	is_moving = false
+
 func _ground_y_at(x: float, z: float) -> float:
 	var w = get_parent()
 	if w != null and w.has_method("get_ground_height_at"):

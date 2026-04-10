@@ -547,6 +547,8 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 		unit.position = Vector3(fpos.x, uy, fpos.y)
 		unit.unit_died.connect(army.on_soldier_died)
 		add_child(unit)
+		if unit.has_method("initialize_goal_at_current"):
+			unit.initialize_goal_at_current()
 		army.soldiers.append(unit)
 		all_units.append(unit)
 	return army
@@ -906,22 +908,35 @@ func _first_alive_soldier_3d(army) -> Node3D:
 			return s
 	return null
 
-## Single RMB click: parallel move so first alive soldier of first selected army lands on click; formation preserved.
+## Single RMB click: shift every selected soldier's goal by the same delta so the anchor's goal lands on click.
+## Delta uses the first alive soldier of the first selected army's current goal (not physical position).
 func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
 	var s0 = _first_alive_soldier_3d(sel[0])
-	if s0 == null:
+	if s0 == null or not s0.has_method("get_goal_xz"):
 		return
-	var p0 := Vector2(s0.global_position.x, s0.global_position.z)
-	var d := click_xz - p0
+	var g0: Vector2 = s0.get_goal_xz()
+	var click_c := _clamp_map_v2(click_xz)
+	var delta := click_c - g0
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
+	var payload: Array = []
+	var n_units := 0
 	for army in sel:
-		var a_xz := Vector2(army.global_position.x, army.global_position.z)
-		var target := _clamp_map_v2(a_xz + d)
-		print("%s: Anchor move army '%s' to (%d,%d)" % [marker, army.army_id, int(target.x), int(target.y)])
-		rpc_id(1, "_server_move_army", army.army_id, target)
+		for s in army.soldiers:
+			if s == null or not is_instance_valid(s) or s.get("is_dead"):
+				continue
+			if not s.has_method("get_goal_xz"):
+				continue
+			var og: Vector2 = s.get_goal_xz()
+			var nw := _clamp_map_v2(og + delta)
+			payload.append({"n": str(s.name), "x": nw.x, "y": nw.y})
+			n_units += 1
+	if payload.is_empty():
+		return
+	print("%s: Anchor goal move %d units to click (%d,%d)" % [marker, n_units, int(click_c.x), int(click_c.y)])
+	rpc_id(1, "_server_move_group_formation", payload)
 
 func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
