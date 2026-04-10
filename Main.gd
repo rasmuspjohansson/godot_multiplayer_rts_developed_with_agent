@@ -46,7 +46,6 @@ func _ready():
 			if s.is_valid_int():
 				GameState.test_events = int(s)
 
-	GameState.use_3d = "--3d" in args
 	if "--server" in args:
 		_start_server()
 	elif "--client" in args:
@@ -185,11 +184,10 @@ func _load_lobby():
 
 func load_world():
 	_clear_scenes()
-	var scene_path = "res://World3D.tscn" if not multiplayer.is_server() and GameState.use_3d else "res://World.tscn"
+	var scene_path = "res://World.tscn"
 	#region agent log
 	GameState.agent_debug_log("H2", "Main.gd:load_world", "scene_path_selection", {
 		"scene_path": scene_path,
-		"use_3d": GameState.use_3d,
 		"is_server": multiplayer.is_server(),
 		"unique_id": multiplayer.get_unique_id()
 	})

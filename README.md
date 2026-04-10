@@ -65,13 +65,7 @@ godot --rendering-driver opengl3 --path . -- --client --name=A --host=192.168.1.
 godot --rendering-driver opengl3 --path . -- --client --name=A --host=127.0.0.1
 ```
 
-To run the match in **3D view** (same game logic, 3D camera and units), add `--3d`:
-
-```bash
-godot --rendering-driver opengl3 --path . -- --client --name=A --3d
-```
-
-The server always runs the 2D simulation; only the client’s view changes. In 3D you get a tilted camera, zoom (scroll), pan (drag or WASD), and click-to-move via raycast on the ground.
+The match runs in **3D** (`World.tscn`): tilted camera, zoom (scroll), pan (drag or WASD), and click-to-move via raycast on the ground. The dedicated server runs the same 3D simulation headless.
 
 Use `--rendering-driver opengl3` to avoid Vulkan issues when running several Godot instances.
 
@@ -128,8 +122,6 @@ From the project root you can run:
 ```bash
 ./run_test.sh              # auto-test with events 1 (default)
 ./run_test.sh --events=2   # auto-test with events 2 (draft sequence)
-./run_test.sh --3d         # auto-test with events 1 in 3D view (both clients)
-./run_test.sh --events=2 --3d   # events 2 in 3D view
 ./run_test.sh --no_test    # two human-play clients (no mock)
 ```
 
@@ -143,4 +135,4 @@ From the project root you can run:
 | `--server` | `--client --name=A` | `--client --name=B --auto-test` | You vs bot |
 | `--server` | `--client --name=A --auto-test` | `--client --name=B` | Bot vs you |
 | `--server` | `--client --name=A --auto-test` | `--client --name=B --auto-test` | Fully automated |
-| `--server` | `--client --name=A --3d` | `--client --name=B --3d` | Same as above, 3D view |
+| `--server` | `--client --name=A` | `--client --name=B` | Same as above (3D world) |

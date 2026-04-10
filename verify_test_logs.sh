@@ -23,7 +23,7 @@ for f in logs/client_A.log logs/client_B.log; do
 done
 
 if [[ -f logs/client_A.log ]] && ! grep -q "TEST_3D_TEXTURES_OK" logs/client_A.log; then
-	echo "FAIL: logs/client_A.log must contain TEST_3D_TEXTURES_OK (3D auto-test not finished or not --3d?)"
+	echo "FAIL: logs/client_A.log must contain TEST_3D_TEXTURES_OK (3D auto-test not finished?)"
 	FAIL=1
 fi
 if [[ -f logs/client_B.log ]] && ! grep -q "TEST_3D_TEXTURES_OK" logs/client_B.log; then

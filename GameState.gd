@@ -12,7 +12,6 @@ var players := {}
 var local_player_name := ""
 var is_auto_test := false
 var test_events: int = 1
-var use_3d := false
 
 var resources := {}
 var capture_points := {}

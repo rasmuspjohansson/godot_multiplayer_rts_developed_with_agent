@@ -1,5 +1,5 @@
 extends SceneTree
-## Headless: spawn World3D units, issue anchor-equivalent move_army, wait until all reach sync_target.
+## Headless: spawn 3D world units, issue anchor-equivalent move_army, wait until all reach sync_target.
 
 func _init():
 	call_deferred("_begin")
@@ -9,7 +9,7 @@ func _begin():
 
 func _run_goal_test() -> void:
 	var tree := self
-	var w = load("res://World3D.tscn").instantiate()
+	var w = load("res://World.tscn").instantiate()
 	root.add_child(w)
 	await tree.process_frame
 	await tree.process_frame

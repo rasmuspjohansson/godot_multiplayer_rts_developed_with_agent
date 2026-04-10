@@ -1,21 +1,34 @@
 extends CharacterBody3D
-## 3D unit for World3D (client-only). Textured vertical quad; physics unchanged.
+## 3D unit: server sim + client visuals (billboard / fallback box).
+
+signal unit_died(peer_id: int)
 
 var owner_peer_id: int = 0
 var owner_name: String = ""
 var army_id: String = ""
 var speed: float = 200.0 / 6.0
+var attack: float = 10.0
+var defense: float = 2.0
+var attack_range: float = 50.0
+
+## Server: move goal in map XZ (same as legacy Unit move_target Vector2).
+var move_target: Vector2 = Vector2.ZERO
+var is_moving := false
+var attack_timer: float = 0.0
+
 var sync_target_position: Vector3 = Vector3.ZERO
-## Do not use Vector3.ZERO as "unset" — map coords can be (0, h, 0). Set false until spawn/sync assigns a goal.
 var has_move_goal: bool = false
 var sync_target_hp: float = 100.0
 var hp: float = 100.0
 var is_dead := false
 
-const HALF_HEIGHT := 11.0  # match collision box half-height for terrain sticking
+const HALF_HEIGHT := 11.0
+const MAP_MARGIN := 200.0
+const MAP_WIDTH_F := 1280.0
+const MAP_HEIGHT_F := 720.0
+
 const EQUIPMENT_FOLDER := "spearman"
 const TEXTURE_FILE := "spearman.png"
-## QuadMesh + BILLBOARD_FIXED_Y so the sprite faces the camera (top-down view is not edge-on/invisible).
 const FACING_ROTATION_NEG_X := 0.0
 const FACING_ROTATION_POS_X := PI
 
@@ -25,11 +38,38 @@ var _logged_height_invalid := false
 var _last_facing_y: float = 0.0
 var _selected := false
 var _texture_loaded := false
+var _logged_position_invalid := false
 
 func _ready():
-	# Defer mesh build so CharacterBody3D / collision are fully in the scene tree
-	# (avoids get_global_transform errors during the first add_child frame).
+	if multiplayer.is_server():
+		return
 	call_deferred("_build_visual_mesh")
+
+func _ground_y() -> float:
+	var w = get_parent()
+	if w != null and w.has_method("get_ground_height_at"):
+		return w.get_ground_height_at(global_position.x, global_position.z)
+	return 0.0
+
+func set_move_target(xz: Vector2):
+	xz.x = clampf(xz.x, 0.0, MAP_WIDTH_F)
+	xz.y = clampf(xz.y, 0.0, MAP_HEIGHT_F)
+	move_target = xz
+	is_moving = true
+	if not multiplayer.is_server():
+		var gy = _ground_y_at(xz.x, xz.y)
+		sync_target_position = Vector3(xz.x, gy + HALF_HEIGHT, xz.y)
+		has_move_goal = true
+
+func _ground_y_at(x: float, z: float) -> float:
+	var w = get_parent()
+	if w != null and w.has_method("get_ground_height_at"):
+		return w.get_ground_height_at(x, z)
+	return 0.0
+
+func set_selected(val: bool):
+	_selected = val
+	_update_visual_tint()
 
 func _build_visual_mesh():
 	_mesh = MeshInstance3D.new()
@@ -78,12 +118,10 @@ func _get_texture_path() -> String:
 
 func _load_spearman_texture() -> Texture2D:
 	var path := _get_texture_path()
-	# Prefer Image.load + ImageTexture so PNG works even if import cache differs
 	var img := Image.new()
 	var err := img.load(path)
 	if err == OK:
 		return ImageTexture.create_from_image(img)
-	# Fallback: imported CompressedTexture2D
 	if ResourceLoader.exists(path):
 		var res: Resource = ResourceLoader.load(path)
 		if res is Texture2D:
@@ -103,6 +141,38 @@ func has_valid_spearman_texture() -> bool:
 func _physics_process(delta: float):
 	if is_dead:
 		return
+	if multiplayer.is_server():
+		_server_process(delta)
+	else:
+		_client_physics(delta)
+
+func _server_process(delta: float):
+	if is_moving:
+		var cur := Vector2(global_position.x, global_position.z)
+		var dist := cur.distance_to(move_target)
+		if dist <= 0.4:
+			var gy := _ground_y_at(move_target.x, move_target.y)
+			global_position = Vector3(move_target.x, gy + HALF_HEIGHT, move_target.y)
+			velocity = Vector3.ZERO
+			is_moving = false
+		else:
+			var dir_xz := (move_target - cur).normalized()
+			velocity = Vector3(dir_xz.x * speed, 0.0, dir_xz.y * speed)
+			move_and_slide()
+			var gy2 := _ground_y_at(global_position.x, global_position.z)
+			global_position.y = gy2 + HALF_HEIGHT
+
+	if global_position.x < -MAP_MARGIN or global_position.x > MAP_WIDTH_F + MAP_MARGIN \
+			or global_position.z < -MAP_MARGIN or global_position.z > MAP_HEIGHT_F + MAP_MARGIN:
+		if not _logged_position_invalid:
+			_logged_position_invalid = true
+			print("TEST_SERVER_UNIT_POSITION_INVALID: %s out_of_bounds" % name)
+
+	attack_timer -= delta
+	if attack_timer <= 0.0:
+		_try_attack()
+
+func _client_physics(delta: float):
 	if has_move_goal:
 		var to_target := Vector3(sync_target_position.x - global_position.x, 0.0, sync_target_position.z - global_position.z)
 		var dist := sqrt(to_target.x * to_target.x + to_target.z * to_target.z)
@@ -121,6 +191,50 @@ func _physics_process(delta: float):
 	_update_visual_tint()
 	_update_facing()
 
+func _try_attack():
+	var world = get_parent()
+	if world == null:
+		return
+	var center := Vector2(global_position.x, global_position.z)
+	var candidates: Array
+	if world.has_method("get_units_in_radius"):
+		candidates = world.get_units_in_radius(center, attack_range)
+	else:
+		candidates = []
+	for child in candidates:
+		if child == self:
+			continue
+		if not (child is CharacterBody3D):
+			continue
+		if child.get("is_dead"):
+			continue
+		if child.owner_peer_id == owner_peer_id:
+			continue
+		var oth := child as CharacterBody3D
+		var dist := Vector2(global_position.x, global_position.z).distance_to(Vector2(oth.global_position.x, oth.global_position.z))
+		if dist <= attack_range:
+			var dmg = max(1.0, attack - float(child.get("defense")))
+			GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
+			print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [owner_name, army_id, child.get("owner_name"), child.get("army_id"), dist, dmg])
+			if child.has_method("take_damage"):
+				child.take_damage(dmg, owner_peer_id)
+			attack_timer = 1.0
+			return
+
+func take_damage(dmg: float, _attacker_id: int):
+	if is_dead:
+		return
+	hp -= dmg
+	if hp <= 0.0:
+		is_dead = true
+		print("Combat: soldier '%s' in %s died" % [name, army_id])
+		unit_died.emit(owner_peer_id)
+		var world = get_parent()
+		if world and world.has_method("_notify_unit_death"):
+			world._notify_unit_death(name)
+		print("TEST_UNIT_CLEANUP: unit %s queued for removal" % name)
+		get_tree().create_timer(0.5).timeout.connect(func(): queue_free())
+
 func _update_facing():
 	if _mesh == null:
 		return
@@ -130,7 +244,6 @@ func _update_facing():
 			sync_target_position.x - global_position.x,
 			sync_target_position.z - global_position.z
 		)
-	# BILLBOARD_FIXED_Y orients the quad in the shader; mesh Y rotation fights it and can make units edge-on/invisible.
 	if _texture_loaded and _material != null and _material.billboard_mode == BaseMaterial3D.BILLBOARD_FIXED_Y:
 		_mesh.rotation = Vector3.ZERO
 		if dir_xz.length() > 0.01:
@@ -165,7 +278,3 @@ func _stick_to_terrain():
 			_logged_height_invalid = true
 			print("TEST_3D_UNIT_HEIGHT_INVALID: %s unit_was_below_ground" % name)
 		global_position.y = ground_y + HALF_HEIGHT
-
-func set_selected(val: bool):
-	_selected = val
-	_update_visual_tint()

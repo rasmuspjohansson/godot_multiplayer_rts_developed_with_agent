@@ -4,11 +4,11 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 
 **Invalid markers (run fails if any appear):** `TEST_3D_UNIT_HEIGHT_INVALID`, `TEST_SERVER_UNIT_POSITION_INVALID`, `TEST_3D_TEXTURE_MISSING`, `TEST_3D_TEXTURES_BAD`, and `TEST_3D_TEXTURE_LOAD_FAILED` must **not** appear in any log (server or client). If they do, the run is considered failed.
 
-**3D client textures (when running with `--3d`):** Each client log should contain `TEST_3D_TEXTURES_OK: count=<N>` after armies spawn (and again after draft in events 2 if applicable), with N equal to the number of 3D units on that client.
+**3D client textures:** Each client log should contain `TEST_3D_TEXTURES_OK: count=<N>` after armies spawn (and again after draft in events 2 if applicable), with N equal to the number of 3D units on that client.
 
 **Headless asset check:** `godot --headless --path . -s test_texture_paths.gd` must print `TEST_TEXTURE_PATHS_OK: red_blue_png_readable` (verifies `res://images/red|blue/spearman/spearman.png` load the same way as `Unit3D`).
 
-**Headless 3D spawn:** `godot --headless --path . -s test_world3d_spawn.gd` must print `TEST_WORLD3D_SPAWN_OK: units=2` (instantiates `World3D` and runs `_client_spawn_armies_impl` with a minimal army).
+**Headless 3D spawn:** `godot --headless --path . -s test_world3d_spawn.gd` must print `TEST_WORLD3D_SPAWN_OK: units=2` (instantiates `World.tscn` and runs `_client_spawn_armies_impl` with a minimal army).
 
 **Headless 3D goal arrival:** `godot --headless --path . -s test_world3d_goal_arrival.gd` must print `TEST_WORLD3D_GOALS_REACHED` (spawns two soldiers, issues `Army3D.move_army` with first-soldier anchor math, advances frames until every unit is within 3px of `sync_target_position` on XZ).
 
@@ -27,7 +27,7 @@ Tests correspond to events in `events1.md` and `events2.md`. Run with `--events=
 | `TEST_005` | Client B sent ready | server.log, client_B.log |
 | `TEST_006` | Match started, World scene loaded | server.log |
 | `TEST_007` | 4 armies spawned (2 per player, 10 soldiers each) | server.log |
-| `TEST_3D_CLIENT_UNITS_SPAWNED` | 3D client created all units (`units=40` for 4×10) | client_A.log, client_B.log (with `--3d`) |
+| `TEST_3D_CLIENT_UNITS_SPAWNED` | 3D client created all units (`units=40` for 4×10) | client_A.log, client_B.log |
 | `TEST_WORLD3D_SPAWN_OK` | Headless `test_world3d_spawn.gd` passed | terminal (CI) |
 | `TEST_WORLD3D_GOALS_REACHED` | Headless `test_world3d_goal_arrival.gd` passed | terminal (CI) |
 | `TEST_CAPTURE_SPAWN` | 2 capture points spawned (Stables, Blacksmith) | server.log, client_A.log, client_B.log |

@@ -73,9 +73,9 @@
 |-----------------|---------|
 | `Main.tscn`     | Entry point: parses CLI args, creates network peer, switches to Lobby. |
 | `Lobby.tscn`    | Shows name input, color picker (5 boxes), connected players, ready states. "Ready" toggle button. |
-| `World.tscn`    | 2D arena with `NavigationRegion2D`. Server spawns armies here. |
-| `Unit.tscn`     | `CharacterBody2D` with `NavigationAgent2D`. Individual soldier. |
-| `CapturePoint.tscn` | Visual marker for a capture point (colored circle + label). |
+| `World.tscn`    | 3D arena (ground mesh + physics). Server and clients spawn armies here. |
+| `Unit3D`        | `CharacterBody3D` soldier (server sim + client billboard mesh). |
+| (capture)       | Capture points are pillars + server-side logic in `World.gd` (no separate CP scene). |
 | `GameOver.tscn` | Displays winner. Clients auto-disconnect after a delay. |
 
 ## Script Files
@@ -83,10 +83,9 @@
 |-----------------|------|
 | `Main.gd`       | Networking setup, scene switching. |
 | `Lobby.gd`      | Ready-state RPCs, player list UI. |
-| `World.gd`      | Army spawning, capture points, selection, rotation input, rout/win checking, sync. |
-| `Army.gd`       | Formation math, movement, rotation, repack on death, rout detection. |
-| `Unit.gd`       | Individual soldier: navigate, auto-attack, take damage, die. |
-| `CapturePoint.gd` | Capture logic, proximity check, resource production timer. |
+| `World.gd`      | Army spawning, capture points, selection, camera, rout/win checking, sync. |
+| `Army3D.gd`     | Formation math, movement, rotation, repack on death, rout detection (XZ). |
+| `Unit3D.gd`     | Soldier: move/attack on server; interpolate and visuals on client. |
 | `TopBar.gd`     | HUD overlay: shows resources and capture point ownership. |
 | `GameOver.gd`   | Winner display, disconnect logic. |
 | `MockPlayer.gd` | Automated test client (activated by `--auto-test`). |

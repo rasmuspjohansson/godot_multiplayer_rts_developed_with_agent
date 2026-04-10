@@ -15,14 +15,11 @@ cd "$SCRIPT_DIR"
 
 AUTO_TEST=true
 EVENTS=1
-USE_3D=true
 for arg in "$@"; do
   case "$arg" in
     --no_test|--no-test) AUTO_TEST=false ;;
     --events=1) EVENTS=1 ;;
     --events=2) EVENTS=2 ;;
-    --3d) USE_3D=true ;;
-    --2d) USE_3D=false ;;
   esac
 done
 
@@ -74,12 +71,10 @@ if [ "$AUTO_TEST" = true ]; then
   echo $EVENTS > .test_events
   export DISPLAY="${DISPLAY:-:0}"
   CLIENT_ARGS="--client --name=A --auto-test --events=$EVENTS"
-  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
   nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_A.log 2>&1 &
   echo $! > logs/client_A.pid
   sleep 2
   CLIENT_ARGS="--client --name=B --auto-test --events=$EVENTS"
-  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
   nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_B.log 2>&1 &
   echo $! > logs/client_B.pid
   echo "Clients A and B started (auto-test, events=$EVENTS). Logs: logs/client_A.log, logs/client_B.log"
@@ -87,12 +82,10 @@ else
   echo "Starting human-play clients Player1 and Player2..."
   export DISPLAY="${DISPLAY:-:0}"
   CLIENT_ARGS="--client --name=Player1"
-  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
   nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_Player1.log 2>&1 &
   echo $! > logs/client_Player1.pid
   sleep 2
   CLIENT_ARGS="--client --name=Player2"
-  [ "$USE_3D" = true ] && CLIENT_ARGS="$CLIENT_ARGS --3d"
   nohup "$GODOT_BIN" --rendering-driver opengl3 --path . -- $CLIENT_ARGS > logs/client_Player2.log 2>&1 &
   echo $! > logs/client_Player2.pid
   echo "Two game windows should open. Connect, set name/color, press Ready in both."

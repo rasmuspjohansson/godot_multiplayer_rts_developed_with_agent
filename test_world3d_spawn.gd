@@ -1,11 +1,11 @@
 extends SceneTree
-## Headless: instantiate World3D and run client spawn path (no multiplayer).
+## Headless: instantiate World (3D) and run client spawn path (no multiplayer).
 
 func _init():
 	call_deferred("_begin")
 
 func _begin():
-	var w = load("res://World3D.tscn").instantiate()
+	var w = load("res://World.tscn").instantiate()
 	root.add_child(w)
 	call_deferred("_spawn_step2", w)
 
