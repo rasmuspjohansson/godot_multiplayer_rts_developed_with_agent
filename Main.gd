@@ -24,27 +24,6 @@ func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
-	for i in range(args.size()):
-		var a = args[i]
-		if a.begins_with("--events="):
-			GameState.test_events = int(a.split("=")[1])
-			break
-		if a == "--events" and i + 1 < args.size():
-			GameState.test_events = int(args[i + 1])
-			break
-	if OS.has_environment("GODOT_TEST_EVENTS"):
-		GameState.test_events = int(OS.get_environment("GODOT_TEST_EVENTS"))
-	var proj_path = str(ProjectSettings.globalize_path("res://"))
-	if not proj_path.ends_with("/"):
-		proj_path += "/"
-	var test_events_path = proj_path + ".test_events"
-	if FileAccess.file_exists(test_events_path):
-		var f = FileAccess.open(test_events_path, FileAccess.READ)
-		if f:
-			var s = f.get_as_text().strip_edges()
-			f.close()
-			if s.is_valid_int():
-				GameState.test_events = int(s)
 
 	if "--server" in args:
 		_start_server()
@@ -74,7 +53,7 @@ func _start_server():
 	multiplayer.multiplayer_peer = peer
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-	print("TEST_001: Dedicated server started on port %d" % PORT)
+	print("TEST_SERVER_START: Dedicated server started on port %d" % PORT)
 	_load_lobby()
 
 func _start_client():
@@ -92,7 +71,7 @@ func _start_client():
 	print("Connecting to server as '%s' at %s:%d..." % [player_name, _server_host, PORT])
 
 func _on_connected_to_server():
-	var marker = "TEST_002" if player_name == "A" else "TEST_003"
+	var marker = "TEST_CLIENT_A_START" if player_name == "A" else "TEST_CLIENT_B_START"
 	print("%s: Connected to server (peer_id=%d, name=%s)" % [marker, multiplayer.get_unique_id(), player_name])
 	rpc_id(1, "register_player", player_name)
 	_load_lobby()
@@ -106,7 +85,7 @@ func _on_connection_failed():
 	get_tree().quit()
 
 func _on_server_disconnected():
-	print("TEST_012: Server disconnected, quitting")
+	print("TEST_CLIENT_DISCONNECT: Server disconnected, quitting")
 	get_tree().quit()
 
 var _peer_connect_count := 0
@@ -114,12 +93,12 @@ var _peer_connect_count := 0
 func _on_peer_connected(id: int):
 	_peer_connect_count += 1
 	if _peer_connect_count == 1:
-		print("TEST_002: Peer connected (first client): %d" % id)
+		print("TEST_CLIENT_A_START: Peer connected (first client): %d" % id)
 	else:
-		print("TEST_003: Peer connected (client #%d): %d" % [_peer_connect_count, id])
+		print("TEST_CLIENT_B_START: Peer connected (client #%d): %d" % [_peer_connect_count, id])
 
 func _on_peer_disconnected(id: int):
-	print("TEST_012: Peer disconnected: %d" % id)
+	print("TEST_PEER_DISCONNECT: Peer disconnected: %d" % id)
 	if is_server:
 		GameState.players.erase(id)
 

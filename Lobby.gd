@@ -31,7 +31,7 @@ func _on_ready_pressed():
 		_receive_ready.call(local_ready, pname)
 	else:
 		rpc_id(1, "_receive_ready", local_ready, pname)
-		var marker = "TEST_004" if GameState.local_player_name == "A" else "TEST_005"
+		var marker = "TEST_A_READY" if GameState.local_player_name == "A" else "TEST_B_READY"
 		if local_ready:
 			print("%s: %s pressed ready" % [marker, GameState.local_player_name])
 
@@ -45,7 +45,7 @@ func _receive_ready(is_ready: bool, pname: String = ""):
 			GameState.players[sender_id]["name"] = pname
 		GameState.players[sender_id]["ready"] = is_ready
 		var name_str = GameState.players[sender_id]["name"]
-		var marker = "TEST_004" if name_str == "A" else "TEST_005"
+		var marker = "TEST_A_READY" if name_str == "A" else "TEST_B_READY"
 		print("%s: Server received ready=%s from '%s' (id=%d)" % [marker, is_ready, name_str, sender_id])
 		rpc("_sync_players", GameState.players)
 		_check_all_ready()
@@ -117,12 +117,12 @@ func _check_all_ready():
 	for id in GameState.players:
 		if not GameState.players[id].get("ready", false):
 			return
-	print("TEST_006: All players ready, starting match!")
+	print("TEST_GAME_START: All players ready, starting match!")
 	rpc("_start_match")
 	_start_match()
 
 @rpc("authority", "reliable")
 func _start_match():
-	print("TEST_006: Match starting, loading World scene")
+	print("TEST_GAME_START: Match starting, loading World scene")
 	var main = get_tree().root.get_node("Main")
 	main.load_world()

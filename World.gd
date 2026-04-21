@@ -41,6 +41,10 @@ var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
 var army_time_at_cp := {}
 var army_follow_target := {}
+## Server: mock idle detection — only for armies that received `_server_mock_chase_tick` (not human players)
+var _mock_chase_touched: Dictionary = {}
+var _mock_stuck_t: Dictionary = {}
+var _mock_stuck_last: Dictionary = {}
 var player_side := {}  # pid -> "west" | "east" | ...
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
@@ -73,6 +77,71 @@ var _move_goal_markers_3d: Node3D
 var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
+
+func _client_unit_scene_visible(u: Node) -> bool:
+	if not u.is_visible_in_tree():
+		return false
+	for c in u.get_children():
+		if c is MeshInstance3D and not c.visible:
+			return false
+	return true
+
+## Client-only: log TEST_ALL_UNITS_* markers for automated detection (both teams visible, overview frustum).
+func _log_unit_visibility(phase: String) -> void:
+	if multiplayer.is_server() or _camera == null:
+		return
+	var pname: String = GameState.local_player_name
+	var total := 0
+	var vis := 0
+	for u in all_units:
+		if not is_instance_valid(u) or not u.is_inside_tree():
+			continue
+		if u.get("is_dead"):
+			continue
+		total += 1
+		if _client_unit_scene_visible(u):
+			vis += 1
+	if total == 0:
+		print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=0 total=0" % [pname, phase])
+	else:
+		if vis == total:
+			print("TEST_ALL_UNITS_SCENE_VISIBLE: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
+		else:
+			print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
+	var saved_look := _look_at
+	var saved_dist := _camera_distance
+	_look_at = Vector3(MAP_WIDTH / 2.0, 0.0, MAP_HEIGHT / 2.0)
+	_camera_distance = CAMERA_MAX_DISTANCE
+	_update_camera_position()
+	var in_frustum := 0
+	for u2 in all_units:
+		if not is_instance_valid(u2) or not u2.is_inside_tree():
+			continue
+		if u2.get("is_dead"):
+			continue
+		if _camera.is_position_in_frustum(u2.global_position):
+			in_frustum += 1
+	if total > 0 and in_frustum == total:
+		print("TEST_ALL_UNITS_IN_FRUSTUM: client=%s phase=%s ok=true visible=%d total=%d" % [pname, phase, in_frustum, total])
+	else:
+		print("TEST_ALL_UNITS_IN_FRUSTUM_FAIL: client=%s phase=%s in_frustum=%d total_alive=%d" % [pname, phase, in_frustum, total])
+	_look_at = saved_look
+	_camera_distance = saved_dist
+	_update_camera_position()
+
+func _schedule_visibility_checks() -> void:
+	if multiplayer.is_server():
+		return
+	get_tree().create_timer(0.2).timeout.connect(_on_visibility_spawn_timeout)
+	get_tree().create_timer(25.0).timeout.connect(_on_visibility_mid_timeout)
+
+func _on_visibility_spawn_timeout() -> void:
+	_log_unit_visibility("spawn")
+
+func _on_visibility_mid_timeout() -> void:
+	if game_over:
+		return
+	_log_unit_visibility("mid_match")
 
 func _ready():
 	_look_at = Vector3(MAP_WIDTH / 2.0, 0, MAP_HEIGHT / 2.0)
@@ -319,6 +388,32 @@ func _request_draft(use_horse: bool, use_spear: bool):
 	rpc_id(1, "request_draft_army", use_horse, use_spear)
 
 @rpc("any_peer", "reliable")
+func _server_set_all_armies_aggressive():
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0 or not GameState.players.has(sender):
+		return
+	var pname := str(GameState.players[sender].get("name", sender))
+	var n := 0
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		if a.owner_peer_id != sender:
+			continue
+		a.stance = "aggressive"
+		n += 1
+	rpc("_client_set_army_stance_for_owner", sender, "aggressive")
+	var marker = "TEST_A_AGGRESSIVE" if pname == "A" else "TEST_B_AGGRESSIVE"
+	print("%s: Player '%s' set %d armies to aggressive" % [marker, pname, n])
+
+@rpc("authority", "reliable")
+func _client_set_army_stance_for_owner(owner_pid: int, new_stance: String):
+	for a in armies:
+		if a and is_instance_valid(a) and a.owner_peer_id == owner_pid:
+			a.stance = new_stance
+
+@rpc("any_peer", "reliable")
 func _server_move_army(aid: String, target: Vector2):
 	if not multiplayer.is_server():
 		return
@@ -333,6 +428,102 @@ func _server_move_army(aid: String, target: Vector2):
 	army_follow_target.erase(aid)
 	army.move_army(target)
 	rpc("_client_move_army", aid, target)
+
+func _army_center_xz_server(army) -> Vector2:
+	if army == null or not is_instance_valid(army):
+		return Vector2.ZERO
+	if army.has_method("get_alive_soldiers"):
+		var alive: Array = army.get_alive_soldiers()
+		if alive.size() > 0:
+			var sx := 0.0
+			var sz := 0.0
+			for s in alive:
+				sx += s.global_position.x
+				sz += s.global_position.z
+			return Vector2(sx / float(alive.size()), sz / float(alive.size()))
+	return Vector2(army.global_position.x, army.global_position.z)
+
+## Average of all enemy army centers (authoritative) — mock clients call this so chase targets match server sim.
+func _enemy_blob_center_for_peer(sender_id: int) -> Vector2:
+	var sx := 0.0
+	var sz := 0.0
+	var n := 0
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		if a.owner_peer_id == sender_id:
+			continue
+		var c := _army_center_xz_server(a)
+		sx += c.x
+		sz += c.y
+		n += 1
+	if n == 0:
+		return Vector2.ZERO
+	return Vector2(sx / float(n), sz / float(n))
+
+@rpc("any_peer", "reliable")
+func _server_mock_chase_tick():
+	if not multiplayer.is_server() or game_over:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0 or not GameState.players.has(sender):
+		return
+	var blob := _enemy_blob_center_for_peer(sender)
+	if blob == Vector2.ZERO:
+		return
+	const MOCK_STOP := 95.0
+	var orders := 0
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		if a.owner_peer_id != sender:
+			continue
+		var my_c := _army_center_xz_server(a)
+		if my_c.distance_to(blob) <= MOCK_STOP:
+			continue
+		army_follow_target.erase(a.army_id)
+		var marker = "TEST_009_MOVE" if a.owner_name == "A" else "TEST_009_MOVE_B"
+		print("%s: Server moving army '%s' to (%d,%d)" % [marker, a.army_id, int(blob.x), int(blob.y)])
+		a.move_army(blob)
+		rpc("_client_move_army", a.army_id, blob)
+		_mock_chase_touched[a.army_id] = true
+		orders += 1
+	if orders > 0:
+		var pname: String = str(GameState.players[sender].get("name", sender))
+		print("TEST_MOCK_SEEK_ENEMY: server player=%s orders=%d blob=(%.0f,%.0f)" % [pname, orders, blob.x, blob.y])
+
+func _server_mock_stuck_update(delta: float):
+	if game_over:
+		return
+	const NEAR_COMBAT := 78.0
+	const STILL_EPS := 11.0
+	const STUCK_SEC := 5.0
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		var aid: String = a.army_id
+		if not _mock_chase_touched.get(aid, false):
+			continue
+		var c := _army_center_xz_server(a)
+		var blob := _enemy_blob_center_for_peer(a.owner_peer_id)
+		if blob == Vector2.ZERO or c.distance_to(blob) <= NEAR_COMBAT:
+			_mock_stuck_t.erase(aid)
+			_mock_stuck_last.erase(aid)
+			continue
+		var last: Vector2 = _mock_stuck_last.get(aid, c)
+		if c.distance_to(last) < STILL_EPS:
+			_mock_stuck_t[aid] = float(_mock_stuck_t.get(aid, 0.0)) + delta
+		else:
+			_mock_stuck_t[aid] = 0.0
+		_mock_stuck_last[aid] = c
+		if float(_mock_stuck_t.get(aid, 0.0)) >= STUCK_SEC:
+			_mock_stuck_t[aid] = 0.0
+			army_follow_target.erase(aid)
+			var marker = "TEST_009_MOVE" if a.owner_name == "A" else "TEST_009_MOVE_B"
+			print("%s: Server moving army '%s' to (%d,%d)" % [marker, aid, int(blob.x), int(blob.y)])
+			a.move_army(blob)
+			rpc("_client_move_army", aid, blob)
+			print("TEST_MOCK_IDLE_SEEK_REFRESH: server army=%s blob=(%.0f,%.0f)" % [aid, blob.x, blob.y])
 
 @rpc("any_peer", "reliable")
 func request_draft_army(use_horse: bool, use_spear: bool):
@@ -467,6 +658,9 @@ func _make_server_unit_3d() -> CharacterBody3D:
 	return unit
 
 func _spawn_armies():
+	_mock_chase_touched.clear()
+	_mock_stuck_t.clear()
+	_mock_stuck_last.clear()
 	var player_ids = GameState.players.keys()
 	if player_ids.size() < 2:
 		print("ERROR: Need at least 2 players to spawn armies")
@@ -507,7 +701,9 @@ func _spawn_armies():
 			var army_id = "P%d_%d" % [pc["pid"], i + 1]
 			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"], {})
 			armies.append(army)
-	print("TEST_007: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
+	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
+	_match_started = true
+	_match_elapsed = 0.0
 	for a in armies:
 		var axz = Vector2(a.global_position.x, a.global_position.z)
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name])
@@ -765,6 +961,15 @@ func _server_capture_and_resources(delta: float):
 					print("TEST_CAPTURE: %s '%s' captured by %s (pid=%d)" % [c["type"], c["id"], owner_name, new_owner])
 				else:
 					print("TEST_CAPTURE: %s '%s' taken over by %s (pid=%d)" % [c["type"], c["id"], owner_name, new_owner])
+				# Player-specific control markers (match tests.json events).
+				if owner_name == "A" and c["id"] == "Stables":
+					print("TEST_A_CONTROLS_STABLES: Player A controls Stables")
+				elif owner_name == "B" and c["id"] == "Blacksmith":
+					print("TEST_B_CONTROLS_BLACKSMITH: Player B controls Blacksmith")
+				elif owner_name == "A" and c["id"] == "Blacksmith":
+					print("TEST_A_CONTROLS_BLACKSMITH: Player A controls Blacksmith")
+				elif owner_name == "B" and c["id"] == "Stables":
+					print("TEST_B_CONTROLS_STABLES: Player B controls Stables")
 		if c["owner_pid"] != 0:
 			c["resource_timer"] = float(c.get("resource_timer", 0.0)) + delta
 			if c["resource_timer"] >= CP_RESOURCE_INTERVAL:
@@ -776,17 +981,99 @@ func _server_capture_and_resources(delta: float):
 				var total = GameState.resources[c["owner_pid"]][key]
 				print("TEST_RESOURCE: %s '%s' produced 1 %s for pid=%d (total=%d)" % [c["type"], c["id"], key, c["owner_pid"], total])
 
+var _aggressive_timer: float = 0.0
+const AGGRESSIVE_TICK_INTERVAL := 1.0
+## Hard cap on a single automated match; if exceeded the server declares a timeout
+## game-over so the test never hangs forever.
+const MATCH_TIMEOUT_SECONDS := 120.0
+var _match_elapsed: float = 0.0
+var _match_started: bool = false
+
+## Server: for every aggressive (non-routed) army, retarget it to the current position
+## of its closest enemy army once per second. Sets every soldier's goal to a formation
+## slot *around* the enemy center (not via Army3D.move_army, which uses a per-soldier
+## delta that shrinks on repeated ticks and ends up nearly stationary).
+func _update_aggressive_armies(delta: float):
+	_aggressive_timer += delta
+	if _aggressive_timer < AGGRESSIVE_TICK_INTERVAL:
+		return
+	_aggressive_timer = 0.0
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		if a.get("stance") != "aggressive":
+			continue
+		var enemy = _get_closest_enemy_army(a)
+		if enemy == null:
+			continue
+		var exz := _army_center_xz_server(enemy)
+		exz = Vector2(clampf(exz.x, 0.0, float(MAP_WIDTH)), clampf(exz.y, 0.0, float(MAP_HEIGHT)))
+		army_follow_target.erase(a.army_id)
+		# Park the army center at the enemy and place each soldier in a formation slot
+		# around that center, directly (bypasses per-call delta drift in move_army).
+		var gy := get_ground_height_at(exz.x, exz.y)
+		a.global_position = Vector3(exz.x, gy, exz.y)
+		var alive: Array = a.get_alive_soldiers()
+		var positions: Array = a.calculate_formation_positions(exz, a.direction, alive.size())
+		for i in range(alive.size()):
+			var p: Vector2 = positions[i]
+			p.x = clampf(p.x, 0.0, float(MAP_WIDTH))
+			p.y = clampf(p.y, 0.0, float(MAP_HEIGHT))
+			var uy := get_ground_height_at(p.x, p.y) + UNIT_HALF_HEIGHT
+			alive[i].sync_target_position = Vector3(p.x, uy, p.y)
+			if alive[i].has_method("set_move_target"):
+				alive[i].set_move_target(p)
+		rpc("_client_move_army", a.army_id, exz)
+		print("TEST_AGGRESSIVE_TICK: army=%s owner=%s target_enemy=%s at=(%d,%d)" % [
+			a.army_id, a.owner_name, enemy.army_id, int(exz.x), int(exz.y)
+		])
+
 func _physics_process(delta: float):
 	if multiplayer.is_server() and not game_over:
+		_check_match_timeout(delta)
+		if game_over:
+			return
 		_server_capture_and_resources(delta)
 		_update_unit_grid()
-		_update_cp_seek_and_follow(delta)
+		_update_aggressive_armies(delta)
 		sync_timer += delta
 		if sync_timer >= 0.05:
 			sync_timer = 0.0
-			_apply_follow_targets()
 			_sync_unit_positions()
 			_sync_capture_state()
+
+func _check_match_timeout(delta: float) -> void:
+	if not _match_started or game_over:
+		return
+	_match_elapsed += delta
+	if _match_elapsed < MATCH_TIMEOUT_SECONDS:
+		return
+	game_over = true
+	print("TEST_GAME_OVER_TIMEOUT: match exceeded %.0f seconds, forcing game over" % MATCH_TIMEOUT_SECONDS)
+	# Pick whichever side has more non-routed armies as the winner; tie → draw.
+	var counts := {}
+	var names := {}
+	for a in armies:
+		if a and is_instance_valid(a) and not a.is_routed:
+			counts[a.owner_peer_id] = int(counts.get(a.owner_peer_id, 0)) + 1
+			names[a.owner_peer_id] = a.owner_name
+	var winner_pid := 0
+	var winner_count := -1
+	var tied := false
+	for pid in counts.keys():
+		var c: int = counts[pid]
+		if c > winner_count:
+			winner_count = c
+			winner_pid = pid
+			tied = false
+		elif c == winner_count:
+			tied = true
+	var winner_name := ""
+	if winner_pid != 0 and not tied:
+		winner_name = str(names[winner_pid])
+	print("TEST_GAME_OVER: Timeout reached. Winner: %s" % (winner_name if winner_name != "" else "(draw)"))
+	rpc("_announce_winner", winner_name)
+	_announce_winner(winner_name)
 
 func _notify_unit_death(unit_name: String):
 	rpc("_client_unit_died", unit_name)
@@ -821,7 +1108,7 @@ func _on_army_routed(army):
 			all_routed = false
 			break
 	if all_routed:
-		print("TEST_011: Player '%s' has no armies left (all routed)" % loser_name)
+		print("TEST_PLAYER_ELIMINATED: Player '%s' has no armies left (all routed)" % loser_name)
 	var players_with_armies := {}
 	for a in armies:
 		if not a.is_routed:
@@ -829,12 +1116,12 @@ func _on_army_routed(army):
 	if players_with_armies.size() == 1:
 		game_over = true
 		var winner_name = players_with_armies.values()[0]
-		print("TEST_011: Last player standing. Winner: %s" % winner_name)
+		print("TEST_GAME_OVER: Last player standing. Winner: %s" % winner_name)
 		rpc("_announce_winner", winner_name)
 		_announce_winner(winner_name)
 	elif players_with_armies.size() == 0:
 		game_over = true
-		print("TEST_011: Draw (no armies left)")
+		print("TEST_GAME_OVER: Draw (no armies left)")
 		rpc("_announce_winner", "")
 		_announce_winner("")
 
@@ -1179,7 +1466,7 @@ func _client_spawn_armies_impl(data: Array):
 			add_child(unit)
 			army.soldiers.append(unit)
 			all_units.append(unit)
-	print("TEST_007: Client received %d armies" % armies.size())
+	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
 	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [all_units.size(), armies.size()])
 	#region agent log
 	var u0pos: Array = []
@@ -1195,6 +1482,7 @@ func _client_spawn_armies_impl(data: Array):
 	#endregion
 	call_deferred("_validate_units_height")
 	call_deferred("_validate_unit_textures")
+	_schedule_visibility_checks()
 
 @rpc("authority", "reliable")
 func _client_spawn_capture_points(data: Array):
@@ -1408,7 +1696,7 @@ func _client_army_routed(army_id: String):
 
 @rpc("authority", "reliable")
 func _announce_winner(winner_name: String):
-	print("TEST_011: Winner announced: %s" % winner_name)
+	print("TEST_GAME_OVER: Winner announced: %s" % winner_name)
 	get_tree().create_timer(1.0).timeout.connect(func():
 		get_tree().root.get_node("Main").load_game_over(winner_name)
 	)

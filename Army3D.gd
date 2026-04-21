@@ -17,6 +17,8 @@ var initial_count: int = 10
 var soldiers: Array = []
 var is_routed := false
 var is_selected := false
+## "defensive" (stay put / follow move orders) or "aggressive" (server chases closest enemy each tick).
+var stance: String = "defensive"
 
 const ROUT_THRESHOLD := 0.3
 
@@ -98,7 +100,6 @@ func select():
 	for s in get_alive_soldiers():
 		if s.has_method("set_selected"):
 			s.set_selected(true)
-	print("TEST_008_SELECT: Army '%s' selected" % army_id)
 
 func deselect():
 	is_selected = false
@@ -122,7 +123,7 @@ func repack_formation():
 func _do_rout():
 	is_routed = true
 	var remaining = get_alive_count()
-	print("TEST_ROUT: Army '%s' routed (%d/%d alive)" % [army_id, remaining, initial_count])
+	print("TEST_ROUT: Army '%s' routed (%d/%d alive) owner=%s" % [army_id, remaining, initial_count, owner_name])
 	for s in get_alive_soldiers():
 		s.set("is_dead", true)
 		s.queue_free()

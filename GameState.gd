@@ -11,7 +11,6 @@ const PLAYER_COLORS: Array = [
 var players := {}
 var local_player_name := ""
 var is_auto_test := false
-var test_events: int = 1
 
 var resources := {}
 var capture_points := {}

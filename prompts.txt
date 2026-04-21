@@ -7,9 +7,5 @@ Agent will read the logs, check if there are problems, fix the problems, stop al
 
 skills.md is meant to list commands that can be run to start and manage the server and clients (and logs).
 game.md is meant to describe the game that will be developed.
-events.md lists what events should happen in sequence when testing the game (when implementing or updating the mock player, this file needs to be taken into consideration).
+tests.json should list all things that teh mockplayers should do when running automatic gametesting ass well as otehr things that needs to be verified (e.g did the server and clinets start,did a player win and teh game end? )
 
-tests.md should list what to verify, keyed to events.md (whether the events in events.md happened or not).
-
-Start by reading all files in this repo, then come with suggestions for improvements to the .md files, then make the game, then use the commands in skills.md to start the server and the two clients (we will run server and both clients locally from this pc for now but the game should eventually be possible to deploy so that server is on a pc open to the internet and both clients can connect to it over internet).
-Run for maximum 5 iterations: extract logs, fix errors, repeat the loop until done or not asked for more.

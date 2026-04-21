@@ -1,56 +1,87 @@
 #!/usr/bin/env bash
-# After ./run_test.sh completes the auto-test (~60–120s), run this to assert log markers.
-# Exits 0 if client logs look good for 3D texture validation; 1 otherwise.
+# Verify that the automated test run succeeded by checking markers from tests.json.
+# For each entry in tests.json -> events[]: assert the marker appears in each log file
+#   listed in its `logs` array.
+# For each entry in tests.json -> other_tests[]: run the implementation command and
+#   assert exit 0.
+# Exits 0 if everything passes, 1 otherwise.
 
-set -euo pipefail
+set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-BAD_PATTERN='TEST_3D_TEXTURE_MISSING|TEST_3D_TEXTURES_BAD|TEST_3D_TEXTURE_LOAD_FAILED|TEST_3D_UNIT_HEIGHT_INVALID|TEST_SERVER_UNIT_POSITION_INVALID|TEST_TEXTURE_PATH_FAIL'
+TESTS_JSON="tests.json"
+if [[ ! -f "$TESTS_JSON" ]]; then
+  echo "FAIL: $TESTS_JSON not found"
+  exit 1
+fi
+
 FAIL=0
+PASS=0
 
-for f in logs/client_A.log logs/client_B.log; do
-	if [[ ! -f "$f" ]]; then
-		echo "FAIL: $f not found (run ./run_test.sh first)"
-		FAIL=1
-		continue
-	fi
-	if grep -E "$BAD_PATTERN" "$f" >/dev/null 2>&1; then
-		echo "FAIL: invalid markers in $f:"
-		grep -E "$BAD_PATTERN" "$f" || true
-		FAIL=1
-	fi
+# Emit "marker<TAB>log_basename" lines for every (event, log) pair.
+mapfile -t EVENT_CHECKS < <(python3 -c '
+import json,sys
+with open("tests.json") as f:
+    d=json.load(f)
+for e in d.get("events",[]):
+    m=e.get("marker","")
+    for lg in e.get("logs",[]):
+        print(m+"\t"+lg)
+')
+
+echo "=== Log-marker checks (from tests.json events[]) ==="
+for row in "${EVENT_CHECKS[@]}"; do
+  marker="${row%%$'\t'*}"
+  log="${row##*$'\t'}"
+  path="logs/$log"
+  if [[ ! -f "$path" ]]; then
+    echo "FAIL: log file missing: $path (need marker $marker)"
+    FAIL=$((FAIL+1))
+    continue
+  fi
+  if grep -q -- "$marker" "$path"; then
+    echo "ok   : $marker in $log"
+    PASS=$((PASS+1))
+  else
+    echo "FAIL : $marker missing in $log"
+    FAIL=$((FAIL+1))
+  fi
 done
 
-if [[ -f logs/client_A.log ]] && ! grep -q "TEST_3D_TEXTURES_OK" logs/client_A.log; then
-	echo "FAIL: logs/client_A.log must contain TEST_3D_TEXTURES_OK (3D auto-test not finished?)"
-	FAIL=1
-fi
-if [[ -f logs/client_B.log ]] && ! grep -q "TEST_3D_TEXTURES_OK" logs/client_B.log; then
-	echo "FAIL: logs/client_B.log must contain TEST_3D_TEXTURES_OK"
-	FAIL=1
-fi
-if [[ -f logs/client_A.log ]] && ! grep -q "TEST_3D_CLIENT_UNITS_SPAWNED: units=40" logs/client_A.log; then
-	echo "FAIL: logs/client_A.log must contain TEST_3D_CLIENT_UNITS_SPAWNED: units=40 (3D units not spawned?)"
-	FAIL=1
-fi
-if [[ -f logs/client_B.log ]] && ! grep -q "TEST_3D_CLIENT_UNITS_SPAWNED: units=40" logs/client_B.log; then
-	echo "FAIL: logs/client_B.log must contain TEST_3D_CLIENT_UNITS_SPAWNED: units=40"
-	FAIL=1
-fi
+echo ""
+echo "=== other_tests (from tests.json other_tests[]) ==="
+mapfile -t OTHER_TESTS < <(python3 -c '
+import json,sys
+with open("tests.json") as f:
+    d=json.load(f)
+for t in d.get("other_tests",[]):
+    desc=t.get("description_of_test","")
+    impl=t.get("implementation","")
+    # Use a separator unlikely to occur in either field.
+    print(desc+"\x1f"+impl)
+')
 
-if [[ -f logs/server.log ]] && ! grep -q "TEST_GROUP_FORMATION: server" logs/server.log; then
-	echo "FAIL: logs/server.log must contain TEST_GROUP_FORMATION (group formation RPC)"
-	FAIL=1
-fi
-for f in logs/client_A.log logs/client_B.log; do
-	if [[ -f "$f" ]] && ! grep -q "TEST_GROUP_FORMATION: client" "$f"; then
-		echo "FAIL: $f must contain TEST_GROUP_FORMATION: client (events 1 mock)"
-		FAIL=1
-	fi
+for row in "${OTHER_TESTS[@]}"; do
+  desc="${row%%$'\x1f'*}"
+  impl="${row##*$'\x1f'}"
+  echo "--- $desc"
+  if bash -c "$impl" >/dev/null 2>&1; then
+    echo "ok   : $desc"
+    PASS=$((PASS+1))
+  else
+    echo "FAIL : $desc"
+    echo "      cmd: $impl"
+    FAIL=$((FAIL+1))
+  fi
 done
 
+echo ""
+echo "=== Summary ==="
+echo "Passed: $PASS"
+echo "Failed: $FAIL"
 if [[ "$FAIL" -eq 0 ]]; then
-	echo "OK: client logs contain TEST_3D_TEXTURES_OK, TEST_3D_CLIENT_UNITS_SPAWNED (40 units), and TEST_GROUP_FORMATION; no texture/height invalid markers."
+  echo "OK"
+  exit 0
 fi
-exit "$FAIL"
+exit 1

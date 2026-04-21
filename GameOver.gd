@@ -16,6 +16,6 @@ func _ready():
 		info_label.text = "Server: Match complete."
 
 func _disconnect():
-	print("TEST_012: Client disconnecting after game over")
+	print("TEST_CLIENT_DISCONNECT: Client disconnecting after game over")
 	multiplayer.multiplayer_peer.close()
 	get_tree().quit()

@@ -1,5 +1,7 @@
 # Project Skills & Scripting
 
+All automated-test behaviour is defined in `tests.json`. The MockPlayer reads it and executes the `action`s for its player; `verify_test_logs.sh` scrapes every `events[].marker` and runs every `other_tests[].implementation`.
+
 ## [Skill: Run Server]
 Starts the Godot dedicated server in headless mode (no rendering, no local player).
 **Command:**
@@ -8,27 +10,28 @@ mkdir -p logs
 godot --headless --path . -- --server > logs/server.log 2>&1 & echo $! > logs/server.pid
 ```
 
-## [Skill: Run Client A (events N)]
-Starts Client A with auto-test mock player. Use `--events=1` (default) or `--events=2` for the event sequence. Optional: `--host=IP` or env `GODOT_SERVER_HOST` to connect to a remote server (default: localhost).
+## [Skill: Run Client A]
+Starts Client A with the auto-test MockPlayer. Optional: `--host=IP` or env `GODOT_SERVER_HOST` to connect to a remote server (default: localhost).
 **Command:**
 ```bash
-godot --rendering-driver opengl3 --path . -- --client --name=A --auto-test --events=1 > logs/client_A.log 2>&1 & echo $! > logs/client_A.pid
+godot --rendering-driver opengl3 --path . -- --client --name=A --auto-test > logs/client_A.log 2>&1 & echo $! > logs/client_A.pid
 ```
-**Remote server:** add `--host=192.168.1.10` (or `GODOT_SERVER_HOST=192.168.1.10`) to connect to another machine.
 
-## [Skill: Run Client B (events N)]
-Starts Client B with auto-test mock player. Use `--events=1` or `--events=2`. Optional: `--host=IP` or `GODOT_SERVER_HOST` for remote server.
+## [Skill: Run Client B]
+Starts Client B with the auto-test MockPlayer. Optional: `--host=IP` or `GODOT_SERVER_HOST` for a remote server.
 **Command:**
 ```bash
-godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test --events=1 > logs/client_B.log 2>&1 & echo $! > logs/client_B.pid
+godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test > logs/client_B.log 2>&1 & echo $! > logs/client_B.pid
 ```
 
 ## [Skill: Clean & Kill]
-Stops Godot engine instances (matches `--path` only; safe when the repo path contains `godot`) and clears old logs.
+Stops dedicated server / client game processes only (does not kill the Godot editor). Clears old logs.
 **Command:**
 ```bash
-pkill -f '[g]odot.*--path' || true
-pkill -f 'Godot.*--path' || true
+pkill -f -- '[g]odot.*-- --server' || true
+pkill -f -- 'Godot.*-- --server' || true
+pkill -f -- '[g]odot.*-- --client' || true
+pkill -f -- 'Godot.*-- --client' || true
 rm -rf logs/*.log logs/*.pid
 ```
 
@@ -39,16 +42,20 @@ Search logs for test markers.
 grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 ```
 
-## [Skill: Run Full Test (events N)]
-Composite: clean, start server, start both clients with `--events=1` or `--events=2`.
-**Command (events 1):**
+## [Skill: Run Full Test]
+Composite: clean, start server, start both auto-test clients.
+**Command:**
 ```bash
-pkill -f '[g]odot.*--path' || true; pkill -f 'Godot.*--path' || true; rm -rf logs/*.log logs/*.pid
-mkdir -p logs
-godot --headless --path . -- --server > logs/server.log 2>&1 & echo $! > logs/server.pid
-sleep 3
-godot --rendering-driver opengl3 --path . -- --client --name=A --auto-test --events=1 > logs/client_A.log 2>&1 & echo $! > logs/client_A.pid
-sleep 2
-godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test --events=1 > logs/client_B.log 2>&1 & echo $! > logs/client_B.pid
+./run_test.sh
 ```
-**Run events 2 test:** use `--events=2` for both client commands.
+Then wait until `TEST_GAME_OVER` appears in `logs/server.log` (`./wait_for_test_end.sh`), and verify:
+```bash
+./verify_test_logs.sh
+```
+
+## [Skill: Run Full Test with Remote debugging]
+Open the project in the Godot editor and enable **Debug → Keep Debug Server Open**, then from the repo root:
+```bash
+./run_test.sh --remote-debug
+```
+Optional: `./run_test.sh --remote-debug --server-window` for a visible server window. Use **Debugger → session** and **Scene → Remote** in the editor to inspect each running process.

@@ -1,47 +1,92 @@
 # Automated RTS — Godot 4.6
 
-A minimal multiplayer RTS where two players each control **two armies** on a 2D arena. Each army has 10 soldiers in a formation; you select and move armies, capture **Stables** and **Blacksmith** points (producing horses and spears), and win by routing both of the opponent’s armies. If an army sits at a capture point for 5 seconds with no combat, it automatically seeks and follows the closest enemy army.
-<img width="1915" height="1054" alt="image" src="https://github.com/user-attachments/assets/c8d8ca0a-c531-4e66-88d1-19060a02b6ad" />
+A minimal multiplayer RTS where two players each control **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture two control points (**Stables** and **Blacksmith**) that produce horses and spears. Armies have a **stance**: `defensive` (only moves when ordered) or `aggressive` (the server retargets the army to its closest enemy every second). You win when every one of your opponent's armies has routed.
 
+<img width="1915" height="1054" alt="image" src="https://github.com/user-attachments/assets/c8d8ca0a-c531-4e66-88d1-19060a02b6ad" />
 
 ## Agent-Driven Development
 
-This project is designed to be developed and tested iteratively by an AI agent (e.g. Cursor Agent mode). The workflow is driven by a set of markdown files:
+The game can be played by humans, but it is also fully **automatable** so an AI agent (e.g. Cursor Agent) can verify that everything works end to end without a human in the loop. A dedicated server plus two client processes are launched; the two clients are driven by a `MockPlayer` that reads a scripted test from `tests.json` and performs each action in order. Everything relevant is printed to log files with unique `TEST_*` markers, so a verifier script can assert the run succeeded.
 
 | File | Purpose |
 |------|---------|
-| `prompts.txt` | Master instructions for the agent: read all files, improve docs, build the game, run automated tests, read logs, fix errors, repeat. Point the agent here to start a full development cycle. |
-| `game.md` | Game design document. Architecture, scenes, unit stats, army system, capture points, resources, controls, rout/win and seek-enemy rules. The agent implements the game from this spec. |
-| `events.md` | Ordered sequence of events in an automated test (connect, ready, spawn armies and capture points, select/move, combat, capture, resources, seek enemy, rout, game over, disconnect). Each step has a `TEST_XXX` log marker. |
-| `tests.md` | Checklist of test markers from `events.md` and which log file(s) they appear in. The agent uses this to verify pass/fail. |
-| `skills.md` | Shell commands for starting the server, clients, managing logs, and cleanup. The agent runs these directly. |
+| `prompts.txt` | Master instructions for the agent. |
+| `game.md` | Game design document. |
+| `tests.json` | Single source of truth for the automated test — every event to verify, every action the MockPlayer must perform, and extra standalone headless checks. |
+| `skills.md` | Shell commands for starting/stopping server + clients and collecting logs. |
+| `run_test.sh` / `verify_test_logs.sh` | Start the match and then verify the run against `tests.json`. |
 
-### How to use with an agent
+### Test format (`tests.json`)
 
-1. Open the project in Cursor (or similar).
-2. Switch to Agent mode.
-3. Ask the agent to read the repo and follow the instructions in `prompts.txt`.
-4. The agent will read the `.md` files, update docs as needed, implement from `game.md`, run server + two mock-player clients (using `skills.md`), check logs for the `TEST_` markers in `tests.md`, fix issues, and repeat until tests pass.
+```json
+{
+  "events": [
+    {"description": "...", "marker": "TEST_XXX", "logs": ["server.log"]},
+    {"description": "...", "marker": "TEST_YYY", "logs": ["client_A.log"],
+     "action": {"player": "A", "type": "select_army", "army_index": 0}}
+  ],
+  "other_tests": [
+    {"description_of_test": "...", "implementation": "<shell command>"}
+  ]
+}
+```
 
-### Adding new features
+- Each `events[]` entry must have a `marker` that eventually shows up in every log file listed in `logs`.
+- Events with an `action` block are **executed by the MockPlayer** on the client whose `player` name matches; events without `action` are purely log-checked (they depend only on server/game behavior).
+- Each `other_tests[]` entry is an arbitrary shell command; the verifier runs it and requires exit code 0.
 
-1. Update `game.md` with the new feature.
-2. Add the event step(s) and markers to `events.md`.
-3. Add the test row(s) to `tests.md`.
-4. Ask the agent to re-read and implement; it will run the same build–test–fix loop.
+Supported MockPlayer action types:
+- `press_ready` — click the Lobby Ready button.
+- `select_army` (`army_index`) — select one of the player's armies.
+- `move_army_to_cp` (`army_index`, `cp_id`) — send the selected army to `Stables` or `Blacksmith`.
+- `set_all_aggressive` (optional `wait_for_controls_cp`) — wait (polled) until the player controls the given CP, then flip all that player's armies to `aggressive`.
 
----
+### Event sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Srv as Server
+    participant A as ClientA
+    participant B as ClientB
+    Srv-->>Srv: TEST_SERVER_START
+    A->>Srv: connect (TEST_CLIENT_A_START)
+    B->>Srv: connect (TEST_CLIENT_B_START)
+    A->>Srv: ready (TEST_A_READY)
+    B->>Srv: ready (TEST_B_READY)
+    Srv-->>A: world load (TEST_GAME_START)
+    Srv-->>B: world load
+    Srv-->>Srv: spawn 4 armies (TEST_ARMIES_SPAWNED)
+    A->>A: select army 1 (TEST_A_SELECT_ARMY1)
+    A->>Srv: move army 1 to Stables (TEST_A_MOVE_TO_STABLES)
+    B->>B: select army 1 (TEST_B_SELECT_ARMY1)
+    B->>Srv: move army 1 to Blacksmith (TEST_B_MOVE_TO_BLACKSMITH)
+    Srv-->>Srv: Stables captured by A (TEST_A_CONTROLS_STABLES)
+    Srv-->>Srv: Blacksmith captured by B (TEST_B_CONTROLS_BLACKSMITH)
+    A->>Srv: all armies aggressive (TEST_A_AGGRESSIVE)
+    B->>Srv: all armies aggressive (TEST_B_AGGRESSIVE)
+    loop every 1 s while aggressive
+        Srv-->>Srv: retarget each aggressive army to closest enemy
+    end
+    Srv-->>Srv: one player left (TEST_GAME_OVER)
+```
 
 ## Requirements
 
-- **Godot 4.6.x** (standalone binary or package manager). Examples use `godot`; replace with your binary path (e.g. `~/Downloads/Godot_v4.6.1-stable_linux.x86_64`).
+- **Godot 4.6.x** (standalone binary). Examples use `godot`; if `godot` is not in PATH, set `GODOT_BIN=/path/to/Godot_v4.6.1-stable_linux.x86_64`.
+- `python3` (used by `verify_test_logs.sh` to parse `tests.json`).
 
-## Architecture
+## Running the automated test
 
-- **Dedicated server** (headless, no player) and **two clients** on port 8910.
-- Server is authoritative for movement, combat, capture points, resources, and seek-enemy logic.
+```bash
+./run_test.sh                  # start server + two auto-test clients (MockPlayer)
+# wait until server.log contains TEST_GAME_OVER (~60–180s)
+./verify_test_logs.sh          # check every tests.json marker + run other_tests
+```
 
-## How to Test Manually
+`./run_test.sh --no_test` launches two human-playable clients instead (no MockPlayer).
+
+## How to test manually
 
 ### 1. Start the server
 
@@ -49,90 +94,58 @@ This project is designed to be developed and tested iteratively by an AI agent (
 godot --headless --path . -- --server
 ```
 
-Server listens on port 8910. You should see `TEST_001: Dedicated server started on port 8910`.
+Server listens on port 8910 and prints `TEST_SERVER_START: Dedicated server started on port 8910`.
 
-### 2. Start your client
+### 2. Start a client
 
 ```bash
 godot --rendering-driver opengl3 --path . -- --client --name=A
 ```
 
-By default the client connects to **localhost**. To connect to a server on another machine (or explicitly to localhost), use `--host=IP` or set `GODOT_SERVER_HOST`:
+By default the client connects to localhost. Override with `--host=IP` or `GODOT_SERVER_HOST=IP`.
+
+**In game:**
+- **Left-click** an army to select it (yours only). Drag with LMB for a marquee selection.
+- **Right-click** to move the selected army/armies (drag RMB for a line formation).
+- **Arrow keys** or **Q / E** to rotate the selected army.
+
+### 3. Stop everything (leaves the Godot editor alone)
 
 ```bash
-godot --rendering-driver opengl3 --path . -- --client --name=A --host=192.168.1.10
-# or same machine:
-godot --rendering-driver opengl3 --path . -- --client --name=A --host=127.0.0.1
-```
-
-The match runs in **3D** (`World.tscn`): tilted camera, zoom (scroll), pan (drag or WASD), and click-to-move via raycast on the ground. The dedicated server runs the same 3D simulation headless.
-
-Use `--rendering-driver opengl3` to avoid Vulkan issues when running several Godot instances.
-
-- **Lobby**: Enter your name (pre-filled from `--name=` or "Unknown Player"), then click **Ready** when you want to start.
-- **In game**:
-  - **Left-click** near an army to select it (yours only).
-  - **Right-click** to move the selected army.
-  - **Arrow keys** or **Q / E** to rotate the selected army.
-- **Top bar**: left side shows **Stables / Blacksmith** (capture points you control) and **Horses / Spears** (inventory); right side shows **Player: &lt;your name&gt;**.
-- Two **capture points** (Stables, Blacksmith) start unowned; when only your units are near one, you capture it. Stables produce horses and Blacksmith produces spears every 2 seconds.
-- If your army stays at a capture point for **5 seconds with no combat** anywhere, it will automatically move toward and follow the closest enemy army (until you give a new move order).
-- Armies **auto-attack** enemies in range. An army below 30% strength **routs**; you lose when **both** your armies have routed.
-
-### 3. Second player
-
-You need two clients for a match.
-
-- **Both human**: start a second client with `--client --name=B` (no `--auto-test`). Both click Ready and play.
-- **You vs bot**: start the second client with `--client --name=B --auto-test`. MockPlayer will ready, select its armies, and move them toward the capture points; you play as A.
-- **Fully automated**: start both clients with `--client --name=A --auto-test` and `--client --name=B --auto-test`. The full match runs with no input.
-
-### 4. Stop
-
-```bash
-# Match engine only (do not use bare `pkill -f godot` from a cwd under .../godot/).
-pkill -f '[g]odot.*--path' || true
-pkill -f 'Godot.*--path' || true
+pkill -f -- '[g]odot.*-- --server' || true
+pkill -f -- '[g]odot.*-- --client' || true
 ```
 
 ## Logging
 
-To record logs (e.g. for automated runs):
+`./run_test.sh` writes:
 
-```bash
-mkdir -p logs
-
-godot --headless --path . -- --server > logs/server.log 2>&1 &
-godot --rendering-driver opengl3 --path . -- --client --name=A --auto-test > logs/client_A.log 2>&1 &
-godot --rendering-driver opengl3 --path . -- --client --name=B --auto-test > logs/client_B.log 2>&1 &
+```
+logs/server.log
+logs/client_A.log
+logs/client_B.log
 ```
 
-Then inspect markers:
+Marker overview:
 
 ```bash
 grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 ```
 
-See `tests.md` for the full list of markers (e.g. `TEST_007`, `TEST_CAPTURE_SPAWN`, `TEST_CAPTURE`, `TEST_RESOURCE`, `TEST_SEEK_ENEMY`, `TEST_ROUT`, `TEST_011`, etc.).
+## Architecture
 
-## run_test.sh
+- Dedicated **headless** server (authoritative for movement, combat, capture points, resources, and the aggressive-seek logic) and two **3D** clients on port 8910.
+- Map is `1280 × 720` on XZ with terrain ground collision; 3D camera pitches from bird's-eye to near-horizontal as you zoom in.
+- `Army3D` has a `stance` field; when `aggressive` the server retargets the army to its closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).
 
-From the project root you can run:
+## Remote debugging
+
+Open the project in the Godot editor, enable **Debug → Keep Debug Server Open** (default `tcp://127.0.0.1:6007`), then:
 
 ```bash
-./run_test.sh              # auto-test with events 1 (default)
-./run_test.sh --events=2   # auto-test with events 2 (draft sequence)
-./run_test.sh --no_test    # two human-play clients (no mock)
+./run_test.sh --remote-debug
+./run_test.sh --remote-debug --server-window   # also give the server a visible window
+GODOT_REMOTE_DEBUG=tcp://127.0.0.1:6007 ./run_test.sh
 ```
 
-**For the two game windows to appear**, run the script from a **terminal that has a display** (e.g. gnome-terminal, not a headless SSH session). The script starts the server in the background, then two client processes; those clients need a display to open their windows. If you run the script from an IDE "Run" or a session that exits immediately, the client processes may not get a display or may be torn down. Set `GODOT_BIN` to the full path to your Godot executable if `godot` is not in your PATH.
-
-## Test combinations
-
-| Server | Client A | Client B | Use case |
-|--------|----------|----------|----------|
-| `--server` | `--client --name=A` | `--client --name=B` | Both manual |
-| `--server` | `--client --name=A` | `--client --name=B --auto-test` | You vs bot |
-| `--server` | `--client --name=A --auto-test` | `--client --name=B` | Bot vs you |
-| `--server` | `--client --name=A --auto-test` | `--client --name=B --auto-test` | Fully automated |
-| `--server` | `--client --name=A` | `--client --name=B` | Same as above (3D world) |
+Use **Debugger → session** and **Scene → Remote** in the editor to inspect any of the three live processes.

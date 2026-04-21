@@ -1,51 +1,58 @@
 extends Node
+## JSON-driven automated player. Parses res://tests.json, filters events whose
+## `action.player` matches this client's name, and executes the actions in order.
+## Each step emits its event `marker` to the client's log so verify_test_logs.sh can find it.
 
-const _GroupFormation = preload("res://GroupFormation.gd")
+enum Phase { WAIT_FOR_LOBBY, WAIT_FOR_WORLD, RUN_ACTIONS, DONE }
 
-enum State {
-	WAIT_FOR_LOBBY,
-	IN_LOBBY,
-	WAIT_FOR_WORLD,
-	SELECT_ARMY_1,
-	MOVE_ARMY_1,
-	SELECT_ARMY_2,
-	MOVE_ARMY_2,
-	GROUP_FORMATION_TEST,
-	WAIT_FOR_COMBAT,
-	DONE,
-	# Events 2
-	E2_P1_MOVE_1_STABLES,
-	E2_P1_MOVE_2_BLACKSMITH,
-	E2_P1_MOVE_1_BLACKSMITH,
-	E2_P1_TRY_DRAFT,
-	E2_P1_WAIT_RESOURCES,
-	E2_P1_DRAFT,
-	E2_P1_MOVE_DRAFTED_STABLES,
-	E2_P1_SEND_ALL_BLACKSMITH,
-	E2_P2_WAIT,
-	E2_P2_MOVE_STABLES,
-	E2_P2_SEND_ALL_BLACKSMITH
+var _phase: int = Phase.WAIT_FOR_LOBBY
+var _actions: Array = []         # Array of { marker, action }
+var _cursor: int = 0
+var _waiting: bool = false       # timers/async gate
+var _world = null
+var _lobby = null
+
+# Capture point positions mirror World.gd._spawn_capture_points().
+const CP_POSITIONS := {
+	"Stables": Vector2(1280.0 * 0.39, 720.0 * 0.28),
+	"Blacksmith": Vector2(1280.0 * 0.61, 720.0 * 0.69),
 }
 
-var state := State.WAIT_FOR_LOBBY
-var timer := 0.0
-var world = null
-var my_armies: Array = []
-
 func _ready():
-	print("MockPlayer: Automated testing active for '%s' (events=%d)" % [GameState.local_player_name, GameState.test_events])
+	print("MockPlayer: Automated testing active for '%s'" % GameState.local_player_name)
+	_load_actions_for_this_player()
 
-func _process(delta):
-	timer += delta
-	match state:
-		State.WAIT_FOR_LOBBY:
+func _load_actions_for_this_player() -> void:
+	var f := FileAccess.open("res://tests.json", FileAccess.READ)
+	if f == null:
+		push_error("MockPlayer: tests.json missing")
+		return
+	var text := f.get_as_text()
+	f.close()
+	var parsed = JSON.parse_string(text)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("MockPlayer: tests.json did not parse to a dict")
+		return
+	var events: Array = parsed.get("events", [])
+	var me: String = GameState.local_player_name
+	for e in events:
+		var act = e.get("action", null)
+		if act == null:
+			continue
+		if str(act.get("player", "")) != me:
+			continue
+		_actions.append({"marker": e.get("marker", ""), "description": e.get("description", ""), "action": act})
+	print("MockPlayer[%s]: loaded %d actions from tests.json" % [me, _actions.size()])
+
+func _process(_delta):
+	match _phase:
+		Phase.WAIT_FOR_LOBBY:
 			_check_lobby()
-		State.WAIT_FOR_WORLD:
+		Phase.WAIT_FOR_WORLD:
 			_check_world()
-		State.E2_P1_WAIT_RESOURCES:
-			_e2_p1_wait_resources()
-		State.E2_P2_WAIT:
-			_e2_p2_wait()
+		Phase.RUN_ACTIONS:
+			if not _waiting:
+				_run_next_action()
 		_:
 			pass
 
@@ -58,18 +65,10 @@ func _check_lobby():
 		return
 	for child in ui.get_children():
 		if child is Control and child.has_method("_on_ready_pressed"):
-			state = State.IN_LOBBY
-			timer = 0.0
-			print("MockPlayer: Lobby found, will press ready in 1s")
-			get_tree().create_timer(1.0).timeout.connect(_press_ready.bind(child))
+			_lobby = child
+			_phase = Phase.RUN_ACTIONS
+			print("MockPlayer: Lobby found; starting action sequence")
 			return
-
-func _press_ready(lobby):
-	if lobby and lobby.has_method("_on_ready_pressed"):
-		lobby._on_ready_pressed()
-		print("MockPlayer: Pressed ready")
-		state = State.WAIT_FOR_WORLD
-		timer = 0.0
 
 func _check_world():
 	var main = get_tree().root.get_node_or_null("Main")
@@ -80,197 +79,124 @@ func _check_world():
 		return
 	for child in level.get_children():
 		if child.has_method("get_my_armies"):
-			world = child
+			_world = child
 			print("MockPlayer: World scene detected")
-			timer = 0.0
-			if GameState.test_events == 2:
-				if GameState.local_player_name == "A":
-					state = State.E2_P1_MOVE_1_STABLES
-					get_tree().create_timer(1.5).timeout.connect(_e2_p1_start)
-				else:
-					state = State.E2_P2_WAIT
-					timer = 0.0
-			else:
-				state = State.SELECT_ARMY_1
-				get_tree().create_timer(1.5).timeout.connect(_do_select_army_1)
+			if _phase == Phase.WAIT_FOR_WORLD:
+				_phase = Phase.RUN_ACTIONS
 			return
 
-func _do_select_army_1():
-	my_armies = world.get_my_armies()
-	if my_armies.size() == 0:
-		print("MockPlayer: ERROR - no armies found!")
-		state = State.DONE
+func _run_next_action() -> void:
+	if _cursor >= _actions.size():
+		_phase = Phase.DONE
+		print("MockPlayer[%s]: all scripted actions complete" % GameState.local_player_name)
 		return
+	var entry: Dictionary = _actions[_cursor]
+	var act: Dictionary = entry["action"]
+	var t: String = str(act.get("type", ""))
+	# Any action beyond press_ready needs the World scene live.
+	if t != "press_ready" and _world == null:
+		_phase = Phase.WAIT_FOR_WORLD
+		_waiting = true
+		_check_world()
+		if _world != null:
+			_phase = Phase.RUN_ACTIONS
+			_waiting = false
+			# fall through, re-run
+		else:
+			# poll next frame
+			get_tree().create_timer(0.2).timeout.connect(_resume)
+			return
+	match t:
+		"press_ready": _do_press_ready(entry)
+		"select_army": _do_select_army(entry)
+		"move_army_to_cp": _do_move_army_to_cp(entry)
+		"set_all_aggressive": _do_set_all_aggressive(entry)
+		_:
+			push_warning("MockPlayer: unknown action type '%s'" % t)
+			_advance()
 
-	my_armies[0].select()
-	print("MockPlayer: Selected army '%s'" % my_armies[0].army_id)
-	state = State.MOVE_ARMY_1
-	get_tree().create_timer(0.5).timeout.connect(_do_move_army_1)
+func _resume() -> void:
+	_waiting = false
 
-func _do_move_army_1():
-	if my_armies.size() == 0 or my_armies[0].is_routed:
-		state = State.DONE
+func _advance() -> void:
+	_cursor += 1
+
+func _do_press_ready(entry: Dictionary) -> void:
+	if _lobby == null or not _lobby.has_method("_on_ready_pressed"):
+		# Wait a frame and retry.
+		_waiting = true
+		get_tree().create_timer(0.2).timeout.connect(_resume)
 		return
+	# The Lobby prints its own ready marker. Small gate then press.
+	_waiting = true
+	get_tree().create_timer(1.0).timeout.connect(func():
+		_lobby._on_ready_pressed()
+		print("MockPlayer[%s]: pressed Ready" % GameState.local_player_name)
+		_advance()
+		# After pressing ready, move into world-wait phase so subsequent actions see _world.
+		_phase = Phase.WAIT_FOR_WORLD
+		# Resume world-polling each frame; _run_next_action will re-check.
+		_waiting = false
+	)
 
-	var target = Vector2(520, 220) if GameState.local_player_name == "A" else Vector2(530, 230)
-	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
-	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[0].army_id, int(target.x), int(target.y)])
-	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, target)
+func _my_armies() -> Array:
+	if _world == null:
+		return []
+	return _world.get_my_armies()
 
-	state = State.SELECT_ARMY_2
-	get_tree().create_timer(0.5).timeout.connect(_do_select_army_2)
-
-func _do_select_army_2():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2:
-		print("MockPlayer: Only %d armies available, skipping second" % my_armies.size())
-		state = State.WAIT_FOR_COMBAT
+func _do_select_army(entry: Dictionary) -> void:
+	var act: Dictionary = entry["action"]
+	var idx: int = int(act.get("army_index", 0))
+	var armies := _my_armies()
+	if idx >= armies.size():
+		# Retry shortly; armies may still be spawning.
+		_waiting = true
+		get_tree().create_timer(0.3).timeout.connect(_resume)
 		return
+	# Deselect all first.
+	for a in armies:
+		if a.is_selected:
+			a.deselect()
+	armies[idx].select()
+	print("%s: MockPlayer[%s] selected army '%s' (index=%d)" % [
+		entry.get("marker", ""), GameState.local_player_name, armies[idx].army_id, idx
+	])
+	_advance()
 
-	my_armies[0].deselect()
-	my_armies[1].select()
-	print("MockPlayer: Selected army '%s'" % my_armies[1].army_id)
-	state = State.MOVE_ARMY_2
-	get_tree().create_timer(0.5).timeout.connect(_do_move_army_2)
-
-func _do_move_army_2():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2 or my_armies[1].is_routed:
-		state = State.WAIT_FOR_COMBAT
+func _do_move_army_to_cp(entry: Dictionary) -> void:
+	var act: Dictionary = entry["action"]
+	var idx: int = int(act.get("army_index", 0))
+	var cp_id: String = str(act.get("cp_id", ""))
+	if not CP_POSITIONS.has(cp_id):
+		push_error("MockPlayer: unknown cp_id '%s'" % cp_id)
+		_advance()
 		return
-
-	var target = Vector2(760, 480) if GameState.local_player_name == "A" else Vector2(770, 490)
-	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
-	print("%s: MockPlayer moving army '%s' to (%d,%d)" % [marker, my_armies[1].army_id, int(target.x), int(target.y)])
-	world.rpc_id(1, "_server_move_army", my_armies[1].army_id, target)
-
-	state = State.GROUP_FORMATION_TEST
-	get_tree().create_timer(0.5).timeout.connect(_test_group_formation)
-
-func _test_group_formation():
-	## Exercises `_server_move_group_formation` (merged line layout); see events.md step 9c.
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2:
-		state = State.WAIT_FOR_COMBAT
+	var target: Vector2 = CP_POSITIONS[cp_id]
+	var armies := _my_armies()
+	if idx >= armies.size():
+		_waiting = true
+		get_tree().create_timer(0.3).timeout.connect(_resume)
 		return
-	var line_start := Vector2(400, 200)
-	var line_end := Vector2(520, 300)
-	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, [my_armies[0], my_armies[1]])
-	var units: Array = pack.get("units", [])
-	var positions: Array = pack.get("positions", [])
-	if units.is_empty():
-		state = State.WAIT_FOR_COMBAT
-		return
-	var payload: Array = []
-	for i in range(units.size()):
-		var p: Vector2 = positions[i]
-		p.x = clampf(p.x, 0, 1280)
-		p.y = clampf(p.y, 0, 720)
-		payload.append({"n": str(units[i].name), "x": p.x, "y": p.y})
-	print("TEST_GROUP_FORMATION: client units=%d" % payload.size())
-	world.rpc_id(1, "_server_move_group_formation", payload)
-	state = State.WAIT_FOR_COMBAT
+	var aid: String = armies[idx].army_id
+	_world.rpc_id(1, "_server_move_army", aid, target)
+	print("%s: MockPlayer[%s] moving army '%s' to %s at (%d,%d)" % [
+		entry.get("marker", ""), GameState.local_player_name, aid, cp_id, int(target.x), int(target.y)
+	])
+	_advance()
 
-# --- Events 2: P1 (A) ---
-func _e2_p1_start():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2:
-		state = State.DONE
-		return
-	my_armies[0].select()
-	print("TEST_009_MOVE: MockPlayer moving army '%s' to Stables (520,220)" % my_armies[0].army_id)
-	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, Vector2(520, 220))
-	state = State.E2_P1_MOVE_2_BLACKSMITH
-	get_tree().create_timer(2.0).timeout.connect(_e2_p1_move_2_blacksmith)
-
-func _e2_p1_move_2_blacksmith():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2:
-		state = State.DONE
-		return
-	my_armies[0].deselect()
-	my_armies[1].select()
-	print("TEST_009_MOVE: MockPlayer moving army '%s' to Blacksmith (760,480)" % my_armies[1].army_id)
-	world.rpc_id(1, "_server_move_army", my_armies[1].army_id, Vector2(760, 480))
-	state = State.E2_P1_MOVE_1_BLACKSMITH
-	get_tree().create_timer(4.0).timeout.connect(_e2_p1_move_1_blacksmith)
-
-func _e2_p1_move_1_blacksmith():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 2:
-		state = State.DONE
-		return
-	my_armies[1].deselect()
-	my_armies[0].select()
-	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, Vector2(760, 480))
-	state = State.E2_P1_TRY_DRAFT
-	get_tree().create_timer(2.0).timeout.connect(_e2_p1_try_draft)
-
-func _e2_p1_try_draft():
-	world.request_draft_from_mock(true, true)
-	print("MockPlayer: Requested draft (horse+spear) - expect TEST_DRAFT_FAIL")
-	state = State.E2_P1_WAIT_RESOURCES
-	timer = 0.0
-
-func _e2_p1_wait_resources():
-	var my_id = multiplayer.get_unique_id()
-	var res = GameState.resources.get(my_id, GameState.resources.get(str(my_id), {}))
-	if res is Dictionary:
-		var h = res.get("horses", 0)
-		var s = res.get("spears", 0)
-		if h >= 10 and s >= 10:
-			state = State.E2_P1_DRAFT
-			get_tree().create_timer(0.5).timeout.connect(_e2_p1_draft)
-
-func _e2_p1_draft():
-	world.request_draft_from_mock(true, true)
-	print("MockPlayer: Requested draft (horse+spear) - expect TEST_DRAFT_SUCCESS")
-	state = State.E2_P1_MOVE_DRAFTED_STABLES
-	get_tree().create_timer(8.0).timeout.connect(_e2_p1_move_drafted_stables)
-
-func _e2_p1_move_drafted_stables():
-	my_armies = world.get_my_armies()
-	if my_armies.size() < 3:
-		state = State.E2_P1_SEND_ALL_BLACKSMITH
-		get_tree().create_timer(5.0).timeout.connect(_e2_p1_send_all_blacksmith)
-		return
-	my_armies[2].select()
-	print("MockPlayer: Moving drafted army '%s' to Stables" % my_armies[2].army_id)
-	world.rpc_id(1, "_server_move_army", my_armies[2].army_id, Vector2(520, 220))
-	state = State.E2_P1_SEND_ALL_BLACKSMITH
-	get_tree().create_timer(25.0).timeout.connect(_e2_p1_send_all_blacksmith)
-
-func _e2_p1_send_all_blacksmith():
-	my_armies = world.get_my_armies()
-	var target = Vector2(760, 480)
-	for a in my_armies:
-		if a and is_instance_valid(a) and not a.is_routed:
-			world.rpc_id(1, "_server_move_army", a.army_id, target)
-	state = State.DONE
-
-# --- Events 2: P2 (B) ---
-func _e2_p2_wait():
-	if timer < 22.0:
-		return
-	state = State.E2_P2_MOVE_STABLES
-	get_tree().create_timer(0.5).timeout.connect(_e2_p2_move_stables)
-
-func _e2_p2_move_stables():
-	my_armies = world.get_my_armies()
-	if my_armies.size() == 0:
-		state = State.E2_P2_SEND_ALL_BLACKSMITH
-		get_tree().create_timer(35.0).timeout.connect(_e2_p2_send_all_blacksmith)
-		return
-	my_armies[0].select()
-	print("TEST_009_MOVE_B: MockPlayer moving army '%s' to Stables (530,230)" % my_armies[0].army_id)
-	world.rpc_id(1, "_server_move_army", my_armies[0].army_id, Vector2(530, 230))
-	state = State.E2_P2_SEND_ALL_BLACKSMITH
-	get_tree().create_timer(45.0).timeout.connect(_e2_p2_send_all_blacksmith)
-
-func _e2_p2_send_all_blacksmith():
-	my_armies = world.get_my_armies()
-	var target = Vector2(770, 490)
-	for a in my_armies:
-		if a and is_instance_valid(a) and not a.is_routed:
-			world.rpc_id(1, "_server_move_army", a.army_id, target)
-	state = State.DONE
+func _do_set_all_aggressive(entry: Dictionary) -> void:
+	var act: Dictionary = entry["action"]
+	var wait_cp: String = str(act.get("wait_for_controls_cp", ""))
+	var me: String = GameState.local_player_name
+	if wait_cp != "":
+		var owner = GameState.capture_points.get(wait_cp, "")
+		if str(owner) != me:
+			# Not controlled yet, poll again.
+			_waiting = true
+			get_tree().create_timer(0.5).timeout.connect(_resume)
+			return
+	_world.rpc_id(1, "_server_set_all_armies_aggressive")
+	print("%s: MockPlayer[%s] requested all-armies aggressive (after controlling %s)" % [
+		entry.get("marker", ""), me, wait_cp
+	])
+	_advance()
