@@ -36,6 +36,10 @@ var _mesh: MeshInstance3D
 var _material: StandardMaterial3D
 var _logged_height_invalid := false
 var _last_facing_y: float = 0.0
+## Sprite facing for the billboarded quad. The spearman PNG is authored facing
+## left, so we flip the mesh's X scale only when this is true. Updated whenever
+## the soldier has non-zero horizontal motion; persists while idle.
+var _facing_right: bool = false
 var _selected := false
 var _texture_loaded := false
 var _logged_position_invalid := false
@@ -262,16 +266,36 @@ func _update_facing():
 			sync_target_position.x - global_position.x,
 			sync_target_position.z - global_position.z
 		)
+	# Update the persistent facing only when horizontal motion is meaningful;
+	# idle soldiers keep whichever direction they last faced.
+	var prev_facing := _facing_right
+	if dir_xz.x > 0.01:
+		_facing_right = true
+	elif dir_xz.x < -0.01:
+		_facing_right = false
+	if _facing_right != prev_facing:
+		print("TEST_FACING_FLIP: unit=%s owner=%s army=%s to=%s velocity=(%.1f,%.1f)" % [
+			name, owner_name, army_id,
+			"right" if _facing_right else "left",
+			velocity.x, velocity.z
+		])
 	if _texture_loaded and _material != null and _material.billboard_mode == BaseMaterial3D.BILLBOARD_FIXED_Y:
+		# The billboard shader overrides node transform every frame, so we can't
+		# mirror the sprite via `_mesh.scale.x`. Flip UVs on the material
+		# instead — this is respected because it changes which texels are
+		# sampled, not how the quad is oriented.
 		_mesh.rotation = Vector3.ZERO
-		if dir_xz.length() > 0.01:
-			_mesh.scale.x = -1.0 if dir_xz.x < -0.01 else 1.0
+		_mesh.scale.x = 1.0
+		if _facing_right:
+			_material.uv1_scale = Vector3(-1.0, 1.0, 1.0)
+			_material.uv1_offset = Vector3(1.0, 0.0, 0.0)
+		else:
+			_material.uv1_scale = Vector3(1.0, 1.0, 1.0)
+			_material.uv1_offset = Vector3(0.0, 0.0, 0.0)
 		return
-	if dir_xz.length() > 0.01:
-		if dir_xz.x > 0.01:
-			_last_facing_y = FACING_ROTATION_POS_X
-		elif dir_xz.x < -0.01:
-			_last_facing_y = FACING_ROTATION_NEG_X
+	# Non-textured fallback (box mesh): derive yaw from the same state so the
+	# placeholder cube faces the same way the sprite would.
+	_last_facing_y = FACING_ROTATION_POS_X if _facing_right else FACING_ROTATION_NEG_X
 	_mesh.rotation.y = _last_facing_y
 	_mesh.scale.x = 1.0
 

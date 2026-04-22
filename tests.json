@@ -107,5 +107,11 @@
       "description_of_test": "Headless 3D goal arrival: Army3D.move_army drives every soldier's sync_target to within 3px on XZ",
       "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
     }
+  ],
+  "ad_hoc_tests": [
+    {
+      "description_of_test": "Sprite facing flip: ask a client-side Unit3D to move right, then left, then stand still. Every time _facing_right changes the code prints 'TEST_FACING_FLIP: ...'. The headless harness asserts the material's UV flip is applied correctly (uv1_scale.x < 0 + uv1_offset.x = 1 when facing right, unflipped when facing left, and facing persists while idle). Not run by verify_test_logs.sh; invoke manually when you suspect the soldier sprites are not mirroring.",
+      "implementation": "godot --headless --path . -s test_facing_flip.gd 2>&1 | grep -q 'TEST_FACING_FLIP_OK'"
+    }
   ]
 }
