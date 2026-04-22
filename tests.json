@@ -1,0 +1,111 @@
+{
+  "description": "Single automated match test. Events are logged by server/clients and scraped from logs. Events with an 'action' block are executed by the MockPlayer bot on the matching client.",
+  "events": [
+    {
+      "description": "Dedicated server starts and listens on port 8910",
+      "marker": "TEST_SERVER_START",
+      "logs": ["server.log"]
+    },
+    {
+      "description": "Client A connects to the server",
+      "marker": "TEST_CLIENT_A_START",
+      "logs": ["server.log", "client_A.log"]
+    },
+    {
+      "description": "Client B connects to the server",
+      "marker": "TEST_CLIENT_B_START",
+      "logs": ["server.log", "client_B.log"]
+    },
+    {
+      "description": "Client A clicks Ready",
+      "marker": "TEST_A_READY",
+      "logs": ["server.log", "client_A.log"],
+      "action": {"player": "A", "type": "press_ready"}
+    },
+    {
+      "description": "Client B clicks Ready",
+      "marker": "TEST_B_READY",
+      "logs": ["server.log", "client_B.log"],
+      "action": {"player": "B", "type": "press_ready"}
+    },
+    {
+      "description": "Game starts (World scene loads on both clients)",
+      "marker": "TEST_GAME_START",
+      "logs": ["server.log"]
+    },
+    {
+      "description": "Server spawns two armies of 10 soldiers for each player",
+      "marker": "TEST_ARMIES_SPAWNED",
+      "logs": ["server.log"]
+    },
+    {
+      "description": "Player A selects its first army",
+      "marker": "TEST_A_SELECT_ARMY1",
+      "logs": ["client_A.log"],
+      "action": {"player": "A", "type": "select_army", "army_index": 0}
+    },
+    {
+      "description": "Player A sends its first army to the Stables capture point",
+      "marker": "TEST_A_MOVE_TO_STABLES",
+      "logs": ["client_A.log"],
+      "action": {"player": "A", "type": "move_army_to_cp", "army_index": 0, "cp_id": "Stables"}
+    },
+    {
+      "description": "Player B selects its first army",
+      "marker": "TEST_B_SELECT_ARMY1",
+      "logs": ["client_B.log"],
+      "action": {"player": "B", "type": "select_army", "army_index": 0}
+    },
+    {
+      "description": "Player B sends its first army to the Blacksmith capture point",
+      "marker": "TEST_B_MOVE_TO_BLACKSMITH",
+      "logs": ["client_B.log"],
+      "action": {"player": "B", "type": "move_army_to_cp", "army_index": 0, "cp_id": "Blacksmith"}
+    },
+    {
+      "description": "Player A captures the Stables",
+      "marker": "TEST_A_CONTROLS_STABLES",
+      "logs": ["server.log"]
+    },
+    {
+      "description": "Player B captures the Blacksmith",
+      "marker": "TEST_B_CONTROLS_BLACKSMITH",
+      "logs": ["server.log"]
+    },
+    {
+      "description": "Once A controls Stables, Player A flips all its armies from defensive to aggressive",
+      "marker": "TEST_A_AGGRESSIVE",
+      "logs": ["server.log", "client_A.log"],
+      "action": {"player": "A", "type": "set_all_aggressive", "wait_for_controls_cp": "Stables"}
+    },
+    {
+      "description": "Once B controls Blacksmith, Player B flips all its armies from defensive to aggressive",
+      "marker": "TEST_B_AGGRESSIVE",
+      "logs": ["server.log", "client_B.log"],
+      "action": {"player": "B", "type": "set_all_aggressive", "wait_for_controls_cp": "Blacksmith"}
+    },
+    {
+      "description": "Game ends because only one player has any armies left (or the 120s match timeout fires as a safety net)",
+      "marker": "TEST_GAME_OVER",
+      "logs": ["server.log"]
+    }
+  ],
+  "other_tests": [
+    {
+      "description_of_test": "Match did not finish via timeout safety net (TEST_GAME_OVER_TIMEOUT must NOT appear — its presence means combat failed to resolve within 120s)",
+      "implementation": "! grep -q 'TEST_GAME_OVER_TIMEOUT' logs/server.log"
+    },
+    {
+      "description_of_test": "Headless texture paths: red/blue spearman PNGs load as ImageTexture (same path logic as Unit3D)",
+      "implementation": "godot --headless --path . -s test_texture_paths.gd 2>&1 | grep -q 'TEST_TEXTURE_PATHS_OK: red_blue_png_readable'"
+    },
+    {
+      "description_of_test": "Headless 3D client spawn path: instantiating World.tscn and calling _client_spawn_armies_impl produces the expected unit count",
+      "implementation": "godot --headless --path . -s test_world3d_spawn.gd 2>&1 | grep -q 'TEST_WORLD3D_SPAWN_OK: units=2'"
+    },
+    {
+      "description_of_test": "Headless 3D goal arrival: Army3D.move_army drives every soldier's sync_target to within 3px on XZ",
+      "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
+    }
+  ]
+}

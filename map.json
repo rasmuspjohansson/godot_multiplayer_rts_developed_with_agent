@@ -1,0 +1,34 @@
+{
+  "name": "default",
+  "size": {"width": 1280, "height": 720},
+  "terrain": {
+    "type": "hills",
+    "features": [
+      {"type": "hill", "x": 640.0, "y": 360.0, "base_width": 300.0, "height": 28.0},
+      {"type": "hill", "x": 400.0, "y": 550.0, "base_width": 260.0, "height": 20.0},
+      {"type": "hill", "x": 900.0, "y": 200.0, "base_width": 240.0, "height": 22.0}
+    ]
+  },
+  "capture_points": [
+    {"id": "Stables",    "type": "Stables",    "x": 499.2, "y": 201.6},
+    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8}
+  ],
+  "player_starts": [
+    {"slot": 0, "corner": "NW", "armies": [
+      {"x": 199.68, "y": 180.0, "direction": 0.0},
+      {"x": 199.68, "y": 540.0, "direction": 0.0}
+    ]},
+    {"slot": 1, "corner": "SE", "armies": [
+      {"x": 1050.0, "y": 540.0, "direction": 3.141593},
+      {"x": 1050.0, "y": 180.0, "direction": 3.141593}
+    ]},
+    {"slot": 2, "corner": "NE", "armies": [
+      {"x": 1050.0, "y": 180.0, "direction": 3.141593},
+      {"x": 1050.0, "y": 540.0, "direction": 3.141593}
+    ]},
+    {"slot": 3, "corner": "SW", "armies": [
+      {"x": 199.68, "y": 540.0, "direction": 0.0},
+      {"x": 199.68, "y": 180.0, "direction": 0.0}
+    ]}
+  ]
+}
