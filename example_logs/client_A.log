@@ -1,0 +1,405 @@
+Godot Engine v4.6.1.stable.official.14d19694e - https://godotengine.org
+/lib/x86_64-linux-gnu/libX11.so.6: undefined symbol: XSetIOErrorExitHandler
+/lib/x86_64-linux-gnu/libxkbcommon.so.0: undefined symbol: xkb_utf32_to_keysym
+/lib/x86_64-linux-gnu/libxkbcommon.so.0: undefined symbol: xkb_keymap_key_get_mods_for_level
+OpenGL API 4.6 (Core Profile) Mesa 21.2.6 - Compatibility - Using Device: Intel - Mesa Intel(R) UHD Graphics 620 (KBL GT2)
+
+MapConfig: loaded 'default' (1280x720, terrain=hills, 2 capture_points, 4 player_starts, 3 hills)
+Args: ["--client", "--name=A", "--auto-test"]
+Connecting to server as 'A' at localhost:8910...
+TEST_CLIENT_A_START: Connected to server (peer_id=441368727, name=A)
+MockPlayer: Automated testing active for 'A'
+MockPlayer[A]: loaded 4 actions from tests.json
+MockPlayer: Lobby found; starting action sequence
+TEST_A_READY: A pressed ready
+MockPlayer[A]: pressed Ready
+TEST_GAME_START: Match starting, loading World scene
+TEST_TERRAIN_BUILT: 65x37 samples, step=20, 3 hills
+TEST_BACKGROUND_BUILT: w=1320.0 h=880.0 at z=-1
+MockPlayer: World scene detected
+TEST_CAPTURE_SPAWN: Client received 2 capture points
+TEST_ARMIES_SPAWNED: Client received 4 armies
+TEST_3D_CLIENT_UNITS_SPAWNED: units=40 armies=4
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/red/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+WARNING: Loaded resource as image file, this will not work on export: 'res://images/blue/spearman/spearman.png'. Instead, import the image file as an Image resource and load it normally as a resource.
+     at: load (core/io/image.cpp:2756)
+     GDScript backtrace (most recent call first):
+         [0] _load_spearman_texture (res://Unit3D.gd:144)
+         [1] _build_visual_mesh (res://Unit3D.gd:103)
+TEST_3D_TEXTURES_OK: count=40
+TEST_A_SELECT_ARMY1: MockPlayer[A] selected army 'P441368727_1' (index=0)
+TEST_A_MOVE_TO_STABLES: MockPlayer[A] moving army 'P441368727_1' to Stables at (499,201)
+TEST_ALL_UNITS_SCENE_VISIBLE: client=A phase=spawn visible=40 total=40
+TEST_ALL_UNITS_IN_FRUSTUM: client=A phase=spawn ok=true visible=40 total=40
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_0 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_1 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_2 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_3 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_4 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_5 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_6 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_7 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_8 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_9 owner=A army=P441368727_1 to=right velocity=(33.2,2.4)
+TEST_A_AGGRESSIVE: MockPlayer[A] requested all-armies aggressive (after controlling Stables)
+MockPlayer[A]: all scripted actions complete
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_0 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_1 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_2 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_3 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_4 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_5 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=right velocity=(33.3,-1.7)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_0 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_1 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_2 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_3 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_4 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_5 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_6 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_7 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_8 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_9 owner=A army=P441368727_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_0 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_1 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_2 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_3 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_4 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_5 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_0 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_1 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_2 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_3 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_4 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_5 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_6 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_7 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_8 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_9 owner=B army=P2142850175_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_0 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_1 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_2 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_3 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_4 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_5 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_6 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_7 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_8 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_1_9 owner=A army=P441368727_1 to=right velocity=(28.9,16.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_0 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_1 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_2 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_3 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_4 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_5 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=right velocity=(32.3,-8.2)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_0 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_1 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_2 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_3 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_4 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_5 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_6 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_7 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_8 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_9 owner=B army=P2142850175_1 to=left velocity=(-28.9,-16.6)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_3
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_4 owner=B army=P2142850175_1 to=right velocity=(22.9,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_9
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_4 owner=B army=P2142850175_1 to=left velocity=(0.0,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_4
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_3
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_4
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_2
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_0
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_1
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_9
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_2_3
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_4 owner=B army=P2142850175_2 to=right velocity=(22.7,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=right velocity=(18.1,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_7 owner=B army=P2142850175_2 to=right velocity=(25.8,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_8 owner=B army=P2142850175_2 to=right velocity=(21.7,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_9 owner=B army=P2142850175_2 to=right velocity=(31.9,9.6)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_0
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_5 owner=A army=P441368727_2 to=left velocity=(-18.6,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=left velocity=(-0.8,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=left velocity=(-6.1,-32.8)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_7 owner=B army=P2142850175_2 to=left velocity=(-7.4,32.5)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_8 owner=B army=P2142850175_2 to=left velocity=(-1.5,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_1_8
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_8
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_5 owner=A army=P441368727_2 to=right velocity=(32.2,8.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=right velocity=(32.2,8.6)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=right velocity=(32.2,8.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_4 owner=B army=P2142850175_2 to=left velocity=(-1.4,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=left velocity=(-13.8,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_9 owner=B army=P2142850175_2 to=left velocity=(0.0,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_1_1
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_3
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=left velocity=(-30.3,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=left velocity=(-33.3,-0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=left velocity=(-25.1,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=left velocity=(-33.3,0.2)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_0 owner=B army=P2142850175_2 to=right velocity=(15.3,29.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_1 owner=B army=P2142850175_2 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_2 owner=B army=P2142850175_2 to=right velocity=(20.2,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_4 owner=B army=P2142850175_2 to=right velocity=(27.6,18.7)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=right velocity=(26.2,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_8 owner=B army=P2142850175_2 to=right velocity=(29.9,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_9 owner=B army=P2142850175_2 to=right velocity=(30.2,14.1)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_7 owner=B army=P2142850175_2 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_2 owner=B army=P2142850175_1 to=right velocity=(32.4,8.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_2_2
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_0 owner=B army=P2142850175_2 to=left velocity=(-33.3,0.7)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_1 owner=B army=P2142850175_2 to=left velocity=(-0.4,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_9 owner=B army=P2142850175_2 to=left velocity=(-5.4,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=left velocity=(-0.4,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_0
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_1 owner=A army=P441368727_2 to=left velocity=(-31.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_4 owner=A army=P441368727_2 to=left velocity=(-13.1,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_6 owner=A army=P441368727_2 to=right velocity=(33.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=right velocity=(33.3,0.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=right velocity=(21.8,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_1 owner=B army=P2142850175_2 to=right velocity=(3.6,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=right velocity=(7.9,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_9 owner=B army=P2142850175_2 to=right velocity=(13.2,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_1
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_2 owner=A army=P441368727_2 to=left velocity=(-28.5,-17.2)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=left velocity=(-33.3,-0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_9 owner=A army=P441368727_2 to=left velocity=(-32.7,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_2_7
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_0 owner=B army=P2142850175_2 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_6 owner=B army=P2142850175_1 to=right velocity=(0.0,0.0)
+TEST_ALL_UNITS_SCENE_VISIBLE: client=A phase=mid_match visible=18 total=18
+TEST_ALL_UNITS_IN_FRUSTUM: client=A phase=mid_match ok=true visible=18 total=18
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_2
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_2_4
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_1 owner=B army=P2142850175_2 to=left velocity=(-9.5,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=left velocity=(-33.3,1.8)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_4
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=right velocity=(25.9,-21.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_0 owner=B army=P2142850175_2 to=left velocity=(0.0,0.0)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_5
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_5 owner=B army=P2142850175_1 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_7 owner=B army=P2142850175_1 to=right velocity=(27.1,19.4)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_0 owner=B army=P2142850175_2 to=right velocity=(27.1,19.4)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_1 owner=B army=P2142850175_2 to=right velocity=(27.1,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_5 owner=B army=P2142850175_2 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=right velocity=(27.1,19.4)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_5 owner=B army=P2142850175_1 to=left velocity=(-27.7,18.6)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_7 owner=B army=P2142850175_1 to=left velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_5 owner=B army=P2142850175_2 to=left velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=left velocity=(-22.4,24.7)
+TEST_UNIT_CLEANUP: client freed unit Soldier_P2142850175_2_8
+TEST_UNIT_CLEANUP: client freed unit Soldier_P441368727_2_6
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_7 owner=A army=P441368727_2 to=left velocity=(-12.3,0.0)
+TEST_FACING_FLIP: unit=Soldier_P441368727_2_8 owner=A army=P441368727_2 to=right velocity=(8.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_1_7 owner=B army=P2142850175_1 to=right velocity=(0.0,0.0)
+TEST_FACING_FLIP: unit=Soldier_P2142850175_2_6 owner=B army=P2142850175_2 to=right velocity=(28.4,17.5)
+TEST_GAME_OVER: Winner announced: B
+GameOver: Displaying winner 'B'
+TEST_CLIENT_DISCONNECT: Client disconnecting after game over

@@ -154,6 +154,7 @@ func _ready():
 		ground_collision.collision_layer = 2
 		ground_collision.collision_mask = 0
 	_build_terrain()
+	_build_background()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
 		GameState.reset_match_state()
@@ -339,6 +340,49 @@ func _build_terrain() -> void:
 			t.origin = Vector3(float(cols - 1) * step * 0.5, 0.0, float(rows - 1) * step * 0.5)
 			shape_node.transform = t
 	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills" % [cols, rows, int(step), MapConfig._hills.size()])
+
+func _build_background() -> void:
+	# Painted horizon backdrop along the z=0 map edge (the side furthest from
+	# the camera). The quad stands vertically, bottom flush with the ground,
+	# width = MapConfig.width + 2*MARGIN so it slightly overshoots the west/east
+	# corners, height proportional to the source image aspect.
+	var path := "res://images/background/background.png"
+	var tex: Texture2D = null
+	var img := Image.new()
+	if img.load(path) == OK:
+		tex = ImageTexture.create_from_image(img)
+	elif ResourceLoader.exists(path):
+		var res: Resource = ResourceLoader.load(path)
+		if res is Texture2D:
+			tex = res as Texture2D
+	if tex == null:
+		push_warning("Background image not found at %s" % path)
+		return
+	var src_w: float = float(tex.get_width())
+	var src_h: float = float(tex.get_height())
+	if src_w <= 0.0 or src_h <= 0.0:
+		push_warning("Background image has invalid dimensions")
+		return
+	const MARGIN: float = 20.0
+	var panel_w: float = MapConfig.width + 2.0 * MARGIN
+	var panel_h: float = panel_w * (src_h / src_w)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = tex
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	var quad := QuadMesh.new()
+	quad.size = Vector2(panel_w, panel_h)
+	var bg := MeshInstance3D.new()
+	bg.name = "Background"
+	bg.mesh = quad
+	bg.material_override = mat
+	# Sit one unit behind the map edge so we never z-fight with the ground
+	# mesh; centered on X, lifted so the bottom edge touches y=0.
+	bg.position = Vector3(MapConfig.width * 0.5, panel_h * 0.5, -1.0)
+	bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(bg)
+	print("TEST_BACKGROUND_BUILT: w=%.1f h=%.1f at z=-1" % [panel_w, panel_h])
 
 func _agent_debug_log_world_ready() -> void:
 	#region agent log
@@ -1203,6 +1247,10 @@ func _physics_process(delta: float):
 
 func _check_match_timeout(delta: float) -> void:
 	if not _match_started or game_over:
+		return
+	# The timeout is a safety net for automated tests only; in human play we
+	# want the match to continue until someone actually wins (no draw).
+	if not GameState.is_auto_test:
 		return
 	_match_elapsed += delta
 	if _match_elapsed < MATCH_TIMEOUT_SECONDS:

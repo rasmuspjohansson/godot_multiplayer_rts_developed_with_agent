@@ -26,6 +26,7 @@ func _ready():
 	auto_test = "--auto-test" in args
 
 	if "--server" in args:
+		GameState.is_auto_test = auto_test
 		_start_server()
 	elif "--client" in args:
 		for a in args:

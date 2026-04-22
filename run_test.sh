@@ -72,7 +72,11 @@ if [ "$SERVER_WINDOW" = true ]; then
   export DISPLAY="${DISPLAY:-:0}"
 fi
 
-nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" "${SERVER_RENDER_ARGS[@]}" --path . -- --server >> logs/server.log 2>&1 &
+SERVER_EXTRA_ARGS=()
+if [ "$AUTO_TEST" = true ]; then
+  SERVER_EXTRA_ARGS+=(--auto-test)
+fi
+nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" "${SERVER_RENDER_ARGS[@]}" --path . -- --server "${SERVER_EXTRA_ARGS[@]}" >> logs/server.log 2>&1 &
 echo $! > logs/server.pid
 echo "Server starting (PID $(cat logs/server.pid)). Waiting for server to be ready..."
 
