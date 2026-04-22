@@ -3,8 +3,7 @@ extends Node3D
 
 signal army_routed(army)
 
-const MAP_WIDTH := 1280.0
-const MAP_HEIGHT := 720.0
+# Map bounds come from `MapConfig` (res://map.json); access as MapConfig.width / MapConfig.height.
 
 var army_id: String = ""
 var owner_peer_id: int = 0
@@ -29,7 +28,7 @@ func _ground_y_at(xz: Vector2) -> float:
 	return 0.0
 
 func _clamp_map_xz(v: Vector2) -> Vector2:
-	return Vector2(clampf(v.x, 0.0, MAP_WIDTH), clampf(v.y, 0.0, MAP_HEIGHT))
+	return Vector2(clampf(v.x, 0.0, MapConfig.width), clampf(v.y, 0.0, MapConfig.height))
 
 func get_alive_soldiers() -> Array:
 	var alive := []
@@ -82,8 +81,8 @@ func move_army(target: Vector2):
 	for s in get_alive_soldiers():
 		if s.has_method("set_move_target"):
 			var tp: Vector3 = s.global_position + d
-			tp.x = clampf(tp.x, 0.0, MAP_WIDTH)
-			tp.z = clampf(tp.z, 0.0, MAP_HEIGHT)
+			tp.x = clampf(tp.x, 0.0, MapConfig.width)
+			tp.z = clampf(tp.z, 0.0, MapConfig.height)
 			var g2 = _ground_y_at(Vector2(tp.x, tp.z))
 			tp.y = g2 + 11.0
 			s.sync_target_position = tp

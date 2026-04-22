@@ -13,6 +13,7 @@ The game can be played by humans, but it is also fully **automatable** so an AI 
 | `prompts.txt` | Master instructions for the agent. |
 | `game.md` | Game design document. |
 | `tests.json` | Single source of truth for the automated test — every event to verify, every action the MockPlayer must perform, and extra standalone headless checks. |
+| `map.json` | Single source of truth for the map (size, terrain, capture-point positions, per-slot player starting positions). |
 | `skills.md` | Shell commands for starting/stopping server + clients and collecting logs. |
 | `run_test.sh` / `verify_test_logs.sh` | Start the match and then verify the run against `tests.json`. |
 
@@ -40,6 +41,35 @@ Supported MockPlayer action types:
 - `select_army` (`army_index`) — select one of the player's armies.
 - `move_army_to_cp` (`army_index`, `cp_id`) — send the selected army to `Stables` or `Blacksmith`.
 - `set_all_aggressive` (optional `wait_for_controls_cp`) — wait (polled) until the player controls the given CP, then flip all that player's armies to `aggressive`.
+
+### Map description (`map.json`)
+
+The arena is described entirely by `map.json`, parsed once at startup by the `MapConfig` autoload. This is the single place to change map size, capture-point locations, or player starting positions; swapping to a different map later just means writing a new JSON file.
+
+```json
+{
+  "name": "default",
+  "size": {"width": 1280, "height": 720},
+  "terrain": {"type": "flat", "features": []},
+  "capture_points": [
+    {"id": "Stables", "type": "Stables", "x": 499.2, "y": 201.6},
+    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8}
+  ],
+  "player_starts": [
+    {"slot": 0, "corner": "NW", "armies": [{"x": 199.68, "y": 180.0, "direction": 0.0}, ...]},
+    {"slot": 1, "corner": "SE", "armies": [...]},
+    {"slot": 2, "corner": "NE", "armies": [...]},
+    {"slot": 3, "corner": "SW", "armies": [...]}
+  ]
+}
+```
+
+- `size` — play-area width (X) and height (Z in 3D). All camera and movement clamping uses these.
+- `terrain.type` is `"flat"` today; `terrain.features` is reserved for upcoming hills/mountains.
+- `capture_points[]` — the list of capturable objectives; the server spawns one pillar per entry and replicates them to clients.
+- `player_starts[]` — four corner slots (NW/SE/NE/SW). The first player to join gets slot 0, the second gets slot 1, etc. Each slot lists every army that player spawns, with explicit `{x, y, direction}`.
+
+`MockPlayer` never opens `map.json`; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.
 
 ### Event sequence
 

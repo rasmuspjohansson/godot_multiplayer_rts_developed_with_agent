@@ -17,6 +17,7 @@ config/features=PackedStringArray("4.6")
 [autoload]
 
 GameState="*res://GameState.gd"
+MapConfig="*res://MapConfig.gd"
 
 [display]
 

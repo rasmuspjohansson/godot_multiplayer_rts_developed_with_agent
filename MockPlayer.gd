@@ -12,12 +12,6 @@ var _waiting: bool = false       # timers/async gate
 var _world = null
 var _lobby = null
 
-# Capture point positions mirror World.gd._spawn_capture_points().
-const CP_POSITIONS := {
-	"Stables": Vector2(1280.0 * 0.39, 720.0 * 0.28),
-	"Blacksmith": Vector2(1280.0 * 0.61, 720.0 * 0.69),
-}
-
 func _ready():
 	print("MockPlayer: Automated testing active for '%s'" % GameState.local_player_name)
 	_load_actions_for_this_player()
@@ -163,17 +157,27 @@ func _do_select_army(entry: Dictionary) -> void:
 	])
 	_advance()
 
+func _cp_position(cp_id: String) -> Vector2:
+	# MockPlayer never opens map.json — it reads live capture-point nodes that
+	# were spawned by the server via `_client_spawn_capture_points`.
+	if _world == null:
+		return Vector2.INF
+	for cp in _world.capture_points:
+		if str(cp.get("id", "")) == cp_id:
+			var n: Node3D = cp.get("node", null)
+			if n != null:
+				return Vector2(n.position.x, n.position.z)
+	return Vector2.INF
+
 func _do_move_army_to_cp(entry: Dictionary) -> void:
 	var act: Dictionary = entry["action"]
 	var idx: int = int(act.get("army_index", 0))
 	var cp_id: String = str(act.get("cp_id", ""))
-	if not CP_POSITIONS.has(cp_id):
-		push_error("MockPlayer: unknown cp_id '%s'" % cp_id)
-		_advance()
-		return
-	var target: Vector2 = CP_POSITIONS[cp_id]
+	var target: Vector2 = _cp_position(cp_id)
 	var armies := _my_armies()
-	if idx >= armies.size():
+	if target == Vector2.INF or idx >= armies.size():
+		# Either CP not yet spawned on this client or army list not ready —
+		# poll again. Same pattern as select_army.
 		_waiting = true
 		get_tree().create_timer(0.3).timeout.connect(_resume)
 		return

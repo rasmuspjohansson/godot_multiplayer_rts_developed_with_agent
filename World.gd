@@ -6,19 +6,21 @@ const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 
 const ARMIES_PER_PLAYER := 2
 const UNITS_PER_ARMY := 10
-const MAP_WIDTH := 1280
-const MAP_HEIGHT := 720  # used as Z in 3D
+## Map width/height come from `MapConfig` (res://map.json). Access via
+## `MapConfig.width` / `MapConfig.height` elsewhere in this file.
 const CP_PEACE_SECONDS := 5.0
 const CAPTURE_RADIUS_SEEK := 120.0
 const DRAFT_COST_PER_EQUIPMENT := 10
-const WEST_SPAWN := Vector2(-120.0, float(MAP_HEIGHT) / 2.0)
-const EAST_SPAWN := Vector2(float(MAP_WIDTH) + 120.0, float(MAP_HEIGHT) / 2.0)
-const WEST_STOP_X := 80.0
-const EAST_STOP_X := float(MAP_WIDTH) - 80.0
-const NORTH_SPAWN := Vector2(float(MAP_WIDTH) / 2.0, -100.0)
-const SOUTH_SPAWN := Vector2(float(MAP_WIDTH) / 2.0, float(MAP_HEIGHT) + 100.0)
-const NORTH_STOP_Y := 80.0
-const SOUTH_STOP_Y := float(MAP_HEIGHT) - 80.0
+## Off-map spawn/stop lanes for the legacy draft-army path. Recomputed from
+## MapConfig in `_init_offmap_lanes()` so they scale with `map.json` size.
+var WEST_SPAWN: Vector2 = Vector2.ZERO
+var EAST_SPAWN: Vector2 = Vector2.ZERO
+var WEST_STOP_X: float = 80.0
+var EAST_STOP_X: float = 0.0
+var NORTH_SPAWN: Vector2 = Vector2.ZERO
+var SOUTH_SPAWN: Vector2 = Vector2.ZERO
+var NORTH_STOP_Y: float = 80.0
+var SOUTH_STOP_Y: float = 0.0
 const GRID_CELL_SIZE := 125.0
 const CP_CAPTURE_RADIUS := 120.0
 const CP_RESOURCE_INTERVAL := 2.0
@@ -45,7 +47,8 @@ var army_follow_target := {}
 var _mock_chase_touched: Dictionary = {}
 var _mock_stuck_t: Dictionary = {}
 var _mock_stuck_last: Dictionary = {}
-var player_side := {}  # pid -> "west" | "east" | ...
+var player_side := {}  # pid -> "west" | "east" | ... (legacy draft path)
+var player_slot := {}  # pid -> int (index into MapConfig.player_starts)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
 var _server_captures: Array = []
@@ -110,7 +113,7 @@ func _log_unit_visibility(phase: String) -> void:
 			print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
 	var saved_look := _look_at
 	var saved_dist := _camera_distance
-	_look_at = Vector3(MAP_WIDTH / 2.0, 0.0, MAP_HEIGHT / 2.0)
+	_look_at = Vector3(MapConfig.width / 2.0, 0.0, MapConfig.height / 2.0)
 	_camera_distance = CAMERA_MAX_DISTANCE
 	_update_camera_position()
 	var in_frustum := 0
@@ -144,11 +147,13 @@ func _on_visibility_mid_timeout() -> void:
 	_log_unit_visibility("mid_match")
 
 func _ready():
-	_look_at = Vector3(MAP_WIDTH / 2.0, 0, MAP_HEIGHT / 2.0)
+	_init_offmap_lanes()
+	_look_at = Vector3(MapConfig.width / 2.0, 0, MapConfig.height / 2.0)
 	var ground_collision = get_node_or_null("GroundCollision")
 	if ground_collision is StaticBody3D:
 		ground_collision.collision_layer = 2
 		ground_collision.collision_mask = 0
+	_build_terrain()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
 		GameState.reset_match_state()
@@ -162,6 +167,178 @@ func _ready():
 	_setup_draft_menu()
 	_add_play_boundary_line()
 	call_deferred("_agent_debug_log_world_ready")
+
+func _init_offmap_lanes() -> void:
+	var w: float = MapConfig.width
+	var h: float = MapConfig.height
+	WEST_SPAWN = Vector2(-120.0, h / 2.0)
+	EAST_SPAWN = Vector2(w + 120.0, h / 2.0)
+	WEST_STOP_X = 80.0
+	EAST_STOP_X = w - 80.0
+	NORTH_SPAWN = Vector2(w / 2.0, -100.0)
+	SOUTH_SPAWN = Vector2(w / 2.0, h + 100.0)
+	NORTH_STOP_Y = 80.0
+	SOUTH_STOP_Y = h - 80.0
+
+## Build the ground mesh (visible) and collision (physics) from MapConfig.
+## This is the ONLY place `MapConfig.sample_height` is called. Every runtime
+## height query goes through `get_ground_height_at()` which raycasts against
+## collision layer 2, so later objects placed on top of the ground will
+## automatically count without touching any call sites.
+const _TERRAIN_STEP := 20.0
+
+func _build_terrain() -> void:
+	var w: float = MapConfig.width
+	var h: float = MapConfig.height
+	var step: float = _TERRAIN_STEP
+	var cols: int = int(ceil(w / step)) + 1
+	var rows: int = int(ceil(h / step)) + 1
+	# Sample heights into a flat row-major buffer (one float per grid point).
+	var heights := PackedFloat32Array()
+	heights.resize(cols * rows)
+	for j in range(rows):
+		var z := float(j) * step
+		for i in range(cols):
+			var x := float(i) * step
+			heights[j * cols + i] = MapConfig.sample_height(x, z)
+	# Build the visual ArrayMesh.
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	verts.resize(cols * rows)
+	norms.resize(cols * rows)
+	uvs.resize(cols * rows)
+	colors.resize(cols * rows)
+	# Per-vertex height tint: valleys stay darker, hilltops lean toward a
+	# lighter/sunnier green. Normalized by the tallest hill's peak so maps with
+	# no hills still produce uniform mid-green.
+	var peak_h := 0.0
+	for ph in MapConfig._hills:
+		peak_h = max(peak_h, float(ph.peak))
+	# Multiplicative tints applied on top of the noise albedo (via
+	# vertex_color_use_as_albedo). Valleys slightly cooler/darker, hilltops
+	# slightly warmer/brighter so ridges catch light more than hollows.
+	var valley_tint := Color(0.85, 0.92, 0.80)
+	var peak_tint := Color(1.10, 1.05, 0.90)
+	for j in range(rows):
+		for i in range(cols):
+			var x := float(i) * step
+			var z := float(j) * step
+			var y := heights[j * cols + i]
+			verts[j * cols + i] = Vector3(x, y, z)
+			uvs[j * cols + i] = Vector2(x / w, z / h)
+			# Finite-difference normal (cheap; forward/backward at edges).
+			var i0: int = max(i - 1, 0)
+			var i1: int = min(i + 1, cols - 1)
+			var j0: int = max(j - 1, 0)
+			var j1: int = min(j + 1, rows - 1)
+			var dhdx: float = (heights[j * cols + i1] - heights[j * cols + i0]) / max(float(i1 - i0) * step, 1.0)
+			var dhdz: float = (heights[j1 * cols + i] - heights[j0 * cols + i]) / max(float(j1 - j0) * step, 1.0)
+			norms[j * cols + i] = Vector3(-dhdx, 1.0, -dhdz).normalized()
+			var t: float = 0.0 if peak_h <= 0.0 else clamp(y / peak_h, 0.0, 1.0)
+			colors[j * cols + i] = valley_tint.lerp(peak_tint, t)
+	for j in range(rows - 1):
+		for i in range(cols - 1):
+			var a: int = j * cols + i
+			var b: int = j * cols + (i + 1)
+			var c: int = (j + 1) * cols + i
+			var d: int = (j + 1) * cols + (i + 1)
+			indices.append(a)
+			indices.append(c)
+			indices.append(b)
+			indices.append(b)
+			indices.append(c)
+			indices.append(d)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var array_mesh := ArrayMesh.new()
+	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	# Bake the grass material directly onto the ArrayMesh surface so it travels
+	# with the mesh and doesn't depend on node-level override state (which can
+	# be invalidated by `mesh_instance.mesh = ...`).
+	var grass_mat := StandardMaterial3D.new()
+	# albedo_color stays white so the color ramp in the noise texture (below)
+	# is the actual surface color; vertex colors then tint it per-height.
+	grass_mat.albedo_color = Color(1, 1, 1)
+	grass_mat.roughness = 0.95
+	grass_mat.metallic = 0.0
+	# Diagnostic safety: if triangle winding ever flips in a future change,
+	# disabling backface culling still keeps the ground visible. Negligible
+	# cost on a 65x37 grid.
+	grass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Procedural grass-variation noise as albedo texture. No asset files —
+	# Godot generates a seamless tiling texture at load time. The color ramp
+	# maps noise 0..1 to a darker/brighter green pair so variation is baked
+	# into actual grass tones instead of grayscale. Triplanar projection
+	# avoids UV stretching on steep hill slopes.
+	var n_albedo := FastNoiseLite.new()
+	n_albedo.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	n_albedo.frequency = 0.015
+	var albedo_grad := Gradient.new()
+	albedo_grad.set_color(0, Color(0.30, 0.52, 0.22))
+	albedo_grad.set_color(1, Color(0.50, 0.76, 0.34))
+	var nt_albedo := NoiseTexture2D.new()
+	nt_albedo.noise = n_albedo
+	nt_albedo.width = 512
+	nt_albedo.height = 512
+	nt_albedo.seamless = true
+	nt_albedo.color_ramp = albedo_grad
+	grass_mat.albedo_texture = nt_albedo
+	grass_mat.uv1_triplanar = true
+	grass_mat.uv1_scale = Vector3(0.04, 0.04, 0.04)
+	# Subtle normal-map bumps so the surface catches light with micro-detail
+	# even on fully flat areas (makes hills read better against the ground).
+	var n_bump := FastNoiseLite.new()
+	n_bump.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	n_bump.frequency = 0.05
+	var nt_bump := NoiseTexture2D.new()
+	nt_bump.noise = n_bump
+	nt_bump.width = 512
+	nt_bump.height = 512
+	nt_bump.seamless = true
+	nt_bump.as_normal_map = true
+	nt_bump.bump_strength = 4.0
+	grass_mat.normal_enabled = true
+	grass_mat.normal_texture = nt_bump
+	grass_mat.normal_scale = 0.4
+	# Per-vertex tint (valleys darker, hilltops lighter).
+	grass_mat.vertex_color_use_as_albedo = true
+	array_mesh.surface_set_material(0, grass_mat)
+	var ground := get_node_or_null("Ground")
+	if ground is MeshInstance3D:
+		# ArrayMesh vertices are in world-space, so drop the translation the
+		# placeholder PlaneMesh used.
+		ground.transform = Transform3D.IDENTITY
+		ground.mesh = array_mesh
+		# Clear any stale scene-level override so the mesh's own surface
+		# material is used.
+		ground.set_surface_override_material(0, null)
+	# Build the matching HeightMapShape3D for physics.
+	var hm := HeightMapShape3D.new()
+	hm.map_width = cols
+	hm.map_depth = rows
+	hm.map_data = heights
+	var gc := get_node_or_null("GroundCollision")
+	if gc is StaticBody3D:
+		# HeightMapShape3D covers (map_width-1, map_depth-1) world units per-axis,
+		# centered on the CollisionShape3D's origin. We sampled in step units, so
+		# scale by `step` and translate to map-center.
+		gc.transform = Transform3D.IDENTITY
+		var shape_node := gc.get_node_or_null("CollisionShape3D")
+		if shape_node is CollisionShape3D:
+			shape_node.shape = hm
+			var t := Transform3D.IDENTITY
+			t.basis = Basis.IDENTITY.scaled(Vector3(step, 1.0, step))
+			t.origin = Vector3(float(cols - 1) * step * 0.5, 0.0, float(rows - 1) * step * 0.5)
+			shape_node.transform = t
+	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills" % [cols, rows, int(step), MapConfig._hills.size()])
 
 func _agent_debug_log_world_ready() -> void:
 	#region agent log
@@ -265,8 +442,8 @@ func _input(event: InputEvent):
 			_last_mouse = mm.position
 			_look_at.x -= delta.x * 0.5
 			_look_at.z -= delta.y * 0.5
-			_look_at.x = clampf(_look_at.x, 0, MAP_WIDTH)
-			_look_at.z = clampf(_look_at.z, 0, MAP_HEIGHT)
+			_look_at.x = clampf(_look_at.x, 0, MapConfig.width)
+			_look_at.z = clampf(_look_at.z, 0, MapConfig.height)
 			_update_camera_position()
 			get_viewport().set_input_as_handled()
 		else:
@@ -292,8 +469,8 @@ func _process(_delta: float):
 		pan.z += CAMERA_PAN_SPEED
 	if pan != Vector3.ZERO:
 		_look_at += pan * get_process_delta_time()
-		_look_at.x = clampf(_look_at.x, 0, MAP_WIDTH)
-		_look_at.z = clampf(_look_at.z, 0, MAP_HEIGHT)
+		_look_at.x = clampf(_look_at.x, 0, MapConfig.width)
+		_look_at.z = clampf(_look_at.z, 0, MapConfig.height)
 		_update_camera_position()
 
 func _update_move_goal_markers_3d():
@@ -638,11 +815,17 @@ func _server_move_group_formation(unit_targets: Array):
 		army.global_position = Vector3(cx / float(alive.size()), gy, cz / float(alive.size()))
 
 func _set_player_sides():
-	var sides = ["west", "east", "north", "south"]
+	# Assign each player a map-slot (index into MapConfig.player_starts) by
+	# join order. Also populate legacy `player_side` (west/east/...) from the
+	# slot's `corner` so the draft-army path keeps working.
+	var corner_to_side := {"NW": "west", "SW": "west", "NE": "east", "SE": "east"}
 	var player_ids = GameState.players.keys()
 	for i in range(player_ids.size()):
-		if i < sides.size():
-			player_side[player_ids[i]] = sides[i]
+		var pid = player_ids[i]
+		player_slot[pid] = i
+		var start: Dictionary = MapConfig.get_player_start(i)
+		var corner := str(start.get("corner", ""))
+		player_side[pid] = corner_to_side.get(corner, "west" if i % 2 == 0 else "east")
 	for pid in player_ids:
 		army_index_per_player[pid] = ARMIES_PER_PLAYER + 1
 
@@ -665,41 +848,20 @@ func _spawn_armies():
 	if player_ids.size() < 2:
 		print("ERROR: Need at least 2 players to spawn armies")
 		return
-	var w := float(MAP_WIDTH)
-	var h := float(MAP_HEIGHT)
-	var west_x := w * 0.156
-	var east_x := w - 230.0
-	var north_y := 80.0
-	var south_y := h - 80.0
-	var mid_x := w * 0.5
-	var spawn_configs := []
+	# Spawn armies from MapConfig.player_starts[slot].armies.
+	# Slot is assigned by join order in `_assign_player_slots()`.
 	for p in range(player_ids.size()):
 		var pid = player_ids[p]
 		var pname = GameState.players[pid]["name"]
-		var side = player_side.get(pid, "west")
-		var army_list := []
-		for i in range(ARMIES_PER_PLAYER):
-			var pos: Vector2
-			var dir: float
-			if side == "west":
-				pos = Vector2(west_x, h * (0.25 + (float(i) / max(1, ARMIES_PER_PLAYER)) * 0.5))
-				dir = 0.0
-			elif side == "east":
-				pos = Vector2(east_x, h * (0.25 + (float(i) / max(1, ARMIES_PER_PLAYER)) * 0.5))
-				dir = PI
-			elif side == "north":
-				pos = Vector2(mid_x - 100 + i * 60, north_y)
-				dir = PI / 2.0
-			else:
-				pos = Vector2(mid_x - 100 + i * 60, south_y)
-				dir = -PI / 2.0
-			army_list.append({"pos": pos, "dir": dir})
-		spawn_configs.append({"pid": pid, "name": pname, "armies": army_list})
-	for pc in spawn_configs:
-		for i in range(pc["armies"].size()):
-			var ac = pc["armies"][i]
-			var army_id = "P%d_%d" % [pc["pid"], i + 1]
-			var army = _create_army(army_id, pc["pid"], pc["name"], ac["pos"], ac["dir"], {})
+		var slot: int = player_slot.get(pid, p)
+		var start: Dictionary = MapConfig.get_player_start(slot)
+		var start_armies: Array = start.get("armies", [])
+		for i in range(start_armies.size()):
+			var ac: Dictionary = start_armies[i]
+			var pos := Vector2(float(ac.get("x", 0.0)), float(ac.get("y", 0.0)))
+			var dir := float(ac.get("direction", 0.0))
+			var army_id = "P%d_%d" % [pid, i + 1]
+			var army = _create_army(army_id, pid, pname, pos, dir, {})
 			armies.append(army)
 	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
 	_match_started = true
@@ -772,22 +934,19 @@ func _serialize_armies() -> Array:
 	return data
 
 func _spawn_capture_points():
-	var w := float(MAP_WIDTH)
-	var h := float(MAP_HEIGHT)
-	var cp_configs = [
-		{"id": "Stables", "type": "Stables", "pos": Vector2(w * 0.39, h * 0.28)},
-		{"id": "Blacksmith", "type": "Blacksmith", "pos": Vector2(w * 0.61, h * 0.69)}
-	]
-	for cfg in cp_configs:
+	for cfg in MapConfig.capture_points:
 		_server_captures.append({
-			"id": cfg["id"],
-			"type": cfg["type"],
-			"x": cfg["pos"].x,
-			"y": cfg["pos"].y,
+			"id": str(cfg.get("id", "")),
+			"type": str(cfg.get("type", "")),
+			"x": float(cfg.get("x", 0.0)),
+			"y": float(cfg.get("y", 0.0)),
 			"owner_pid": 0,
 			"resource_timer": 0.0
 		})
-	print("TEST_CAPTURE_SPAWN: %d capture points spawned (Stables, Blacksmith)" % _server_captures.size())
+	var ids := []
+	for c in _server_captures:
+		ids.append(c["id"])
+	print("TEST_CAPTURE_SPAWN: %d capture points spawned (%s)" % [_server_captures.size(), ", ".join(ids)])
 	rpc("_client_spawn_capture_points", _serialize_capture_points())
 
 func _serialize_capture_points() -> Array:
@@ -1007,7 +1166,7 @@ func _update_aggressive_armies(delta: float):
 		if enemy == null:
 			continue
 		var exz := _army_center_xz_server(enemy)
-		exz = Vector2(clampf(exz.x, 0.0, float(MAP_WIDTH)), clampf(exz.y, 0.0, float(MAP_HEIGHT)))
+		exz = Vector2(clampf(exz.x, 0.0, float(MapConfig.width)), clampf(exz.y, 0.0, float(MapConfig.height)))
 		army_follow_target.erase(a.army_id)
 		# Park the army center at the enemy and place each soldier in a formation slot
 		# around that center, directly (bypasses per-call delta drift in move_army).
@@ -1017,8 +1176,8 @@ func _update_aggressive_armies(delta: float):
 		var positions: Array = a.calculate_formation_positions(exz, a.direction, alive.size())
 		for i in range(alive.size()):
 			var p: Vector2 = positions[i]
-			p.x = clampf(p.x, 0.0, float(MAP_WIDTH))
-			p.y = clampf(p.y, 0.0, float(MAP_HEIGHT))
+			p.x = clampf(p.x, 0.0, float(MapConfig.width))
+			p.y = clampf(p.y, 0.0, float(MapConfig.height))
 			var uy := get_ground_height_at(p.x, p.y) + UNIT_HALF_HEIGHT
 			alive[i].sync_target_position = Vector3(p.x, uy, p.y)
 			if alive[i].has_method("set_move_target"):
@@ -1185,7 +1344,7 @@ func _armies_in_screen_rect_3d(rect: Rect2, my_id: int) -> Array:
 	return out
 
 func _clamp_map_v2(v: Vector2) -> Vector2:
-	return Vector2(clampf(v.x, 0, MAP_WIDTH), clampf(v.y, 0, MAP_HEIGHT))
+	return Vector2(clampf(v.x, 0, MapConfig.width), clampf(v.y, 0, MapConfig.height))
 
 func _first_alive_soldier_3d(army) -> Node3D:
 	if army == null or not is_instance_valid(army):
@@ -1389,34 +1548,34 @@ func _add_play_boundary_line():
 	var line_width := 4.0
 	# Left edge
 	var box_left = BoxMesh.new()
-	box_left.size = Vector3(line_width, line_height, MAP_HEIGHT)
+	box_left.size = Vector3(line_width, line_height, MapConfig.height)
 	var left = MeshInstance3D.new()
 	left.mesh = box_left
-	left.position = Vector3(0.0, 0.1, MAP_HEIGHT / 2.0)
+	left.position = Vector3(0.0, 0.1, MapConfig.height / 2.0)
 	left.material_override = mat
 	add_child(left)
 	# Right edge
 	var box_right = BoxMesh.new()
-	box_right.size = Vector3(line_width, line_height, MAP_HEIGHT)
+	box_right.size = Vector3(line_width, line_height, MapConfig.height)
 	var right = MeshInstance3D.new()
 	right.mesh = box_right
-	right.position = Vector3(MAP_WIDTH, 0.1, MAP_HEIGHT / 2.0)
+	right.position = Vector3(MapConfig.width, 0.1, MapConfig.height / 2.0)
 	right.material_override = mat
 	add_child(right)
 	# Bottom edge
 	var box_bottom = BoxMesh.new()
-	box_bottom.size = Vector3(MAP_WIDTH, line_height, line_width)
+	box_bottom.size = Vector3(MapConfig.width, line_height, line_width)
 	var bottom = MeshInstance3D.new()
 	bottom.mesh = box_bottom
-	bottom.position = Vector3(MAP_WIDTH / 2.0, 0.1, 0.0)
+	bottom.position = Vector3(MapConfig.width / 2.0, 0.1, 0.0)
 	bottom.material_override = mat
 	add_child(bottom)
 	# Top edge
 	var box_top = BoxMesh.new()
-	box_top.size = Vector3(MAP_WIDTH, line_height, line_width)
+	box_top.size = Vector3(MapConfig.width, line_height, line_width)
 	var top = MeshInstance3D.new()
 	top.mesh = box_top
-	top.position = Vector3(MAP_WIDTH / 2.0, 0.1, MAP_HEIGHT)
+	top.position = Vector3(MapConfig.width / 2.0, 0.1, MapConfig.height)
 	top.material_override = mat
 	add_child(top)
 
