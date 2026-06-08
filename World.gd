@@ -38,6 +38,7 @@ const ARMY_CLICK_RADIUS := 80.0
 const CORRECTION_THRESHOLD := 120.0
 # Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
 const UNIT_HALF_HEIGHT := 11.0
+const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -164,6 +165,7 @@ func _ready():
 	if not multiplayer.is_server():
 		_setup_camera()
 		_setup_selection_overlay()
+		_setup_background_music()
 	_setup_topbar()
 	_setup_draft_menu()
 	_add_play_boundary_line()
@@ -406,6 +408,22 @@ func _setup_selection_overlay():
 	add_child(layer)
 	_marquee_overlay = _MarqueeRectOverlay.new()
 	layer.add_child(_marquee_overlay)
+
+func _setup_background_music() -> void:
+	if get_node_or_null("BackgroundMusic") != null:
+		return
+	var stream: AudioStream = load(BG_MUSIC_PATH)
+	if stream == null:
+		push_warning("World: background music missing at %s" % BG_MUSIC_PATH)
+		return
+	if stream is AudioStreamMP3:
+		(stream as AudioStreamMP3).loop = true
+	var player := AudioStreamPlayer.new()
+	player.name = "BackgroundMusic"
+	player.stream = stream
+	player.bus = &"Master"
+	add_child(player)
+	player.play()
 
 func _setup_camera():
 	_camera = get_node_or_null("Camera3D")
@@ -905,7 +923,11 @@ func _spawn_armies():
 			var pos := Vector2(float(ac.get("x", 0.0)), float(ac.get("y", 0.0)))
 			var dir := float(ac.get("direction", 0.0))
 			var army_id = "P%d_%d" % [pid, i + 1]
-			var army = _create_army(army_id, pid, pname, pos, dir, {})
+			var equipment = {
+				"horse": ac.get("horse", false),
+				"spear": ac.get("spear", false),
+			}
+			var army = _create_army(army_id, pid, pname, pos, dir, equipment)
 			armies.append(army)
 	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
 	_match_started = true
@@ -946,6 +968,8 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 		unit.speed = speed
 		unit.attack = atk
 		unit.attack_range = atk_range
+		unit.has_spear = use_spear
+		unit.has_horse = use_horse
 		unit.position = Vector3(fpos.x, uy, fpos.y)
 		unit.unit_died.connect(army.on_soldier_died)
 		add_child(unit)
@@ -973,6 +997,8 @@ func _serialize_armies() -> Array:
 			"y": army.global_position.z,
 			"dir": army.direction,
 			"initial_count": army.initial_count,
+			"spear": army.soldiers[0].has_spear if army.soldiers.size() > 0 else false,
+			"horse": army.soldiers[0].has_horse if army.soldiers.size() > 0 else false,
 			"soldiers": soldier_data
 		})
 	return data
@@ -1038,6 +1064,8 @@ func _serialize_one_army(army) -> Dictionary:
 		"y": army.global_position.z,
 		"dir": army.direction,
 		"initial_count": army.initial_count,
+		"spear": s0.has_spear if s0 else false,
+		"horse": s0.has_horse if s0 else false,
 		"soldiers": soldier_data,
 		"speed": speed,
 		"attack": attack,
@@ -1297,7 +1325,8 @@ func _sync_unit_positions():
 				var there: Vector2 = mt if u.is_moving else here_xz
 				pos_data.append({
 					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
-					"tx": there.x, "ty": there.y
+					"tx": there.x, "ty": there.y,
+					"at": u.attack_timer
 				})
 			else:
 				dead_names.append(u.name)
@@ -1665,12 +1694,16 @@ func _client_spawn_armies_impl(data: Array):
 			unit.owner_peer_id = ad["pid"]
 			unit.owner_name = ad["name"]
 			unit.army_id = ad["army_id"]
+			unit.has_spear = ad.get("spear", false)
+			unit.has_horse = ad.get("horse", false)
 			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 			var pos = Vector3(sd["x"], uy, sd["y"])
 			unit.sync_target_position = pos
 			unit.position = pos
 			unit.has_move_goal = true
 			add_child(unit)
+			if unit.has_method("refresh_visuals"):
+				unit.refresh_visuals()
 			army.soldiers.append(unit)
 			all_units.append(unit)
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
@@ -1809,6 +1842,8 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.owner_peer_id = ad["pid"]
 		unit.owner_name = ad["name"]
 		unit.army_id = ad["army_id"]
+		unit.has_spear = ad.get("spear", false)
+		unit.has_horse = ad.get("horse", false)
 		unit.speed = speed
 		unit.attack = atk
 		unit.attack_range = atk_range
@@ -1818,6 +1853,8 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.position = pos
 		unit.has_move_goal = true
 		add_child(unit)
+		if unit.has_method("refresh_visuals"):
+			unit.refresh_visuals()
 		army.soldiers.append(unit)
 		all_units.append(unit)
 	if ad.has("stop_x") and ad.has("stop_y"):
@@ -1871,7 +1908,12 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 			if "sync_target_hp" in node:
 				node.set("sync_target_hp", pd["hp"])
 				node.set("hp", pd["hp"])
+			if "sync_attack_timer" in node:
+				node.set("sync_attack_timer", pd.get("at", 0.0))
 	for dn in dead_names:
+		var dead_node = get_node_or_null(NodePath(str(dn)))
+		if dead_node and dead_node.has_method("is_in_death_sequence") and dead_node.is_in_death_sequence():
+			continue
 		_cleanup_client_unit(str(dn))
 
 @rpc("authority", "reliable")
@@ -1880,7 +1922,15 @@ func _client_unit_died(unit_name: String):
 
 func _cleanup_client_unit(unit_name: String):
 	var node = get_node_or_null(NodePath(unit_name))
-	if node and node.get("is_dead") != true:
+	if node == null:
+		return
+	if node.has_method("is_in_death_sequence") and node.is_in_death_sequence():
+		return
+	if node.has_method("begin_death"):
+		node.begin_death()
+		print("TEST_UNIT_CLEANUP: client freed unit %s" % unit_name)
+		return
+	if node.get("is_dead") != true:
 		node.set("is_dead", true)
 		print("TEST_UNIT_CLEANUP: client freed unit %s" % unit_name)
 		get_tree().create_timer(0.5).timeout.connect(func():
