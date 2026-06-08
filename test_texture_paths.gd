@@ -17,5 +17,29 @@ func _init():
 			print("TEST_TEXTURE_PATH_FAIL: bad ImageTexture path=%s" % p)
 			quit(1)
 			return
+
+	for folder in [
+		"res://sprites/blue/spearman/walking",
+		"res://sprites/blue/horseman/galloping",
+	]:
+		var manifest_path: String = folder.path_join("spritesheet.json")
+		var f := FileAccess.open(manifest_path, FileAccess.READ)
+		if f == null:
+			print("TEST_TEXTURE_PATH_FAIL: missing spritesheet manifest path=%s" % manifest_path)
+			quit(1)
+			return
+		var parsed: Variant = JSON.parse_string(f.get_as_text())
+		if typeof(parsed) != TYPE_DICTIONARY:
+			print("TEST_TEXTURE_PATH_FAIL: invalid spritesheet JSON path=%s" % manifest_path)
+			quit(1)
+			return
+		var png_path: String = folder.path_join("spritesheet.png")
+		var abs_png: String = ProjectSettings.globalize_path(png_path)
+		var sheet_img: Image = Image.load_from_file(abs_png)
+		if sheet_img == null or sheet_img.get_width() < 4 or sheet_img.get_height() < 4:
+			print("TEST_TEXTURE_PATH_FAIL: bad spritesheet PNG path=%s" % png_path)
+			quit(1)
+			return
+
 	print("TEST_TEXTURE_PATHS_OK: red_blue_png_readable")
 	quit(0)

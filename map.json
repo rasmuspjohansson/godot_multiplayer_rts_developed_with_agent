@@ -15,20 +15,20 @@
   ],
   "player_starts": [
     {"slot": 0, "corner": "NW", "armies": [
-      {"x": 199.68, "y": 180.0, "direction": 0.0},
-      {"x": 199.68, "y": 540.0, "direction": 0.0}
+      {"x": 199.68, "y": 180.0, "direction": 0.0, "spear": true},
+      {"x": 199.68, "y": 540.0, "direction": 0.0, "horse": true}
     ]},
     {"slot": 1, "corner": "SE", "armies": [
-      {"x": 1050.0, "y": 540.0, "direction": 3.141593},
-      {"x": 1050.0, "y": 180.0, "direction": 3.141593}
+      {"x": 1050.0, "y": 540.0, "direction": 3.141593, "spear": true},
+      {"x": 1050.0, "y": 180.0, "direction": 3.141593, "horse": true}
     ]},
     {"slot": 2, "corner": "NE", "armies": [
-      {"x": 1050.0, "y": 180.0, "direction": 3.141593},
-      {"x": 1050.0, "y": 540.0, "direction": 3.141593}
+      {"x": 1050.0, "y": 180.0, "direction": 3.141593, "spear": true},
+      {"x": 1050.0, "y": 540.0, "direction": 3.141593, "horse": true}
     ]},
     {"slot": 3, "corner": "SW", "armies": [
-      {"x": 199.68, "y": 540.0, "direction": 0.0},
-      {"x": 199.68, "y": 180.0, "direction": 0.0}
+      {"x": 199.68, "y": 540.0, "direction": 0.0, "spear": true},
+      {"x": 199.68, "y": 180.0, "direction": 0.0, "horse": true}
     ]}
   ]
 }

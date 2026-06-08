@@ -100,7 +100,7 @@ if [ "$AUTO_TEST" = true ]; then
   nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=A --auto-test > logs/client_A.log 2>&1 &
   echo $! > logs/client_A.pid
   sleep 2
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=B --auto-test > logs/client_B.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=B --auto-test --color=1 > logs/client_B.log 2>&1 &
   echo $! > logs/client_B.pid
   echo "Clients A and B started (auto-test). Logs: logs/client_A.log, logs/client_B.log"
 else

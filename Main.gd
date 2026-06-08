@@ -7,6 +7,7 @@ var is_server := false
 var is_client := false
 var player_name := ""
 var auto_test := false
+var preferred_color := -1
 var _server_host := "localhost"
 
 func _get_server_host(args: Array) -> String:
@@ -29,10 +30,14 @@ func _ready():
 		GameState.is_auto_test = auto_test
 		_start_server()
 	elif "--client" in args:
-		for a in args:
+		for i in range(args.size()):
+			var a = args[i]
 			if a.begins_with("--name="):
 				player_name = a.split("=")[1]
-				break
+			elif a.begins_with("--color="):
+				preferred_color = int(a.split("=")[1])
+			elif a == "--color" and i + 1 < args.size():
+				preferred_color = int(args[i + 1])
 		if player_name == "":
 			player_name = "Unknown Player"
 		GameState.local_player_name = player_name
@@ -76,10 +81,19 @@ func _on_connected_to_server():
 	print("%s: Connected to server (peer_id=%d, name=%s)" % [marker, multiplayer.get_unique_id(), player_name])
 	rpc_id(1, "register_player", player_name)
 	_load_lobby()
+	if preferred_color >= 0:
+		call_deferred("_apply_preferred_color")
 	if auto_test:
 		var mock = preload("res://MockPlayer.gd").new()
 		mock.name = "MockPlayer"
 		add_child(mock)
+
+func _apply_preferred_color() -> void:
+	if preferred_color < 0 or preferred_color >= GameState.PLAYER_COLORS.size():
+		return
+	get_tree().create_timer(0.3).timeout.connect(func():
+		rpc_id(1, "set_my_color", preferred_color)
+	)
 
 func _on_connection_failed():
 	print("ERROR: Connection to server failed")
