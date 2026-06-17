@@ -36,6 +36,7 @@ const CAMERA_ZOOM_SPEED := 80.0
 const ARMY_CLICK_RADIUS := 80.0
 # Client: only snap to server HERE when error exceeds this (real desync only)
 const CORRECTION_THRESHOLD := 120.0
+const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 # Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
 const UNIT_HALF_HEIGHT := 11.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
@@ -512,9 +513,13 @@ func _update_move_goal_markers_3d():
 			continue
 		if not unit.has_move_goal:
 			continue
+		var st: Vector3 = unit.sync_target_position
+		var dx: float = st.x - unit.global_position.x
+		var dz: float = st.z - unit.global_position.z
+		if dx * dx + dz * dz <= MOVE_GOAL_MARKER_HIDE_DIST * MOVE_GOAL_MARKER_HIDE_DIST:
+			continue
 		var uname: String = str(unit.name)
 		seen[uname] = true
-		var st: Vector3 = unit.sync_target_position
 		var gx := st.x
 		var gz := st.z
 		var gy := get_ground_height_at(gx, gz) + 0.2
@@ -1288,7 +1293,8 @@ func _sync_unit_positions():
 				pos_data.append({
 					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
 					"tx": there.x, "ty": there.y,
-					"at": u.attack_timer
+					"at": u.attack_timer,
+					"moving": u.is_moving,
 				})
 			else:
 				dead_names.append(u.name)
@@ -1662,7 +1668,7 @@ func _client_spawn_armies_impl(data: Array):
 			var pos = Vector3(sd["x"], uy, sd["y"])
 			unit.sync_target_position = pos
 			unit.position = pos
-			unit.has_move_goal = true
+			unit.has_move_goal = false
 			add_child(unit)
 			if unit.has_method("refresh_visuals"):
 				unit.refresh_visuals()
@@ -1813,7 +1819,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		var pos = Vector3(sd["x"], uy, sd["y"])
 		unit.sync_target_position = pos
 		unit.position = pos
-		unit.has_move_goal = true
+		unit.has_move_goal = false
 		add_child(unit)
 		if unit.has_method("refresh_visuals"):
 			unit.refresh_visuals()
@@ -1866,7 +1872,7 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 			if err > CORRECTION_THRESHOLD:
 				node.global_position = here
 			node.set("sync_target_position", there)
-			node.set("has_move_goal", true)
+			node.set("has_move_goal", bool(pd.get("moving", false)))
 			if "sync_target_hp" in node:
 				node.set("sync_target_hp", pd["hp"])
 				node.set("hp", pd["hp"])
