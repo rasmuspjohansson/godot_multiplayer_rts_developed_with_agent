@@ -39,6 +39,7 @@ const CORRECTION_THRESHOLD := 120.0
 # Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
 const UNIT_HALF_HEIGHT := 11.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
+const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -208,23 +209,10 @@ func _build_terrain() -> void:
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var uvs := PackedVector2Array()
-	var colors := PackedColorArray()
 	var indices := PackedInt32Array()
 	verts.resize(cols * rows)
 	norms.resize(cols * rows)
 	uvs.resize(cols * rows)
-	colors.resize(cols * rows)
-	# Per-vertex height tint: valleys stay darker, hilltops lean toward a
-	# lighter/sunnier green. Normalized by the tallest hill's peak so maps with
-	# no hills still produce uniform mid-green.
-	var peak_h := 0.0
-	for ph in MapConfig._hills:
-		peak_h = max(peak_h, float(ph.peak))
-	# Multiplicative tints applied on top of the noise albedo (via
-	# vertex_color_use_as_albedo). Valleys slightly cooler/darker, hilltops
-	# slightly warmer/brighter so ridges catch light more than hollows.
-	var valley_tint := Color(0.85, 0.92, 0.80)
-	var peak_tint := Color(1.10, 1.05, 0.90)
 	for j in range(rows):
 		for i in range(cols):
 			var x := float(i) * step
@@ -240,8 +228,6 @@ func _build_terrain() -> void:
 			var dhdx: float = (heights[j * cols + i1] - heights[j * cols + i0]) / max(float(i1 - i0) * step, 1.0)
 			var dhdz: float = (heights[j1 * cols + i] - heights[j0 * cols + i]) / max(float(j1 - j0) * step, 1.0)
 			norms[j * cols + i] = Vector3(-dhdx, 1.0, -dhdz).normalized()
-			var t: float = 0.0 if peak_h <= 0.0 else clamp(y / peak_h, 0.0, 1.0)
-			colors[j * cols + i] = valley_tint.lerp(peak_tint, t)
 	for j in range(rows - 1):
 		for i in range(cols - 1):
 			var a: int = j * cols + i
@@ -259,60 +245,20 @@ func _build_terrain() -> void:
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = norms
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
-	arrays[Mesh.ARRAY_COLOR] = colors
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var array_mesh := ArrayMesh.new()
 	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	# Bake the grass material directly onto the ArrayMesh surface so it travels
-	# with the mesh and doesn't depend on node-level override state (which can
-	# be invalidated by `mesh_instance.mesh = ...`).
 	var grass_mat := StandardMaterial3D.new()
-	# albedo_color stays white so the color ramp in the noise texture (below)
-	# is the actual surface color; vertex colors then tint it per-height.
-	grass_mat.albedo_color = Color(1, 1, 1)
+	var ground_tex := _load_ground_texture()
+	if ground_tex != null:
+		grass_mat.albedo_texture = ground_tex
+		grass_mat.albedo_color = Color.WHITE
+	else:
+		grass_mat.albedo_color = Color(0.40, 0.62, 0.28)
 	grass_mat.roughness = 0.95
 	grass_mat.metallic = 0.0
-	# Diagnostic safety: if triangle winding ever flips in a future change,
-	# disabling backface culling still keeps the ground visible. Negligible
-	# cost on a 65x37 grid.
 	grass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# Procedural grass-variation noise as albedo texture. No asset files —
-	# Godot generates a seamless tiling texture at load time. The color ramp
-	# maps noise 0..1 to a darker/brighter green pair so variation is baked
-	# into actual grass tones instead of grayscale. Triplanar projection
-	# avoids UV stretching on steep hill slopes.
-	var n_albedo := FastNoiseLite.new()
-	n_albedo.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_albedo.frequency = 0.015
-	var albedo_grad := Gradient.new()
-	albedo_grad.set_color(0, Color(0.30, 0.52, 0.22))
-	albedo_grad.set_color(1, Color(0.50, 0.76, 0.34))
-	var nt_albedo := NoiseTexture2D.new()
-	nt_albedo.noise = n_albedo
-	nt_albedo.width = 512
-	nt_albedo.height = 512
-	nt_albedo.seamless = true
-	nt_albedo.color_ramp = albedo_grad
-	grass_mat.albedo_texture = nt_albedo
-	grass_mat.uv1_triplanar = true
-	grass_mat.uv1_scale = Vector3(0.04, 0.04, 0.04)
-	# Subtle normal-map bumps so the surface catches light with micro-detail
-	# even on fully flat areas (makes hills read better against the ground).
-	var n_bump := FastNoiseLite.new()
-	n_bump.noise_type = FastNoiseLite.TYPE_SIMPLEX
-	n_bump.frequency = 0.05
-	var nt_bump := NoiseTexture2D.new()
-	nt_bump.noise = n_bump
-	nt_bump.width = 512
-	nt_bump.height = 512
-	nt_bump.seamless = true
-	nt_bump.as_normal_map = true
-	nt_bump.bump_strength = 4.0
-	grass_mat.normal_enabled = true
-	grass_mat.normal_texture = nt_bump
-	grass_mat.normal_scale = 0.4
-	# Per-vertex tint (valleys darker, hilltops lighter).
-	grass_mat.vertex_color_use_as_albedo = true
+	grass_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	array_mesh.surface_set_material(0, grass_mat)
 	var ground := get_node_or_null("Ground")
 	if ground is MeshInstance3D:
@@ -342,6 +288,17 @@ func _build_terrain() -> void:
 			t.origin = Vector3(float(cols - 1) * step * 0.5, 0.0, float(rows - 1) * step * 0.5)
 			shape_node.transform = t
 	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills" % [cols, rows, int(step), MapConfig._hills.size()])
+
+func _load_ground_texture() -> Texture2D:
+	var img := Image.new()
+	if img.load(GROUND_TEXTURE_PATH) == OK:
+		return ImageTexture.create_from_image(img)
+	if ResourceLoader.exists(GROUND_TEXTURE_PATH):
+		var res: Resource = ResourceLoader.load(GROUND_TEXTURE_PATH)
+		if res is Texture2D:
+			return res as Texture2D
+	push_warning("Ground texture not found at %s" % GROUND_TEXTURE_PATH)
+	return null
 
 func _build_background() -> void:
 	# Painted horizon backdrop along the z=0 map edge (the side furthest from

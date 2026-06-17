@@ -33,3 +33,6 @@ Thumbs.db
 # IDE files
 .vscode/
 .idea/
+
+# Veo intermediate videos (large; keep spritesheet PNG + JSON only)
+**/video.mp4

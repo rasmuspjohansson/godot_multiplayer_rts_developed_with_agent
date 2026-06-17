@@ -23,18 +23,21 @@ static func load_from_folder(folder_path: String):
 	_cache[folder_path] = anim
 	return anim
 
+static func try_load_folder(folder_path: String):
+	return load_from_folder(folder_path)
+
 static func clear_cache() -> void:
 	_cache.clear()
 
 func _load(folder_path: String) -> bool:
 	var manifest_path := folder_path.path_join("spritesheet.json")
+	if not FileAccess.file_exists(manifest_path):
+		return false
 	var f := FileAccess.open(manifest_path, FileAccess.READ)
 	if f == null:
-		push_error("SpritesheetAnim: cannot open manifest: %s" % manifest_path)
 		return false
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
 	if typeof(parsed) != TYPE_DICTIONARY:
-		push_error("SpritesheetAnim: invalid JSON: %s" % manifest_path)
 		return false
 	var d: Dictionary = parsed
 	_frame_w = int(d.get("frame_width", 256))
@@ -46,12 +49,10 @@ func _load(folder_path: String) -> bool:
 
 	var png_path := folder_path.path_join("spritesheet.png")
 	if not FileAccess.file_exists(png_path):
-		push_error("SpritesheetAnim: missing texture: %s" % png_path)
 		return false
 	var abs_png: String = ProjectSettings.globalize_path(png_path)
 	var img: Image = Image.load_from_file(abs_png)
 	if img == null:
-		push_error("SpritesheetAnim: cannot decode PNG: %s" % png_path)
 		return false
 	_sheet = ImageTexture.create_from_image(img)
 	reset()

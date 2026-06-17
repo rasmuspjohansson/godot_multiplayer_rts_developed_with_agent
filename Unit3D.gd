@@ -35,6 +35,7 @@ const TEXTURE_FILE := "spearman.png"
 const FACING_ROTATION_NEG_X := 0.0
 const FACING_ROTATION_POS_X := PI
 const SPRITESHEET_ANIM := preload("res://SpritesheetAnim.gd")
+const UNIT_SPRITE_PATHS := preload("res://UnitSpritePaths.gd")
 const SPRITE_WORLD_HEIGHT := 22.0
 const HORSE_SPRITE_WORLD_HEIGHT := 28.0
 const SPRITE_FRAME_PX := 256.0
@@ -58,7 +59,10 @@ var _logged_position_invalid := false
 var _uses_spritesheets := false
 var _anim_walking = null
 var _anim_fight = null
+var _anim_idle = null
 var _anim_die = null
+var _static_spearman_tex: Texture2D = null
+var _current_art_faces_right := false
 var _anim_state: AnimState = AnimState.IDLE
 var _dying := false
 var _death_free_scheduled := false
@@ -129,7 +133,10 @@ func _clear_visual_mesh() -> void:
 	_texture_loaded = false
 	_anim_walking = null
 	_anim_fight = null
+	_anim_idle = null
 	_anim_die = null
+	_static_spearman_tex = null
+	_current_art_faces_right = false
 	_anim_state = AnimState.IDLE
 	set_process(false)
 
@@ -140,6 +147,7 @@ func _build_visual_mesh():
 		_uses_spritesheets = true
 		_sprite = Sprite3D.new()
 		_sprite.texture = _idle_frame_texture()
+		_current_art_faces_right = _anim_idle != null or _anim_walking != null
 		_sprite.pixel_size = _sprite_pixel_size()
 		_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 		add_child(_sprite)
@@ -179,52 +187,45 @@ func _sprite_pixel_size() -> float:
 	var h := HORSE_SPRITE_WORLD_HEIGHT if has_horse else SPRITE_WORLD_HEIGHT
 	return h / SPRITE_FRAME_PX
 
-func _idle_frame_texture() -> AtlasTexture:
+func _idle_frame_texture() -> Texture2D:
+	if _anim_idle != null:
+		_anim_idle.reset()
+		return _anim_idle.get_frame_texture()
 	if _anim_walking != null:
 		_anim_walking.reset()
 		return _anim_walking.get_frame_texture()
-	return null
+	return _static_spearman_tex
+
+func _static_frame_texture() -> Texture2D:
+	return _static_spearman_tex
 
 func _try_load_spritesheets() -> bool:
-	if _get_color_folder() != "blue":
-		return false
 	var color := _get_color_folder()
-	var spearman_base := "res://sprites/%s/spearman" % color
-	if has_horse:
-		var horse_base := "res://sprites/%s/horseman" % color
-		_anim_walking = SPRITESHEET_ANIM.load_from_folder(horse_base.path_join("galloping"))
-		_anim_fight = SPRITESHEET_ANIM.load_from_folder(spearman_base.path_join("fight"))
-		_anim_die = SPRITESHEET_ANIM.load_from_folder(spearman_base.path_join("die"))
-	elif has_spear:
-		_anim_walking = SPRITESHEET_ANIM.load_from_folder(spearman_base.path_join("walking"))
-		_anim_fight = SPRITESHEET_ANIM.load_from_folder(spearman_base.path_join("fight"))
-		_anim_die = SPRITESHEET_ANIM.load_from_folder(spearman_base.path_join("die"))
-	else:
-		return false
-	if _anim_walking == null:
-		_anim_walking = null
-		_anim_fight = null
-		_anim_die = null
-		return false
-	if _anim_fight == null or _anim_die == null:
-		_anim_fight = null
-		_anim_die = null
-	return true
+	var unit_type := UNIT_SPRITE_PATHS.unit_type_for_equipment(has_horse, has_spear)
+	_static_spearman_tex = UNIT_SPRITE_PATHS.load_static_spearman_texture(color)
+
+	var move_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "move")
+	var attack_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "attack")
+	var idle_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "idle")
+
+	if UNIT_SPRITE_PATHS.folder_has_spritesheet(move_path):
+		_anim_walking = SPRITESHEET_ANIM.try_load_folder(move_path)
+	if UNIT_SPRITE_PATHS.folder_has_spritesheet(attack_path):
+		_anim_fight = SPRITESHEET_ANIM.try_load_folder(attack_path)
+	if UNIT_SPRITE_PATHS.folder_has_spritesheet(idle_path):
+		_anim_idle = SPRITESHEET_ANIM.try_load_folder(idle_path)
+
+	return _anim_walking != null or _anim_fight != null or _anim_idle != null
 
 func _get_color_folder() -> String:
-	var ci := 0
-	if owner_peer_id in GameState.players:
-		ci = GameState.players[owner_peer_id].get("color_index", 0)
-	match ci:
-		0:
-			return "red"
-		1:
-			return "blue"
-		_:
-			return "red"
+	return UNIT_SPRITE_PATHS.color_folder_for_peer(owner_peer_id)
 
 func _get_texture_path() -> String:
-	return "res://images/%s/%s/%s" % [_get_color_folder(), EQUIPMENT_FOLDER, TEXTURE_FILE]
+	var color := _get_color_folder()
+	var path := UNIT_SPRITE_PATHS.static_spearman_image_path(color)
+	if FileAccess.file_exists(path):
+		return path
+	return UNIT_SPRITE_PATHS.static_spearman_image_path("blue")
 
 func _load_spearman_texture() -> Texture2D:
 	var path := _get_texture_path()
@@ -309,30 +310,53 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 		_anim_state = state
 		match state:
 			AnimState.WALKING:
-				_anim_walking.reset()
+				if _anim_walking != null:
+					_anim_walking.reset()
 			AnimState.FIGHT:
 				if _anim_fight != null:
 					_anim_fight.reset()
+			AnimState.IDLE:
+				if _anim_idle != null:
+					_anim_idle.reset()
+				elif _anim_walking != null:
+					_anim_walking.reset()
 			AnimState.DIE:
-				_anim_die.reset()
-	var tex: AtlasTexture = null
+				if _anim_die != null:
+					_anim_die.reset()
+	var tex: Texture2D = null
+	var faces_right := false
 	match state:
 		AnimState.DIE:
 			if _anim_die != null:
 				tex = _anim_die.advance(delta, false, SPRITE_ANIM_SPEED)
+				faces_right = true
 			else:
-				tex = _idle_frame_texture()
+				tex = _static_frame_texture()
+				faces_right = false
 		AnimState.FIGHT:
 			if _anim_fight != null:
 				tex = _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
+				faces_right = true
 			else:
-				tex = _idle_frame_texture()
+				tex = _static_frame_texture()
+				faces_right = false
 		AnimState.WALKING:
-			tex = _anim_walking.advance(delta, true, SPRITE_ANIM_SPEED)
+			if _anim_walking != null:
+				tex = _anim_walking.advance(delta, true, SPRITE_ANIM_SPEED)
+				faces_right = true
+			else:
+				tex = _static_frame_texture()
+				faces_right = false
 		AnimState.IDLE:
-			tex = _idle_frame_texture()
+			if _anim_idle != null:
+				tex = _anim_idle.get_frame_texture()
+				faces_right = true
+			else:
+				tex = _static_frame_texture()
+				faces_right = false
 	if tex != null:
 		_sprite.texture = tex
+		_current_art_faces_right = faces_right
 
 func _physics_process(delta: float):
 	if is_dead and not _dying:
@@ -455,7 +479,7 @@ func _update_facing():
 				"right" if _facing_right else "left",
 				velocity.x, velocity.z
 			])
-		_sprite.flip_h = _facing_right if not has_horse else not _facing_right
+		_sprite.flip_h = (not _facing_right) if _current_art_faces_right else _facing_right
 		return
 	if _mesh == null:
 		return
