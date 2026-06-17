@@ -19,6 +19,10 @@ static func unit_type_for_equipment(has_horse: bool, has_spear: bool) -> String:
 		return "spearman"
 	return "clubman"
 
+static func art_faces_right_for_unit(unit_type: String) -> bool:
+	# Knight Veo clips face right; foot soldiers match legacy static art (left).
+	return unit_type == "knight"
+
 static func ai_sprite_folder(color: String, unit_type: String, action: String) -> String:
 	return "%s/%s/%s/%s" % [AI_SPRITES_ROOT, color, unit_type, action]
 

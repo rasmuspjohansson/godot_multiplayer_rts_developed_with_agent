@@ -165,7 +165,7 @@ func _build_visual_mesh():
 		_uses_spritesheets = true
 		_sprite = Sprite3D.new()
 		_sprite.texture = _idle_frame_texture()
-		_current_art_faces_right = _anim_idle != null or _anim_walking != null
+		_current_art_faces_right = _unit_art_faces_right()
 		_sprite.pixel_size = _sprite_pixel_size()
 		_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 		add_child(_sprite)
@@ -227,6 +227,11 @@ func _idle_frame_texture() -> Texture2D:
 
 func _static_frame_texture() -> Texture2D:
 	return _static_spearman_tex
+
+func _unit_art_faces_right() -> bool:
+	return UNIT_SPRITE_PATHS.art_faces_right_for_unit(
+		UNIT_SPRITE_PATHS.unit_type_for_equipment(has_horse, has_spear)
+	)
 
 func _try_load_spritesheets() -> bool:
 	var color := _get_color_folder()
@@ -364,33 +369,34 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 				if _anim_die != null:
 					_anim_die.reset()
 	var tex: Texture2D = null
+	var art_faces_right := _unit_art_faces_right()
 	var faces_right := false
 	match state:
 		AnimState.DIE:
 			if _anim_die != null:
 				tex = _anim_die.advance(delta, false, SPRITE_ANIM_SPEED)
-				faces_right = true
+				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 		AnimState.FIGHT:
 			if _anim_fight != null:
 				tex = _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
-				faces_right = true
+				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 		AnimState.WALKING:
 			if _anim_walking != null:
 				tex = _anim_walking.advance(delta, true, SPRITE_ANIM_SPEED)
-				faces_right = true
+				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 		AnimState.IDLE:
 			if _anim_idle != null:
 				tex = _anim_idle.get_frame_texture()
-				faces_right = true
+				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
