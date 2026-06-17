@@ -41,6 +41,9 @@ const HORSE_SPRITE_WORLD_HEIGHT := 28.0
 const SPRITE_FRAME_PX := 256.0
 const SPRITE_PIXEL_SIZE := SPRITE_WORLD_HEIGHT / SPRITE_FRAME_PX
 const SPRITE_ANIM_SPEED := 1.0 / 3.0
+## Match World camera span (200–1200) with headroom so zoomed-out units stay audible.
+const SFX_MAX_DISTANCE := 2400.0
+const SFX_UNIT_SIZE := 100.0
 
 enum AnimState { IDLE, WALKING, FIGHT, DIE }
 
@@ -62,6 +65,11 @@ var _anim_fight = null
 var _anim_idle = null
 var _anim_die = null
 var _static_spearman_tex: Texture2D = null
+var _sound_walking: AudioStream = null
+var _sound_fight: AudioStream = null
+var _sound_idle: AudioStream = null
+var _audio_player: AudioStreamPlayer3D = null
+var _current_sound_state: AnimState = AnimState.IDLE
 var _current_art_faces_right := false
 var _anim_state: AnimState = AnimState.IDLE
 var _dying := false
@@ -136,6 +144,14 @@ func _clear_visual_mesh() -> void:
 	_anim_idle = null
 	_anim_die = null
 	_static_spearman_tex = null
+	_sound_walking = null
+	_sound_fight = null
+	_sound_idle = null
+	if _audio_player != null and is_instance_valid(_audio_player):
+		_audio_player.stop()
+		_audio_player.queue_free()
+	_audio_player = null
+	_current_sound_state = AnimState.IDLE
 	_current_art_faces_right = false
 	_anim_state = AnimState.IDLE
 	set_process(false)
@@ -151,6 +167,17 @@ func _build_visual_mesh():
 		_sprite.pixel_size = _sprite_pixel_size()
 		_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 		add_child(_sprite)
+		_audio_player = AudioStreamPlayer3D.new()
+		_audio_player.name = "SpriteAudio"
+		_audio_player.unit_size = SFX_UNIT_SIZE
+		_audio_player.max_distance = SFX_MAX_DISTANCE
+		_audio_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+		_audio_player.bus = AudioSettings.get_sfx_bus_name()
+		if AudioServer.get_bus_index(_audio_player.bus) < 0:
+			push_warning("Unit3D: SFX bus missing for %s; using Master" % name)
+			_audio_player.bus = &"Master"
+		add_child(_audio_player)
+		_play_anim_sound(_anim_state)
 		set_process(true)
 		return
 
@@ -210,10 +237,13 @@ func _try_load_spritesheets() -> bool:
 
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(move_path):
 		_anim_walking = SPRITESHEET_ANIM.try_load_folder(move_path)
+		_sound_walking = UNIT_SPRITE_PATHS.load_sprite_sound(move_path)
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(attack_path):
 		_anim_fight = SPRITESHEET_ANIM.try_load_folder(attack_path)
+		_sound_fight = UNIT_SPRITE_PATHS.load_sprite_sound(attack_path)
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(idle_path):
 		_anim_idle = SPRITESHEET_ANIM.try_load_folder(idle_path)
+		_sound_idle = UNIT_SPRITE_PATHS.load_sprite_sound(idle_path)
 
 	return _anim_walking != null or _anim_fight != null or _anim_idle != null
 
@@ -260,6 +290,8 @@ func begin_death() -> void:
 	is_dead = true
 	velocity = Vector3.ZERO
 	has_move_goal = false
+	if _audio_player != null:
+		_audio_player.stop()
 	if _uses_spritesheets and _anim_die != null:
 		_dying = true
 		_anim_state = AnimState.DIE
@@ -308,6 +340,7 @@ func _is_moving() -> bool:
 func _apply_anim_state(state: AnimState, delta: float) -> void:
 	if state != _anim_state:
 		_anim_state = state
+		_play_anim_sound(state)
 		match state:
 			AnimState.WALKING:
 				if _anim_walking != null:
@@ -357,6 +390,42 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 	if tex != null:
 		_sprite.texture = tex
 		_current_art_faces_right = faces_right
+
+func _stream_for_anim_state(state: AnimState) -> AudioStream:
+	match state:
+		AnimState.WALKING:
+			return _sound_walking
+		AnimState.FIGHT:
+			return _sound_fight
+		AnimState.IDLE:
+			return _sound_idle
+	return null
+
+func _should_loop_anim_sound(state: AnimState) -> bool:
+	return state == AnimState.WALKING or state == AnimState.FIGHT or state == AnimState.IDLE
+
+func _play_anim_sound(state: AnimState) -> void:
+	if _audio_player == null:
+		return
+	if state == _current_sound_state and _audio_player.playing:
+		return
+	_current_sound_state = state
+	var base_stream := _stream_for_anim_state(state)
+	if base_stream == null:
+		_audio_player.stop()
+		_audio_player.stream = null
+		return
+	var stream := base_stream.duplicate()
+	if stream is AudioStreamOggVorbis:
+		(stream as AudioStreamOggVorbis).loop = _should_loop_anim_sound(state)
+	elif stream is AudioStreamMP3:
+		(stream as AudioStreamMP3).loop = _should_loop_anim_sound(state)
+	elif stream is AudioStreamWAV:
+		var wav := stream as AudioStreamWAV
+		wav.loop_mode = AudioStreamWAV.LOOP_FORWARD if _should_loop_anim_sound(state) else AudioStreamWAV.LOOP_DISABLED
+	_audio_player.stop()
+	_audio_player.stream = stream
+	_audio_player.play()
 
 func _physics_process(delta: float):
 	if is_dead and not _dying:

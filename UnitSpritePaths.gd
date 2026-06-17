@@ -30,6 +30,21 @@ static func folder_has_spritesheet(folder_path: String) -> bool:
 	var png_path := folder_path.path_join("spritesheet.png")
 	return FileAccess.file_exists(manifest_path) and FileAccess.file_exists(png_path)
 
+static func sprite_sound_path(folder_path: String) -> String:
+	return folder_path.path_join("sound.ogg")
+
+static func folder_has_sound(folder_path: String) -> bool:
+	return FileAccess.file_exists(sprite_sound_path(folder_path))
+
+static func load_sprite_sound(folder_path: String) -> AudioStream:
+	var path := sprite_sound_path(folder_path)
+	if not FileAccess.file_exists(path):
+		return null
+	var abs_path := ProjectSettings.globalize_path(path)
+	if abs_path.is_empty():
+		return null
+	return AudioStreamOggVorbis.load_from_file(abs_path)
+
 static func load_static_spearman_texture(color: String) -> Texture2D:
 	for try_color in [color, "blue"]:
 		var path := static_spearman_image_path(try_color)

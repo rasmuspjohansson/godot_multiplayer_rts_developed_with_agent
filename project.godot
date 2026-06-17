@@ -18,6 +18,11 @@ config/features=PackedStringArray("4.6")
 
 GameState="*res://GameState.gd"
 MapConfig="*res://MapConfig.gd"
+AudioSettings="*res://AudioSettings.gd"
+
+[audio]
+
+buses/default_bus_layout="res://default_bus_layout.tres"
 
 [display]
 

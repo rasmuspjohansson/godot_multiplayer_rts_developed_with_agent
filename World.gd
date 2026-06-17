@@ -252,10 +252,10 @@ func _build_terrain() -> void:
 	var ground_tex := _load_ground_texture()
 	if ground_tex != null:
 		grass_mat.albedo_texture = ground_tex
-		grass_mat.albedo_color = Color.WHITE
+		grass_mat.albedo_color = Color(1.15, 1.15, 1.10)
 	else:
-		grass_mat.albedo_color = Color(0.40, 0.62, 0.28)
-	grass_mat.roughness = 0.95
+		grass_mat.albedo_color = Color(0.46, 0.71, 0.32)
+	grass_mat.roughness = 0.85
 	grass_mat.metallic = 0.0
 	grass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	grass_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
@@ -266,6 +266,8 @@ func _build_terrain() -> void:
 		# placeholder PlaneMesh used.
 		ground.transform = Transform3D.IDENTITY
 		ground.mesh = array_mesh
+		ground.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# Clear any stale scene-level override so the mesh's own surface
 		# material is used.
 		ground.set_surface_override_material(0, null)
@@ -378,7 +380,10 @@ func _setup_background_music() -> void:
 	var player := AudioStreamPlayer.new()
 	player.name = "BackgroundMusic"
 	player.stream = stream
-	player.bus = &"Master"
+	player.bus = AudioSettings.get_music_bus_name()
+	if AudioServer.get_bus_index(player.bus) < 0:
+		push_warning("World: Music bus missing; background music will use Master")
+		player.bus = &"Master"
 	add_child(player)
 	player.play()
 

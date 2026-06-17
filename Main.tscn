@@ -1,6 +1,7 @@
-[gd_scene format=3 uid="uid://ck8fqg5kg0k5w"]
+[gd_scene load_steps=3 format=3 uid="uid://ck8fqg5kg0k5w"]
 
 [ext_resource type="Script" uid="uid://b5prpat5kq2uk" path="res://Main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://VolumePanel.tscn" id="2_volume"]
 
 [node name="Main" type="Node" unique_id=659810179]
 script = ExtResource("1_main")
@@ -8,3 +9,16 @@ script = ExtResource("1_main")
 [node name="Level" type="Node" parent="." unique_id=244177401]
 
 [node name="UI" type="CanvasLayer" parent="." unique_id=1740147508]
+
+[node name="AudioUI" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="VolumePanel" parent="AudioUI" instance=ExtResource("2_volume")]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -120.0
+offset_right = 252.0
+offset_bottom = -12.0
+grow_vertical = 0

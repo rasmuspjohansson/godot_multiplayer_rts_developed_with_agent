@@ -58,6 +58,17 @@ func _init():
 			print("TEST_TEXTURE_PATH_FAIL: missing spritesheet PNG path=%s" % png_path)
 			quit(1)
 			return
+		var sound_path: String = folder.path_join("sound.ogg")
+		if not FileAccess.file_exists(sound_path):
+			print("TEST_TEXTURE_PATH_FAIL: missing sprite sound path=%s" % sound_path)
+			quit(1)
+			return
+		var abs_sound: String = ProjectSettings.globalize_path(sound_path)
+		var sound_stream: AudioStream = AudioStreamOggVorbis.load_from_file(abs_sound)
+		if sound_stream == null:
+			print("TEST_TEXTURE_PATH_FAIL: sprite sound did not load as AudioStream path=%s" % sound_path)
+			quit(1)
+			return
 
 	print("TEST_TEXTURE_PATHS_OK: red_blue_png_readable")
 	quit(0)
