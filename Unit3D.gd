@@ -68,6 +68,7 @@ var _static_spearman_tex: Texture2D = null
 var _sound_walking: AudioStream = null
 var _sound_fight: AudioStream = null
 var _sound_idle: AudioStream = null
+var _sound_die: AudioStream = null
 var _audio_player: AudioStreamPlayer3D = null
 var _current_sound_state: AnimState = AnimState.IDLE
 var _current_art_faces_right := false
@@ -147,6 +148,7 @@ func _clear_visual_mesh() -> void:
 	_sound_walking = null
 	_sound_fight = null
 	_sound_idle = null
+	_sound_die = null
 	if _audio_player != null and is_instance_valid(_audio_player):
 		_audio_player.stop()
 		_audio_player.queue_free()
@@ -234,6 +236,7 @@ func _try_load_spritesheets() -> bool:
 	var move_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "move")
 	var attack_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "attack")
 	var idle_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "idle")
+	var die_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "die")
 
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(move_path):
 		_anim_walking = SPRITESHEET_ANIM.try_load_folder(move_path)
@@ -244,8 +247,11 @@ func _try_load_spritesheets() -> bool:
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(idle_path):
 		_anim_idle = SPRITESHEET_ANIM.try_load_folder(idle_path)
 		_sound_idle = UNIT_SPRITE_PATHS.load_sprite_sound(idle_path)
+	if UNIT_SPRITE_PATHS.folder_has_spritesheet(die_path):
+		_anim_die = SPRITESHEET_ANIM.try_load_folder(die_path)
+		_sound_die = UNIT_SPRITE_PATHS.load_sprite_sound(die_path)
 
-	return _anim_walking != null or _anim_fight != null or _anim_idle != null
+	return _anim_walking != null or _anim_fight != null or _anim_idle != null or _anim_die != null
 
 func _get_color_folder() -> String:
 	return UNIT_SPRITE_PATHS.color_folder_for_peer(owner_peer_id)
@@ -296,6 +302,7 @@ func begin_death() -> void:
 		_dying = true
 		_anim_state = AnimState.DIE
 		_anim_die.reset()
+		_play_anim_sound(AnimState.DIE)
 		_death_free_scheduled = true
 		var dur := maxf(_anim_die.get_duration(SPRITE_ANIM_SPEED), 0.5)
 		get_tree().create_timer(dur).timeout.connect(func():
@@ -399,6 +406,8 @@ func _stream_for_anim_state(state: AnimState) -> AudioStream:
 			return _sound_fight
 		AnimState.IDLE:
 			return _sound_idle
+		AnimState.DIE:
+			return _sound_die
 	return null
 
 func _should_loop_anim_sound(state: AnimState) -> bool:
