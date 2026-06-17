@@ -2,7 +2,9 @@
 
 A minimal multiplayer RTS where two players each control **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture two control points (**Stables** and **Blacksmith**) that produce horses and spears. Armies have a **stance**: `defensive` (only moves when ordered) or `aggressive` (the server retargets the army to its closest enemy every second). You win when every one of your opponent's armies has routed.
 
-<img width="1915" height="1054" alt="image" src="https://github.com/user-attachments/assets/c8d8ca0a-c531-4e66-88d1-19060a02b6ad" />
+
+<img width="1353" height="901" alt="from_game" src="https://github.com/user-attachments/assets/efd77746-ebf7-4829-ae24-8263f28d7aaf" />
+
 
 ## Agent-Driven Development
 
