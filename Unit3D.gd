@@ -1,6 +1,9 @@
 extends CharacterBody3D
 ## 3D unit: server sim + client visuals (billboard / fallback box).
 
+const SPRITESHEET_ANIM := preload("res://SpritesheetAnim.gd")
+const UNIT_SPRITE_PATHS := preload("res://UnitSpritePaths.gd")
+
 signal unit_died(peer_id: int)
 
 var owner_peer_id: int = 0
@@ -11,7 +14,7 @@ var has_horse: bool = false
 var speed: float = 200.0 / 6.0
 var attack: float = 10.0
 var defense: float = 2.0
-var attack_range: float = 50.0
+var attack_range: float = UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE
 
 ## Server: move goal in map XZ (same as legacy Unit move_target Vector2).
 var move_target: Vector2 = Vector2.ZERO
@@ -34,8 +37,6 @@ const EQUIPMENT_FOLDER := "spearman"
 const TEXTURE_FILE := "spearman.png"
 const FACING_ROTATION_NEG_X := 0.0
 const FACING_ROTATION_POS_X := PI
-const SPRITESHEET_ANIM := preload("res://SpritesheetAnim.gd")
-const UNIT_SPRITE_PATHS := preload("res://UnitSpritePaths.gd")
 const SPRITE_WORLD_HEIGHT := 22.0
 const HORSE_SPRITE_WORLD_HEIGHT := 28.0
 const SPRITE_FRAME_PX := 256.0
@@ -75,6 +76,7 @@ var _current_art_faces_right := false
 var _anim_state: AnimState = AnimState.IDLE
 var _dying := false
 var _death_free_scheduled := false
+var _ref_char_height_px: int = 0
 
 func _ready():
 	if multiplayer.is_server():
@@ -156,6 +158,7 @@ func _clear_visual_mesh() -> void:
 	_current_sound_state = AnimState.IDLE
 	_current_art_faces_right = false
 	_anim_state = AnimState.IDLE
+	_ref_char_height_px = 0
 	set_process(false)
 
 func _build_visual_mesh():
@@ -163,10 +166,13 @@ func _build_visual_mesh():
 	if _try_load_spritesheets():
 		_texture_loaded = true
 		_uses_spritesheets = true
+		_ref_char_height_px = int(SPRITE_FRAME_PX)
+		if _anim_walking != null:
+			_ref_char_height_px = _anim_walking.get_character_height_px(0)
 		_sprite = Sprite3D.new()
 		_sprite.texture = _idle_frame_texture()
 		_current_art_faces_right = _unit_art_faces_right()
-		_sprite.pixel_size = _sprite_pixel_size()
+		_sprite.pixel_size = _scaled_pixel_size(_char_height_for_idle())
 		_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 		add_child(_sprite)
 		_audio_player = AudioStreamPlayer3D.new()
@@ -215,6 +221,19 @@ func _build_visual_mesh():
 func _sprite_pixel_size() -> float:
 	var h := HORSE_SPRITE_WORLD_HEIGHT if has_horse else SPRITE_WORLD_HEIGHT
 	return h / SPRITE_FRAME_PX
+
+func _scaled_pixel_size(char_height_px: int) -> float:
+	var base := _sprite_pixel_size()
+	if _ref_char_height_px <= 0 or char_height_px <= 0:
+		return base
+	return base * (float(_ref_char_height_px) / float(char_height_px))
+
+func _char_height_for_idle() -> int:
+	if _anim_idle != null:
+		return _anim_idle.get_character_height_px(0)
+	if _anim_walking != null:
+		return _anim_walking.get_character_height_px(0)
+	return _ref_char_height_px
 
 func _idle_frame_texture() -> Texture2D:
 	if _anim_idle != null:
@@ -340,14 +359,14 @@ func _pick_anim_state() -> AnimState:
 func _is_moving() -> bool:
 	if velocity.length() > 0.5:
 		return true
-	if has_move_goal:
-		var to_target := Vector3(
-			sync_target_position.x - global_position.x,
-			0.0,
-			sync_target_position.z - global_position.z
-		)
-		return to_target.length() > 1.0
-	return false
+	if not has_move_goal:
+		return false
+	var to_target := Vector3(
+		sync_target_position.x - global_position.x,
+		0.0,
+		sync_target_position.z - global_position.z
+	)
+	return to_target.length() > 1.0
 
 func _apply_anim_state(state: AnimState, delta: float) -> void:
 	if state != _anim_state:
@@ -361,6 +380,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 				if _anim_fight != null:
 					_anim_fight.reset()
 			AnimState.IDLE:
+				# Temporary: hold frame 0 only. Loop advance() + idle SFX when clips are better.
 				if _anim_idle != null:
 					_anim_idle.reset()
 				elif _anim_walking != null:
@@ -371,10 +391,12 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 	var tex: Texture2D = null
 	var art_faces_right := _unit_art_faces_right()
 	var faces_right := false
+	var char_height_px := _ref_char_height_px
 	match state:
 		AnimState.DIE:
 			if _anim_die != null:
 				tex = _anim_die.advance(delta, false, SPRITE_ANIM_SPEED)
+				char_height_px = _anim_die.get_character_height_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -382,6 +404,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 		AnimState.FIGHT:
 			if _anim_fight != null:
 				tex = _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
+				char_height_px = _anim_fight.get_character_height_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -389,19 +412,23 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 		AnimState.WALKING:
 			if _anim_walking != null:
 				tex = _anim_walking.advance(delta, true, SPRITE_ANIM_SPEED)
+				char_height_px = _anim_walking.get_character_height_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 		AnimState.IDLE:
+			# Temporary: single-frame idle pose until we have a better idle spritesheet.
 			if _anim_idle != null:
 				tex = _anim_idle.get_frame_texture()
+				char_height_px = _anim_idle.get_character_height_px(0)
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 	if tex != null:
 		_sprite.texture = tex
+		_sprite.pixel_size = _scaled_pixel_size(char_height_px)
 		_current_art_faces_right = faces_right
 
 func _stream_for_anim_state(state: AnimState) -> AudioStream:
@@ -411,13 +438,15 @@ func _stream_for_anim_state(state: AnimState) -> AudioStream:
 		AnimState.FIGHT:
 			return _sound_fight
 		AnimState.IDLE:
-			return _sound_idle
+			# Temporary: no idle SFX until we have a dedicated ambient idle sound.
+			return null
 		AnimState.DIE:
 			return _sound_die
 	return null
 
 func _should_loop_anim_sound(state: AnimState) -> bool:
-	return state == AnimState.WALKING or state == AnimState.FIGHT or state == AnimState.IDLE
+	# Idle omitted until we have a better idle loop sound (see _stream_for_anim_state).
+	return state == AnimState.WALKING or state == AnimState.FIGHT
 
 func _play_anim_sound(state: AnimState) -> void:
 	if _audio_player == null:
@@ -490,6 +519,7 @@ func _client_physics(delta: float):
 			velocity = dir * speed
 		else:
 			velocity = Vector3.ZERO
+			has_move_goal = false
 		move_and_slide()
 		_stick_to_terrain()
 		hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))

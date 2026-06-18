@@ -3,6 +3,7 @@ extends Node3D
 
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
+const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
 
 const ARMIES_PER_PLAYER := 2
 const UNITS_PER_ARMY := 10
@@ -909,7 +910,7 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	var use_spear: bool = equipment.get("spear", false)
 	var speed: float = (280.0 if use_horse else 200.0) / 6.0
 	var atk: float = 13.0 if use_spear else 10.0
-	var atk_range: float = 65.0 if use_spear else 50.0
+	var atk_range: float = UNIT_SPRITE_PATHS.default_attack_range_for_equipment(use_horse, use_spear)
 	var army = Node3D.new()
 	army.set_script(preload("res://Army3D.gd"))
 	army.army_id = aid
@@ -1022,7 +1023,7 @@ func _serialize_one_army(army) -> Dictionary:
 	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
 	var speed = s0.speed if s0 else 200.0 / 6.0
 	var attack = s0.attack if s0 else 10.0
-	var attack_range = s0.attack_range if s0 else 50.0
+	var attack_range = s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE
 	return {
 		"army_id": army.army_id,
 		"pid": army.owner_peer_id,
@@ -1802,7 +1803,10 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	armies.append(army)
 	var speed = ad.get("speed", 200.0 / 6.0)
 	var atk = ad.get("attack", 10.0)
-	var atk_range = ad.get("attack_range", 50.0)
+	var atk_range = ad.get("attack_range", UNIT_SPRITE_PATHS.default_attack_range_for_equipment(
+		ad.get("horse", false),
+		ad.get("spear", false)
+	))
 	for sd in ad["soldiers"]:
 		var unit = _make_client_unit_3d()
 		unit.set_script(preload("res://Unit3D.gd"))

@@ -6,6 +6,7 @@ const _SCRIPT := preload("res://SpritesheetAnim.gd")
 static var _cache: Dictionary = {}
 
 var _sheet: Texture2D
+var _sheet_image: Image
 var _frame_w: int
 var _frame_h: int
 var _frame_count: int
@@ -13,6 +14,7 @@ var _playback_fps: float
 var _frame_index: int = 0
 var _accum: float = 0.0
 var _finished: bool = false
+var _char_height_cache: Dictionary = {}
 
 static func load_from_folder(folder_path: String):
 	if _cache.has(folder_path):
@@ -55,6 +57,7 @@ func _load(folder_path: String) -> bool:
 	if img == null:
 		return false
 	_sheet = ImageTexture.create_from_image(img)
+	_sheet_image = img
 	reset()
 	return true
 
@@ -80,6 +83,26 @@ func get_playback_fps() -> float:
 
 func get_duration(speed_scale: float = 1.0) -> float:
 	return float(_frame_count) / (_playback_fps * speed_scale)
+
+func get_character_height_px(frame_index: int = -1) -> int:
+	if _sheet_image == null:
+		return _frame_h
+	if frame_index < 0:
+		frame_index = _frame_index
+	if _char_height_cache.has(frame_index):
+		return _char_height_cache[frame_index]
+	var x0: int = frame_index * _frame_w
+	var y_min: int = _frame_h
+	var y_max: int = -1
+	for y in range(_frame_h):
+		for x in range(_frame_w):
+			var px := _sheet_image.get_pixel(x0 + x, y)
+			if px.a > 0.5:
+				y_min = mini(y_min, y)
+				y_max = maxi(y_max, y)
+	var height: int = _frame_h if y_max < 0 else (y_max - y_min + 1)
+	_char_height_cache[frame_index] = height
+	return height
 
 func get_frame_texture() -> AtlasTexture:
 	var at := AtlasTexture.new()

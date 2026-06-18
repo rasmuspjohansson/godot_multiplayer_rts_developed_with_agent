@@ -4,6 +4,9 @@ extends RefCounted
 const TEAM_COLOR_FOLDERS: Array[String] = ["red", "blue", "green", "orange", "purple"]
 const AI_SPRITES_ROOT := "res://AI_generated_sprites"
 const STATIC_SPEARMAN_REL := "spearman/spearman.png"
+const MELEE_ATTACK_RANGE := 22.0
+const SPEAR_ATTACK_RANGE := 30.0
+const RANGED_ATTACK_RANGE := 120.0
 
 static func color_folder_for_peer(peer_id: int) -> String:
 	if peer_id in GameState.players:
@@ -22,6 +25,14 @@ static func unit_type_for_equipment(has_horse: bool, has_spear: bool) -> String:
 static func art_faces_right_for_unit(unit_type: String) -> bool:
 	# Knight Veo clips face right; foot soldiers match legacy static art (left).
 	return unit_type == "knight"
+
+static func default_attack_range_for_equipment(has_horse: bool, has_spear: bool) -> float:
+	var unit_type := unit_type_for_equipment(has_horse, has_spear)
+	if unit_type == "bowman":
+		return RANGED_ATTACK_RANGE
+	if has_spear:
+		return SPEAR_ATTACK_RANGE
+	return MELEE_ATTACK_RANGE
 
 static func ai_sprite_folder(color: String, unit_type: String, action: String) -> String:
 	return "%s/%s/%s/%s" % [AI_SPRITES_ROOT, color, unit_type, action]
