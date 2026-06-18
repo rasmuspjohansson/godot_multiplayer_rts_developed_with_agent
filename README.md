@@ -168,6 +168,7 @@ grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 
 - Dedicated **headless** server (authoritative for movement, combat, capture points, resources, and the aggressive-seek logic) and two **3D** clients on port 8910.
 - Map is `1280 × 720` on XZ with terrain ground collision; 3D camera pitches from bird's-eye to near-horizontal as you zoom in.
+- Unit movement: enemies block each other; friendlies pass through. See `game.md` Physics / collision to toggle pass-through.
 - `Army3D` has a `stance` field; when `aggressive` the server retargets the army to its closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).
 
 ## Remote debugging

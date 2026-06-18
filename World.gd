@@ -4,6 +4,13 @@ extends Node3D
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
+## Per-player unit layers (layer 2 is reserved for ground).
+const TEAM_COLLISION_LAYERS: Array[int] = [1, 4, 8, 16]
+## When true, units pass through each other during movement (no physics blocking).
+## Combat still uses distance checks in Unit3D._try_attack(), not collision contact.
+## Set false to restore enemy-vs-enemy blocking via per-team collision_mask.
+## See game.md "Physics / collision" for layer layout and friendly-blocking notes.
+const UNIT_PASS_THROUGH := false
 
 const ARMIES_PER_PLAYER := 2
 const UNITS_PER_ARMY := 10
@@ -859,10 +866,30 @@ func _set_player_sides():
 	for pid in player_ids:
 		army_index_per_player[pid] = ARMIES_PER_PLAYER + 1
 
-func _make_server_unit_3d() -> CharacterBody3D:
+func _team_collision_layer_for_peer(peer_id: int) -> int:
+	var slot := 0
+	if peer_id in GameState.players:
+		slot = int(GameState.players[peer_id].get("color_index", 0))
+	return TEAM_COLLISION_LAYERS[clampi(slot, 0, TEAM_COLLISION_LAYERS.size() - 1)]
+
+func _enemy_collision_mask_for_peer(peer_id: int) -> int:
+	var own_layer := _team_collision_layer_for_peer(peer_id)
+	var mask := 0
+	for layer in TEAM_COLLISION_LAYERS:
+		if layer != own_layer:
+			mask |= layer
+	return mask
+
+func _configure_unit_collision(unit: CharacterBody3D, peer_id: int) -> void:
+	unit.collision_layer = _team_collision_layer_for_peer(peer_id)
+	if UNIT_PASS_THROUGH:
+		unit.collision_mask = 0
+	else:
+		unit.collision_mask = _enemy_collision_mask_for_peer(peer_id)
+
+func _make_server_unit_3d(peer_id: int) -> CharacterBody3D:
 	var unit = CharacterBody3D.new()
-	unit.collision_layer = 1
-	unit.collision_mask = 1
+	_configure_unit_collision(unit, peer_id)
 	var box = BoxShape3D.new()
 	box.size = Vector3(14, 22, 14)
 	var col = CollisionShape3D.new()
@@ -925,7 +952,7 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	add_child(army)
 	var formation_positions = army.calculate_formation_positions(pos, dir, UNITS_PER_ARMY)
 	for idx in range(UNITS_PER_ARMY):
-		var unit = _make_server_unit_3d()
+		var unit = _make_server_unit_3d(pid)
 		unit.set_script(preload("res://Unit3D.gd"))
 		var fpos: Vector2 = formation_positions[idx]
 		var uy = get_ground_height_at(fpos.x, fpos.y) + UNIT_HALF_HEIGHT
@@ -1288,12 +1315,10 @@ func _sync_unit_positions():
 		if u and is_instance_valid(u):
 			if not u.is_dead:
 				var here = u.global_position
-				var here_xz = Vector2(here.x, here.z)
 				var mt: Vector2 = u.move_target
-				var there: Vector2 = mt if u.is_moving else here_xz
 				pos_data.append({
 					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
-					"tx": there.x, "ty": there.y,
+					"tx": mt.x, "ty": mt.y,
 					"at": u.attack_timer,
 					"moving": u.is_moving,
 				})
@@ -1340,6 +1365,7 @@ func _raycast_ground_at_screen(screen: Vector2) -> Vector3:
 	var to := from + _camera.project_ray_normal(screen) * 10000.0
 	var space_state := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 2  # ground layer only, same as get_ground_height_at
 	var hit := space_state.intersect_ray(query)
 	if hit.is_empty():
 		return Vector3.ZERO
@@ -1625,10 +1651,9 @@ func _add_play_boundary_line():
 	top.material_override = mat
 	add_child(top)
 
-func _make_client_unit_3d() -> CharacterBody3D:
+func _make_client_unit_3d(peer_id: int) -> CharacterBody3D:
 	var unit = CharacterBody3D.new()
-	unit.collision_layer = 1
-	unit.collision_mask = 1
+	_configure_unit_collision(unit, peer_id)
 	var box = BoxShape3D.new()
 	box.size = Vector3(14, 22, 14)
 	var col = CollisionShape3D.new()
@@ -1657,7 +1682,7 @@ func _client_spawn_armies_impl(data: Array):
 		army.position = Vector3(ad["x"], gy, ad["y"])
 		armies.append(army)
 		for sd in ad["soldiers"]:
-			var unit = _make_client_unit_3d()
+			var unit = _make_client_unit_3d(ad["pid"])
 			unit.set_script(preload("res://Unit3D.gd"))
 			unit.name = sd["name"]
 			unit.owner_peer_id = ad["pid"]
@@ -1808,7 +1833,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		ad.get("spear", false)
 	))
 	for sd in ad["soldiers"]:
-		var unit = _make_client_unit_3d()
+		var unit = _make_client_unit_3d(ad["pid"])
 		unit.set_script(preload("res://Unit3D.gd"))
 		unit.name = sd["name"]
 		unit.owner_peer_id = ad["pid"]
@@ -1873,15 +1898,24 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 			var here = Vector3(pd["x"], here_y, pd["y"])
 			var there = Vector3(tx, there_y, ty)
 			var err = node.global_position.distance_to(here)
-			if err > CORRECTION_THRESHOLD:
-				node.global_position = here
-			node.set("sync_target_position", there)
-			node.set("has_move_goal", bool(pd.get("moving", false)))
-			if "sync_target_hp" in node:
-				node.set("sync_target_hp", pd["hp"])
-				node.set("hp", pd["hp"])
-			if "sync_attack_timer" in node:
-				node.set("sync_attack_timer", pd.get("at", 0.0))
+			if node.has_method("apply_network_sync"):
+				node.apply_network_sync(
+					here,
+					there,
+					float(pd.get("hp", node.get("hp"))),
+					float(pd.get("at", 0.0)),
+					CORRECTION_THRESHOLD,
+				)
+			else:
+				if err > CORRECTION_THRESHOLD:
+					node.global_position = here
+				node.set("sync_target_position", there)
+				node.set("has_move_goal", bool(pd.get("moving", false)))
+				if "sync_target_hp" in node:
+					node.set("sync_target_hp", pd["hp"])
+					node.set("hp", pd["hp"])
+				if "sync_attack_timer" in node:
+					node.set("sync_attack_timer", pd.get("at", 0.0))
 	for dn in dead_names:
 		var dead_node = get_node_or_null(NodePath(str(dn)))
 		if dead_node and dead_node.has_method("is_in_death_sequence") and dead_node.is_in_death_sequence():

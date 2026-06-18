@@ -1,7 +1,7 @@
 extends RefCounted
 ## Shared math for Total War–style line formation (2D map coords: x,y).
 
-const FORMATION_SPACING := 30.0
+const FORMATION_SPACING := 15.0
 ## Along-drag gap between adjacent armies' segments so two formations do not share one goal point.
 const ARMY_SEGMENT_GAP := FORMATION_SPACING * 0.5
 

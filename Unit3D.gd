@@ -29,6 +29,10 @@ var hp: float = 100.0
 var is_dead := false
 
 const HALF_HEIGHT := 11.0
+const GOAL_ARRIVAL_DIST := 0.2
+const GOAL_RELEASE_DIST := 1.5
+const GOAL_CHANGE_DIST := 0.5
+const GOAL_FACING_MIN_DIST := 1.0
 const MAP_MARGIN := 200.0
 const MAP_WIDTH_F := 1280.0
 const MAP_HEIGHT_F := 720.0
@@ -77,6 +81,8 @@ var _anim_state: AnimState = AnimState.IDLE
 var _dying := false
 var _death_free_scheduled := false
 var _ref_char_height_px: int = 0
+var _goal_settled := false
+var _settled_goal: Vector3 = Vector3.ZERO
 
 func _ready():
 	if multiplayer.is_server():
@@ -99,6 +105,8 @@ func set_move_target(xz: Vector2):
 	xz.y = clampf(xz.y, 0.0, MAP_HEIGHT_F)
 	move_target = xz
 	is_moving = true
+	_goal_settled = false
+	_settled_goal = Vector3.ZERO
 	if not multiplayer.is_server():
 		var gy = _ground_y_at(xz.x, xz.y)
 		sync_target_position = Vector3(xz.x, gy + HALF_HEIGHT, xz.y)
@@ -159,6 +167,8 @@ func _clear_visual_mesh() -> void:
 	_current_art_faces_right = false
 	_anim_state = AnimState.IDLE
 	_ref_char_height_px = 0
+	_goal_settled = false
+	_settled_goal = Vector3.ZERO
 	set_process(false)
 
 func _build_visual_mesh():
@@ -346,6 +356,47 @@ func _process(delta: float) -> void:
 	sync_attack_timer = maxf(0.0, sync_attack_timer - delta)
 	var state := _pick_anim_state()
 	_apply_anim_state(state, delta)
+	_update_facing()
+
+func _distance_to_sync_goal_xz() -> float:
+	return Vector2(
+		sync_target_position.x - global_position.x,
+		sync_target_position.z - global_position.z
+	).length()
+
+func _refresh_move_goal_state() -> void:
+	var dist := _distance_to_sync_goal_xz()
+	if _goal_settled:
+		if sync_target_position.distance_to(_settled_goal) > GOAL_CHANGE_DIST:
+			_goal_settled = false
+			_settled_goal = Vector3.ZERO
+		elif dist > GOAL_RELEASE_DIST:
+			_goal_settled = false
+			_settled_goal = Vector3.ZERO
+	elif dist <= GOAL_ARRIVAL_DIST:
+		_goal_settled = true
+		_settled_goal = sync_target_position
+		velocity = Vector3.ZERO
+	has_move_goal = not _goal_settled
+
+func apply_network_sync(
+	here: Vector3,
+	there: Vector3,
+	_hp_val: float,
+	attack_t: float,
+	correction_threshold: float,
+) -> void:
+	if global_position.distance_to(here) > correction_threshold:
+		global_position = here
+	var goal_changed := there.distance_to(sync_target_position) > GOAL_CHANGE_DIST
+	sync_target_position = there
+	if goal_changed:
+		_goal_settled = false
+		_settled_goal = Vector3.ZERO
+	sync_target_hp = _hp_val
+	hp = _hp_val
+	sync_attack_timer = attack_t
+	_refresh_move_goal_state()
 
 func _pick_anim_state() -> AnimState:
 	if _dying or is_dead:
@@ -357,16 +408,9 @@ func _pick_anim_state() -> AnimState:
 	return AnimState.IDLE
 
 func _is_moving() -> bool:
-	if velocity.length() > 0.5:
-		return true
-	if not has_move_goal:
+	if _goal_settled or not has_move_goal:
 		return false
-	var to_target := Vector3(
-		sync_target_position.x - global_position.x,
-		0.0,
-		sync_target_position.z - global_position.z
-	)
-	return to_target.length() > 1.0
+	return _distance_to_sync_goal_xz() > GOAL_ARRIVAL_DIST
 
 func _apply_anim_state(state: AnimState, delta: float) -> void:
 	if state != _anim_state:
@@ -483,7 +527,7 @@ func _server_process(delta: float):
 	if is_moving:
 		var cur := Vector2(global_position.x, global_position.z)
 		var dist := cur.distance_to(move_target)
-		if dist <= 0.4:
+		if dist <= GOAL_ARRIVAL_DIST:
 			var gy := _ground_y_at(move_target.x, move_target.y)
 			global_position = Vector3(move_target.x, gy + HALF_HEIGHT, move_target.y)
 			velocity = Vector3.ZERO
@@ -512,14 +556,21 @@ func _client_physics(delta: float):
 		_update_facing()
 		return
 	if has_move_goal:
-		var to_target := Vector3(sync_target_position.x - global_position.x, 0.0, sync_target_position.z - global_position.z)
-		var dist := sqrt(to_target.x * to_target.x + to_target.z * to_target.z)
-		if dist > 1.0:
-			var dir := to_target / dist
+		var dist := _distance_to_sync_goal_xz()
+		if dist > GOAL_ARRIVAL_DIST:
+			var dir := Vector3(
+				sync_target_position.x - global_position.x,
+				0.0,
+				sync_target_position.z - global_position.z
+			) / dist
 			velocity = dir * speed
 		else:
 			velocity = Vector3.ZERO
-			has_move_goal = false
+			var gy := _ground_y_at(sync_target_position.x, sync_target_position.z)
+			global_position = Vector3(
+				sync_target_position.x, gy + HALF_HEIGHT, sync_target_position.z
+			)
+		_refresh_move_goal_state()
 		move_and_slide()
 		_stick_to_terrain()
 		hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
@@ -528,7 +579,8 @@ func _client_physics(delta: float):
 		move_and_slide()
 		_stick_to_terrain()
 	_update_visual_tint()
-	_update_facing()
+	if not _uses_spritesheets:
+		_update_facing()
 
 func _try_attack():
 	var world = get_parent()
@@ -576,23 +628,29 @@ func take_damage(dmg: float, _attacker_id: int):
 
 func _update_facing():
 	if _uses_spritesheets and _sprite != null:
+		if not _is_moving():
+			_sprite.flip_h = (not _facing_right) if _current_art_faces_right else _facing_right
+			return
 		var dir_xz := Vector2(velocity.x, velocity.z)
-		if dir_xz.length() < 0.01 and has_move_goal:
-			dir_xz = Vector2(
+		if dir_xz.length() < 0.01:
+			var to_goal := Vector2(
 				sync_target_position.x - global_position.x,
 				sync_target_position.z - global_position.z
 			)
-		var prev_facing := _facing_right
-		if dir_xz.x > 0.01:
-			_facing_right = true
-		elif dir_xz.x < -0.01:
-			_facing_right = false
-		if _facing_right != prev_facing:
-			print("TEST_FACING_FLIP: unit=%s owner=%s army=%s to=%s velocity=(%.1f,%.1f)" % [
-				name, owner_name, army_id,
-				"right" if _facing_right else "left",
-				velocity.x, velocity.z
-			])
+			if to_goal.length() > GOAL_FACING_MIN_DIST:
+				dir_xz = to_goal
+		if dir_xz.length() >= 0.01:
+			var prev_facing := _facing_right
+			if dir_xz.x > 0.01:
+				_facing_right = true
+			elif dir_xz.x < -0.01:
+				_facing_right = false
+			if _facing_right != prev_facing:
+				print("TEST_FACING_FLIP: unit=%s owner=%s army=%s to=%s velocity=(%.1f,%.1f)" % [
+					name, owner_name, army_id,
+					"right" if _facing_right else "left",
+					velocity.x, velocity.z
+				])
 		_sprite.flip_h = (not _facing_right) if _current_art_faces_right else _facing_right
 		return
 	if _mesh == null:

@@ -32,7 +32,13 @@
 - **Equipment effects**: Horse → speed 200 → 280. Spear → attack 10 → 13, range 50 → 65. Both = both bonuses. Starting armies have no equipment.
 
 ## Physics / collision
-- Units have a collision shape and **collide with each other** (they block each other; no pass-through).
+- Units have a `CollisionShape3D` box (14×22×14) on each `CharacterBody3D`. **Enemy teams block each other** during movement; **friendlies pass through** (same collision layer).
+- **Combat** uses distance checks in `Unit3D._try_attack()`, not physics contact.
+- **Collision layers** (`World.gd`):
+  - Layer `2` — ground / terrain (used by `get_ground_height_at()` and `_raycast_ground_at_screen()`)
+  - Layers `1`, `4`, `8`, `16` — one per player team (`TEAM_COLLISION_LAYERS`)
+- **Toggle:** `UNIT_PASS_THROUGH` in `World.gd`. `false` (current) — enemies block via `_enemy_collision_mask_for_peer()`; friendlies pass. `true` — all units pass through (`collision_mask = 0`).
+- **Friendly blocking too:** extend `_enemy_collision_mask_for_peer()` to also OR in the unit's own team layer (or use a single shared unit layer with a mask that includes it).
 
 ## Unit Stats (Defaults)
 | Stat    | Value |
