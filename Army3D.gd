@@ -5,13 +5,16 @@ signal army_routed(army)
 
 # Map bounds come from `MapConfig` (res://map.json); access as MapConfig.width / MapConfig.height.
 
+const FOOT_SPACING := 10.0
+const MOUNTED_SPACING := 15.0
+
 var army_id: String = ""
 var owner_peer_id: int = 0
 var owner_name: String = ""
 var direction: float = 0.0
 var rows: int = 2
 var cols: int = 5
-var spacing: float = 15.0
+var spacing: float = FOOT_SPACING
 var initial_count: int = 10
 var soldiers: Array = []
 var is_routed := false
@@ -40,10 +43,20 @@ func get_alive_soldiers() -> Array:
 func get_alive_count() -> int:
 	return get_alive_soldiers().size()
 
+func _uses_mounted_spacing() -> bool:
+	for s in get_alive_soldiers():
+		if s.get("has_horse"):
+			return true
+	return false
+
+func _formation_spacing() -> float:
+	return MOUNTED_SPACING if _uses_mounted_spacing() else FOOT_SPACING
+
 func calculate_formation_positions(center: Vector2, dir: float, count: int) -> Array:
 	var positions := []
 	if count == 0:
 		return positions
+	var gap := _formation_spacing()
 	var r = rows
 	var c = ceili(float(count) / float(r))
 	if c == 0:
@@ -53,8 +66,8 @@ func calculate_formation_positions(center: Vector2, dir: float, count: int) -> A
 		for col in range(c):
 			if idx >= count:
 				break
-			var local_x = (col - (c - 1) / 2.0) * spacing
-			var local_y = (row - (r - 1) / 2.0) * spacing
+			var local_x = (col - (c - 1) / 2.0) * gap
+			var local_y = (row - (r - 1) / 2.0) * gap
 			var offset = Vector2(local_x, local_y).rotated(dir)
 			positions.append(center + offset)
 			idx += 1

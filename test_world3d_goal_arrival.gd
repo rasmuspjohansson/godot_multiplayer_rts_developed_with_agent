@@ -44,7 +44,7 @@ func _run_goal_test() -> void:
 	var a_xz := Vector2(army.global_position.x, army.global_position.z)
 	var T: Vector2 = w._clamp_map_v2(a_xz + d)
 	army.move_army(T)
-	for _i in range(600):
+	for _i in range(1800):
 		await tree.process_frame
 		var ok := true
 		for u in w.all_units:

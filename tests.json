@@ -106,6 +106,14 @@
     {
       "description_of_test": "Headless 3D goal arrival: Army3D.move_army drives every soldier's sync_target to within 3px on XZ",
       "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
+    },
+    {
+      "description_of_test": "Terrain raycast matches MapConfig.sample_height on hill sample points (delta < 0.5)",
+      "implementation": "godot --headless --path . -s test_terrain_height_consistency.gd 2>&1 | grep -q 'TEST_TERRAIN_HEIGHT_OK'"
+    },
+    {
+      "description_of_test": "Headless 3D client spawn: horse armies receive mounted speed on client units",
+      "implementation": "godot --headless --path . -s test_world3d_horse_speed.gd 2>&1 | grep -q 'TEST_WORLD3D_HORSE_SPEED_OK'"
     }
   ],
   "ad_hoc_tests": [

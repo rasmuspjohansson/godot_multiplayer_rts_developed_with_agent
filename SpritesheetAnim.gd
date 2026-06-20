@@ -15,6 +15,7 @@ var _frame_index: int = 0
 var _accum: float = 0.0
 var _finished: bool = false
 var _char_height_cache: Dictionary = {}
+var _feet_y_cache: Dictionary = {}
 
 static func load_from_folder(folder_path: String):
 	if _cache.has(folder_path):
@@ -91,6 +92,24 @@ func get_character_height_px(frame_index: int = -1) -> int:
 		frame_index = _frame_index
 	if _char_height_cache.has(frame_index):
 		return _char_height_cache[frame_index]
+	var bounds := _opaque_bounds_px(frame_index)
+	var height: int = _frame_h if bounds.y < 0 else int(bounds.w)
+	_char_height_cache[frame_index] = height
+	return height
+
+func get_feet_y_px(frame_index: int = -1) -> int:
+	if _sheet_image == null:
+		return _frame_h - 1
+	if frame_index < 0:
+		frame_index = _frame_index
+	if _feet_y_cache.has(frame_index):
+		return _feet_y_cache[frame_index]
+	var bounds := _opaque_bounds_px(frame_index)
+	var feet_y: int = _frame_h - 1 if bounds.y < 0 else int(bounds.y + bounds.w - 1.0)
+	_feet_y_cache[frame_index] = feet_y
+	return feet_y
+
+func _opaque_bounds_px(frame_index: int) -> Vector4:
 	var x0: int = frame_index * _frame_w
 	var y_min: int = _frame_h
 	var y_max: int = -1
@@ -100,9 +119,9 @@ func get_character_height_px(frame_index: int = -1) -> int:
 			if px.a > 0.5:
 				y_min = mini(y_min, y)
 				y_max = maxi(y_max, y)
-	var height: int = _frame_h if y_max < 0 else (y_max - y_min + 1)
-	_char_height_cache[frame_index] = height
-	return height
+	if y_max < 0:
+		return Vector4(0.0, -1.0, 0.0, float(_frame_h))
+	return Vector4(0.0, float(y_min), 0.0, float(y_max - y_min + 1))
 
 func get_frame_texture() -> AtlasTexture:
 	var at := AtlasTexture.new()

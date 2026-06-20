@@ -11,10 +11,20 @@ var owner_name: String = ""
 var army_id: String = ""
 var has_spear: bool = false
 var has_horse: bool = false
-var speed: float = 200.0 / 6.0
+var speed: float = 100.0 * 2.0 / 3.0 / 6.0
 var attack: float = 10.0
 var defense: float = 2.0
 var attack_range: float = UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE
+
+static func speed_for_equipment(horse: bool) -> float:
+	return (140.0 if horse else 100.0 * 2.0 / 3.0) / 6.0
+
+func apply_equipment(horse: bool, spear: bool) -> void:
+	has_horse = horse
+	has_spear = spear
+	speed = speed_for_equipment(horse)
+	attack = 13.0 if spear else 10.0
+	attack_range = UNIT_SPRITE_PATHS.default_attack_range_for_equipment(horse, spear)
 
 ## Server: move goal in map XZ (same as legacy Unit move_target Vector2).
 var move_target: Vector2 = Vector2.ZERO
@@ -45,7 +55,7 @@ const SPRITE_WORLD_HEIGHT := 22.0
 const HORSE_SPRITE_WORLD_HEIGHT := 28.0
 const SPRITE_FRAME_PX := 256.0
 const SPRITE_PIXEL_SIZE := SPRITE_WORLD_HEIGHT / SPRITE_FRAME_PX
-const SPRITE_ANIM_SPEED := 1.0 / 3.0
+const SPRITE_ANIM_SPEED := 2.0 / 9.0
 ## Match World camera span (200–1200) with headroom so zoomed-out units stay audible.
 const SFX_MAX_DISTANCE := 2400.0
 const SFX_UNIT_SIZE := 100.0
@@ -142,6 +152,7 @@ func set_selected(val: bool):
 
 func _clear_visual_mesh() -> void:
 	if _sprite != null and is_instance_valid(_sprite):
+		_sprite.position = Vector3.ZERO
 		_sprite.queue_free()
 		_sprite = null
 	if _mesh != null and is_instance_valid(_mesh):
@@ -185,6 +196,12 @@ func _build_visual_mesh():
 		_sprite.pixel_size = _scaled_pixel_size(_char_height_for_idle())
 		_sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
 		add_child(_sprite)
+		var idle_feet := int(SPRITE_FRAME_PX) - 1
+		if _anim_idle != null:
+			idle_feet = _anim_idle.get_feet_y_px(0)
+		elif _anim_walking != null:
+			idle_feet = _anim_walking.get_feet_y_px(0)
+		_update_sprite_feet_offset(idle_feet, _sprite.pixel_size)
 		_audio_player = AudioStreamPlayer3D.new()
 		_audio_player.name = "SpriteAudio"
 		_audio_player.unit_size = SFX_UNIT_SIZE
@@ -237,6 +254,13 @@ func _scaled_pixel_size(char_height_px: int) -> float:
 	if _ref_char_height_px <= 0 or char_height_px <= 0:
 		return base
 	return base * (float(_ref_char_height_px) / float(char_height_px))
+
+func _update_sprite_feet_offset(feet_y_px: int, pixel_size: float) -> void:
+	if _sprite == null:
+		return
+	var frame_center_px := SPRITE_FRAME_PX * 0.5
+	# Image Y grows downward; Sprite3D +Y is up. Align opaque feet row to -HALF_HEIGHT.
+	_sprite.position.y = -HALF_HEIGHT - (frame_center_px - float(feet_y_px)) * pixel_size
 
 func _char_height_for_idle() -> int:
 	if _anim_idle != null:
@@ -436,11 +460,13 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 	var art_faces_right := _unit_art_faces_right()
 	var faces_right := false
 	var char_height_px := _ref_char_height_px
+	var feet_y_px := int(SPRITE_FRAME_PX) - 1
 	match state:
 		AnimState.DIE:
 			if _anim_die != null:
 				tex = _anim_die.advance(delta, false, SPRITE_ANIM_SPEED)
 				char_height_px = _anim_die.get_character_height_px()
+				feet_y_px = _anim_die.get_feet_y_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -449,6 +475,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 			if _anim_fight != null:
 				tex = _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
 				char_height_px = _anim_fight.get_character_height_px()
+				feet_y_px = _anim_fight.get_feet_y_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -457,22 +484,25 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 			if _anim_walking != null:
 				tex = _anim_walking.advance(delta, true, SPRITE_ANIM_SPEED)
 				char_height_px = _anim_walking.get_character_height_px()
+				feet_y_px = _anim_walking.get_feet_y_px()
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 		AnimState.IDLE:
-			# Temporary: single-frame idle pose until we have a better idle spritesheet.
 			if _anim_idle != null:
 				tex = _anim_idle.get_frame_texture()
 				char_height_px = _anim_idle.get_character_height_px(0)
+				feet_y_px = _anim_idle.get_feet_y_px(0)
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
 				faces_right = false
 	if tex != null:
+		var px_size := _scaled_pixel_size(char_height_px)
 		_sprite.texture = tex
-		_sprite.pixel_size = _scaled_pixel_size(char_height_px)
+		_sprite.pixel_size = px_size
+		_update_sprite_feet_offset(feet_y_px, px_size)
 		_current_art_faces_right = faces_right
 
 func _stream_for_anim_state(state: AnimState) -> AudioStream:

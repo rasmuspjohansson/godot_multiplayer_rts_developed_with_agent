@@ -1,6 +1,8 @@
 extends Node3D
 ## Single world: server authority + 3D client (map XZ = 1280×720, ground at y=0).
 
+const _Army3D = preload("res://Army3D.gd")
+const _Unit3D = preload("res://Unit3D.gd")
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
@@ -36,8 +38,8 @@ const CP_RESOURCE_INTERVAL := 2.0
 const CAMERA_PITCH_MAX_DEG := 45.0
 const CAMERA_PITCH_MIN_DEG := 8.0
 ## Added to terrain height at pivot XZ when fully zoomed in (above unit center ~11, toward head).
-const LOOK_HEIGHT_ABOVE_GROUND_MAX := 20.0
-const CAMERA_MIN_DISTANCE := 200.0
+const LOOK_HEIGHT_ABOVE_GROUND_MAX := 20.0 / 3.0
+const CAMERA_MIN_DISTANCE := 200.0 / 3.0
 const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
 const CAMERA_ZOOM_SPEED := 80.0
@@ -49,6 +51,10 @@ const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 const UNIT_HALF_HEIGHT := 11.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
+const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
+const CP_BLACKSMITH_TEXTURE_PATH := "res://images/background/blacksmith2.png"
+## Capture point billboard height in world units (1/4 of initial 80-unit sprite scale).
+const CP_SPRITE_WORLD_HEIGHT := 20.0
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -91,6 +97,11 @@ var _move_goal_markers_3d: Node3D
 var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
+## Terrain height grid built in `_build_terrain()`; used as fallback when physics raycast misses.
+var _terrain_heights: PackedFloat32Array = PackedFloat32Array()
+var _terrain_cols: int = 0
+var _terrain_rows: int = 0
+var _terrain_step: float = _TERRAIN_STEP
 
 func _client_unit_scene_visible(u: Node) -> bool:
 	if not u.is_visible_in_tree():
@@ -214,6 +225,10 @@ func _build_terrain() -> void:
 		for i in range(cols):
 			var x := float(i) * step
 			heights[j * cols + i] = MapConfig.sample_height(x, z)
+	_terrain_heights = heights
+	_terrain_cols = cols
+	_terrain_rows = rows
+	_terrain_step = step
 	# Build the visual ArrayMesh.
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
@@ -280,36 +295,19 @@ func _build_terrain() -> void:
 		# Clear any stale scene-level override so the mesh's own surface
 		# material is used.
 		ground.set_surface_override_material(0, null)
-	# Build the matching HeightMapShape3D for physics.
-	var hm := HeightMapShape3D.new()
-	hm.map_width = cols
-	hm.map_depth = rows
-	hm.map_data = heights
+	# Build collision from the same mesh surface as the visual ground.
+	var terrain_shape: Shape3D = array_mesh.create_trimesh_shape()
 	var gc := get_node_or_null("GroundCollision")
 	if gc is StaticBody3D:
-		# HeightMapShape3D covers (map_width-1, map_depth-1) world units per-axis,
-		# centered on the CollisionShape3D's origin. We sampled in step units, so
-		# scale by `step` and translate to map-center.
 		gc.transform = Transform3D.IDENTITY
 		var shape_node := gc.get_node_or_null("CollisionShape3D")
 		if shape_node is CollisionShape3D:
-			shape_node.shape = hm
-			var t := Transform3D.IDENTITY
-			t.basis = Basis.IDENTITY.scaled(Vector3(step, 1.0, step))
-			t.origin = Vector3(float(cols - 1) * step * 0.5, 0.0, float(rows - 1) * step * 0.5)
-			shape_node.transform = t
+			shape_node.shape = terrain_shape
+			shape_node.transform = Transform3D.IDENTITY
 	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills" % [cols, rows, int(step), MapConfig._hills.size()])
 
 func _load_ground_texture() -> Texture2D:
-	var img := Image.new()
-	if img.load(GROUND_TEXTURE_PATH) == OK:
-		return ImageTexture.create_from_image(img)
-	if ResourceLoader.exists(GROUND_TEXTURE_PATH):
-		var res: Resource = ResourceLoader.load(GROUND_TEXTURE_PATH)
-		if res is Texture2D:
-			return res as Texture2D
-	push_warning("Ground texture not found at %s" % GROUND_TEXTURE_PATH)
-	return null
+	return _load_image_texture(GROUND_TEXTURE_PATH)
 
 func _build_background() -> void:
 	# Painted horizon backdrop along the z=0 map edge (the side furthest from
@@ -935,9 +933,6 @@ func _spawn_armies():
 func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node3D:
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
-	var speed: float = (280.0 if use_horse else 200.0) / 6.0
-	var atk: float = 13.0 if use_spear else 10.0
-	var atk_range: float = UNIT_SPRITE_PATHS.default_attack_range_for_equipment(use_horse, use_spear)
 	var army = Node3D.new()
 	army.set_script(preload("res://Army3D.gd"))
 	army.army_id = aid
@@ -947,6 +942,7 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	army.position = Vector3(pos.x, gy_a, pos.y)
 	army.direction = dir
 	army.initial_count = UNITS_PER_ARMY
+	army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
 	army.name = "Army_%s" % aid
 	army.army_routed.connect(_on_army_routed)
 	add_child(army)
@@ -960,11 +956,7 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 		unit.owner_peer_id = pid
 		unit.owner_name = pname
 		unit.army_id = aid
-		unit.speed = speed
-		unit.attack = atk
-		unit.attack_range = atk_range
-		unit.has_spear = use_spear
-		unit.has_horse = use_horse
+		unit.apply_equipment(use_horse, use_spear)
 		unit.position = Vector3(fpos.x, uy, fpos.y)
 		unit.unit_died.connect(army.on_soldier_died)
 		add_child(unit)
@@ -984,6 +976,9 @@ func _serialize_armies() -> Array:
 				"x": s.global_position.x,
 				"y": s.global_position.z
 			})
+		var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
+		var use_horse: bool = s0.has_horse if s0 else false
+		var use_spear: bool = s0.has_spear if s0 else false
 		data.append({
 			"army_id": army.army_id,
 			"pid": army.owner_peer_id,
@@ -992,9 +987,12 @@ func _serialize_armies() -> Array:
 			"y": army.global_position.z,
 			"dir": army.direction,
 			"initial_count": army.initial_count,
-			"spear": army.soldiers[0].has_spear if army.soldiers.size() > 0 else false,
-			"horse": army.soldiers[0].has_horse if army.soldiers.size() > 0 else false,
-			"soldiers": soldier_data
+			"spear": use_spear,
+			"horse": use_horse,
+			"soldiers": soldier_data,
+			"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
+			"attack": s0.attack if s0 else 10.0,
+			"attack_range": s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE,
 		})
 	return data
 
@@ -1048,9 +1046,8 @@ func _serialize_one_army(army) -> Dictionary:
 			"y": s.global_position.z
 		})
 	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
-	var speed = s0.speed if s0 else 200.0 / 6.0
-	var attack = s0.attack if s0 else 10.0
-	var attack_range = s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE
+	var use_horse: bool = s0.has_horse if s0 else false
+	var use_spear: bool = s0.has_spear if s0 else false
 	return {
 		"army_id": army.army_id,
 		"pid": army.owner_peer_id,
@@ -1059,12 +1056,12 @@ func _serialize_one_army(army) -> Dictionary:
 		"y": army.global_position.z,
 		"dir": army.direction,
 		"initial_count": army.initial_count,
-		"spear": s0.has_spear if s0 else false,
-		"horse": s0.has_horse if s0 else false,
+		"spear": use_spear,
+		"horse": use_horse,
 		"soldiers": soldier_data,
-		"speed": speed,
-		"attack": attack,
-		"attack_range": attack_range
+		"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
+		"attack": s0.attack if s0 else 10.0,
+		"attack_range": s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE,
 	}
 
 func _get_closest_enemy_army(army) -> Node:
@@ -1366,10 +1363,43 @@ func _raycast_ground_at_screen(screen: Vector2) -> Vector3:
 	var space_state := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.collision_mask = 2  # ground layer only, same as get_ground_height_at
+	query.hit_back_faces = true
 	var hit := space_state.intersect_ray(query)
-	if hit.is_empty():
+	if not hit.is_empty():
+		return hit.position
+	return _raycast_terrain_grid_along_ray(from, to)
+
+## When physics trimesh misses (common with ArrayMesh collision), march the camera ray
+## against the same height grid used to build the visible terrain.
+func _raycast_terrain_grid_along_ray(from: Vector3, to: Vector3) -> Vector3:
+	if _terrain_heights.is_empty():
 		return Vector3.ZERO
-	return hit.position
+	var dir := to - from
+	var ray_len := dir.length()
+	if ray_len < 0.001:
+		return Vector3.ZERO
+	dir /= ray_len
+	var step := maxf(_terrain_step * 0.25, 1.0)
+	var traveled := 0.0
+	var prev := from
+	while traveled <= ray_len:
+		var seg_end := minf(traveled + step, ray_len)
+		var p := from + dir * seg_end
+		var gy := _terrain_grid_height_at(p.x, p.z)
+		var prev_gy := _terrain_grid_height_at(prev.x, prev.z)
+		if prev.y >= prev_gy - 0.01 and p.y <= gy + 0.05:
+			var above0 := prev.y - prev_gy
+			var above1 := p.y - gy
+			var denom := above0 - above1
+			var frac := 0.5
+			if absf(denom) > 0.0001:
+				frac = clampf(above0 / denom, 0.0, 1.0)
+			var hit := prev.lerp(p, frac)
+			hit.y = _terrain_grid_height_at(hit.x, hit.z)
+			return hit
+		prev = p
+		traveled = seg_end
+	return Vector3.ZERO
 
 func _rect_from_points(a: Vector2, b: Vector2) -> Rect2:
 	var p := Vector2(minf(a.x, b.x), minf(a.y, b.y))
@@ -1602,15 +1632,33 @@ func _find_army(aid: String):
 			return army
 	return null
 
+func _terrain_grid_height_at(x: float, z: float) -> float:
+	if _terrain_heights.is_empty() or _terrain_cols < 2 or _terrain_rows < 2:
+		return 0.0
+	var gx: float = clampf(x / _terrain_step, 0.0, float(_terrain_cols - 1))
+	var gz: float = clampf(z / _terrain_step, 0.0, float(_terrain_rows - 1))
+	var i0: int = int(floor(gx))
+	var j0: int = int(floor(gz))
+	var i1: int = mini(i0 + 1, _terrain_cols - 1)
+	var j1: int = mini(j0 + 1, _terrain_rows - 1)
+	var tx: float = gx - float(i0)
+	var tz: float = gz - float(j0)
+	var h00: float = _terrain_heights[j0 * _terrain_cols + i0]
+	var h10: float = _terrain_heights[j0 * _terrain_cols + i1]
+	var h01: float = _terrain_heights[j1 * _terrain_cols + i0]
+	var h11: float = _terrain_heights[j1 * _terrain_cols + i1]
+	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+
 func get_ground_height_at(x: float, z: float) -> float:
 	var space = get_world_3d().direct_space_state
 	var from_vec = Vector3(x, 500.0, z)
 	var to_vec = Vector3(x, -100.0, z)
 	var query = PhysicsRayQueryParameters3D.create(from_vec, to_vec)
 	query.collision_mask = 2
+	query.hit_back_faces = true
 	var result = space.intersect_ray(query)
 	if result.is_empty():
-		return 0.0
+		return _terrain_grid_height_at(x, z)
 	return result["position"].y
 
 func _add_play_boundary_line():
@@ -1669,6 +1717,8 @@ func _client_spawn_armies(data: Array):
 
 func _client_spawn_armies_impl(data: Array):
 	for ad in data:
+		var use_horse: bool = ad.get("horse", false)
+		var use_spear: bool = ad.get("spear", false)
 		var army = Node3D.new()
 		army.set_script(preload("res://Army3D.gd"))
 		add_child(army)
@@ -1678,6 +1728,7 @@ func _client_spawn_armies_impl(data: Array):
 		army.direction = ad["dir"]
 		army.name = "Army_%s" % ad["army_id"]
 		army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
+		army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
 		var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
 		army.position = Vector3(ad["x"], gy, ad["y"])
 		armies.append(army)
@@ -1688,8 +1739,12 @@ func _client_spawn_armies_impl(data: Array):
 			unit.owner_peer_id = ad["pid"]
 			unit.owner_name = ad["name"]
 			unit.army_id = ad["army_id"]
-			unit.has_spear = ad.get("spear", false)
-			unit.has_horse = ad.get("horse", false)
+			if unit.has_method("apply_equipment"):
+				unit.apply_equipment(use_horse, use_spear)
+			if ad.has("speed"):
+				unit.speed = float(ad["speed"])
+				unit.attack = float(ad.get("attack", unit.attack))
+				unit.attack_range = float(ad.get("attack_range", unit.attack_range))
 			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 			var pos = Vector3(sd["x"], uy, sd["y"])
 			unit.sync_target_position = pos
@@ -1718,29 +1773,63 @@ func _client_spawn_armies_impl(data: Array):
 	call_deferred("_validate_unit_textures")
 	_schedule_visibility_checks()
 
+func _load_image_texture(path: String) -> Texture2D:
+	var img := Image.new()
+	if img.load(path) == OK:
+		return ImageTexture.create_from_image(img)
+	if ResourceLoader.exists(path):
+		var res: Resource = ResourceLoader.load(path)
+		if res is Texture2D:
+			return res as Texture2D
+	push_warning("Texture not found at %s" % path)
+	return null
+
+func _capture_point_texture(cp_type: String) -> Texture2D:
+	var path := CP_STABLES_TEXTURE_PATH
+	if cp_type == "Blacksmith":
+		path = CP_BLACKSMITH_TEXTURE_PATH
+	return _load_image_texture(path)
+
+func _capture_point_modulate(owner_pid: int) -> Color:
+	if owner_pid != 0 and owner_pid in GameState.players:
+		var ci = GameState.players[owner_pid].get("color_index", 0)
+		if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
+			return GameState.PLAYER_COLORS[ci]
+	return Color(0.5, 0.5, 0.5, 0.8)
+
+func _create_capture_point_sprite(d: Dictionary) -> Node3D:
+	var anchor := Node3D.new()
+	var gx := float(d["x"])
+	var gz := float(d["y"])
+	anchor.position = Vector3(gx, get_ground_height_at(gx, gz), gz)
+	anchor.name = "CP_%s" % d["id"]
+	var tex := _capture_point_texture(str(d.get("type", d["id"])))
+	if tex == null:
+		push_error("Capture point '%s' missing texture" % d["id"])
+		return null
+	var sprite := Sprite3D.new()
+	sprite.name = "Sprite"
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	var tex_h := float(tex.get_height())
+	var pixel_size := CP_SPRITE_WORLD_HEIGHT / tex_h
+	sprite.pixel_size = pixel_size
+	sprite.modulate = _capture_point_modulate(int(d.get("owner_pid", 0)))
+	# Sprite3D origin is center; lift so opaque base sits on terrain.
+	sprite.position.y = tex_h * pixel_size * 0.5
+	anchor.add_child(sprite)
+	return anchor
+
 @rpc("authority", "reliable")
 func _client_spawn_capture_points(data: Array):
 	for d in data:
 		GameState.capture_points[d["id"]] = ""
-		var pillar = MeshInstance3D.new()
-		var box = BoxMesh.new()
-		box.size = Vector3(40, 80, 40)
-		pillar.mesh = box
-		var mat = StandardMaterial3D.new()
-		var pid = d.get("owner_pid", 0)
-		if pid != 0 and pid in GameState.players:
-			var ci = GameState.players[pid].get("color_index", 0)
-			if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
-				mat.albedo_color = GameState.PLAYER_COLORS[ci]
-			else:
-				mat.albedo_color = Color(0.5, 0.5, 0.5, 0.8)
-		else:
-			mat.albedo_color = Color(0.5, 0.5, 0.5, 0.8)
-		pillar.material_override = mat
-		pillar.position = Vector3(d["x"], 40, d["y"])
-		pillar.name = "CP_%s" % d["id"]
-		add_child(pillar)
-		capture_points.append({"id": d["id"], "node": pillar, "material": mat})
+		var anchor := _create_capture_point_sprite(d)
+		if anchor == null:
+			continue
+		add_child(anchor)
+		capture_points.append({"id": d["id"], "node": anchor, "sprite": anchor.get_node("Sprite")})
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
 	#region agent log
 	GameState.agent_debug_log("H3", "World.gd:_client_spawn_capture_points", "after_cp_spawn", {
@@ -1755,15 +1844,10 @@ func _client_update_capture(cp_data: Array, res_data: Dictionary):
 		GameState.capture_points[d["id"]] = d.get("owner_name", "")
 		var pid = d.get("owner_pid", 0)
 		for cp in capture_points:
-			if cp.get("id") == d["id"] and cp.get("material"):
-				if pid != 0 and pid in GameState.players:
-					var ci = GameState.players[pid].get("color_index", 0)
-					if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
-						cp["material"].albedo_color = GameState.PLAYER_COLORS[ci]
-					else:
-						cp["material"].albedo_color = Color(0.5, 0.5, 0.5)
-				else:
-					cp["material"].albedo_color = Color(0.5, 0.5, 0.5, 0.8)
+			if cp.get("id") == d["id"]:
+				var sprite: Sprite3D = cp.get("sprite", null)
+				if sprite != null:
+					sprite.modulate = _capture_point_modulate(pid)
 	for pid_str in res_data.keys():
 		GameState.resources[int(pid_str)] = res_data[pid_str]
 	_update_topbar_local(cp_data, res_data)
@@ -1823,15 +1907,12 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.direction = ad["dir"]
 	army.name = "Army_%s" % ad["army_id"]
 	army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
+	var use_horse: bool = ad.get("horse", false)
+	var use_spear: bool = ad.get("spear", false)
+	army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
 	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
 	army.position = Vector3(ad["x"], gy, ad["y"])
 	armies.append(army)
-	var speed = ad.get("speed", 200.0 / 6.0)
-	var atk = ad.get("attack", 10.0)
-	var atk_range = ad.get("attack_range", UNIT_SPRITE_PATHS.default_attack_range_for_equipment(
-		ad.get("horse", false),
-		ad.get("spear", false)
-	))
 	for sd in ad["soldiers"]:
 		var unit = _make_client_unit_3d(ad["pid"])
 		unit.set_script(preload("res://Unit3D.gd"))
@@ -1839,11 +1920,12 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.owner_peer_id = ad["pid"]
 		unit.owner_name = ad["name"]
 		unit.army_id = ad["army_id"]
-		unit.has_spear = ad.get("spear", false)
-		unit.has_horse = ad.get("horse", false)
-		unit.speed = speed
-		unit.attack = atk
-		unit.attack_range = atk_range
+		if unit.has_method("apply_equipment"):
+			unit.apply_equipment(use_horse, use_spear)
+		if ad.has("speed"):
+			unit.speed = float(ad["speed"])
+			unit.attack = float(ad.get("attack", unit.attack))
+			unit.attack_range = float(ad.get("attack_range", unit.attack_range))
 		var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
 		var pos = Vector3(sd["x"], uy, sd["y"])
 		unit.sync_target_position = pos

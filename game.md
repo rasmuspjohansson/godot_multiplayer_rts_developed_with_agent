@@ -29,7 +29,7 @@
 - **Draft menu**: Lower-left of screen. Checkboxes **Horse** and **Spear**, button **Create army**.
 - **Cost**: 10 horses if Horse checked, 10 spears if Spear checked (both = 10 of each). Player must have enough resources.
 - **Created army**: 10 soldiers, spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
-- **Equipment effects**: Horse → speed 200 → 280. Spear → attack 10 → 13, range 50 → 65. Both = both bonuses. Starting armies have no equipment.
+- **Equipment effects**: Horse → speed 67 → 140. Spear → attack 10 → 13, range 50 → 65. Both = both bonuses. Starting armies have no equipment.
 
 ## Physics / collision
 - Units have a `CollisionShape3D` box (14×22×14) on each `CharacterBody3D`. **Enemy teams block each other** during movement; **friendlies pass through** (same collision layer).
@@ -43,7 +43,7 @@
 ## Unit Stats (Defaults)
 | Stat    | Value |
 |---------|-------|
-| Speed   | 200   |
+| Speed   | 67    |
 | HP      | 100   |
 | Attack  | 10    |
 | Defense | 2     |
