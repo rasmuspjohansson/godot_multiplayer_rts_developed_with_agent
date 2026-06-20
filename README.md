@@ -1,6 +1,6 @@
 # Automated RTS — Godot 4.6
 
-A minimal multiplayer RTS where two players each control **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture two control points (**Stables** and **Blacksmith**) that produce horses and spears. Armies have a **stance**: `defensive` (only moves when ordered) or `aggressive` (the server retargets the army to its closest enemy every second). You win when every one of your opponent's armies has routed.
+A minimal multiplayer RTS where players each start with control of **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture two control points (**Stables** and **Blacksmith**) that produce horses and spears. New armies can then be produced equipped with a combination of these resources. You win when every one of your opponent's armies has routed.
 
 
 ![Screenshot from the game](from_game.jpg)
