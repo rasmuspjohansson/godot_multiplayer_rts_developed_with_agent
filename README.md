@@ -118,6 +118,24 @@ sequenceDiagram
 
 `./run_test.sh --no_test` launches two human-playable clients instead (no MockPlayer).
 
+## Play on Windows (join a remote game)
+
+Foolproof three steps for Windows players connecting to a remote dedicated server
+(for example one started with Hetzner `run_rts_remote_ai_local_human.py`):
+
+1. **Clone** this repository (or pull the latest).
+2. **Once:** double-click / run `install_godot_windows.bat`  
+   This downloads Godot **4.6.1** into `tools\godot\` (no PATH setup needed).
+3. **Each session:** run `connect_remote.bat SERVER_IP`  
+   Use the IP printed by the host. In the lobby, press **Ready**.
+
+Optional player name: `connect_remote.bat SERVER_IP MyName`
+
+You only need outbound UDP to port **8910**. No port forwarding on your PC.
+
+PowerShell equivalents: `.\install_godot_windows.ps1` and
+`.\connect_remote.ps1 -ServerIp SERVER_IP`.
+
 ## How to test manually
 
 ### 1. Start the server

@@ -26,6 +26,10 @@ export_presets.cfg
 *.x86
 *.zip
 
+# Local Godot install from install_godot_windows.bat (keep .gitkeep only)
+tools/godot/*
+!tools/godot/.gitkeep
+
 # OS files
 .DS_Store
 Thumbs.db

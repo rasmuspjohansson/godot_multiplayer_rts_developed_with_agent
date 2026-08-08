@@ -2,6 +2,31 @@
 
 All automated-test behaviour is defined in `tests.json`. The MockPlayer reads it and executes the `action`s for its player; `verify_test_logs.sh` scrapes every `events[].marker` and runs every `other_tests[].implementation`.
 
+## [Skill: Install Godot on Windows]
+Downloads Godot 4.6.1 into `tools\godot\` so `connect_remote.bat` finds it (no PATH needed).
+**Command (cmd / double-click):**
+```bat
+install_godot_windows.bat
+```
+**Command (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_godot_windows.ps1
+```
+
+## [Skill: Connect remote client on Windows]
+Joins a remote dedicated server as a human player. Requires step above once.
+**Command:**
+```bat
+connect_remote.bat SERVER_IP
+connect_remote.bat SERVER_IP MyName
+```
+**PowerShell:**
+```powershell
+.\connect_remote.ps1 -ServerIp SERVER_IP
+.\connect_remote.ps1 -ServerIp SERVER_IP -Name MyName
+```
+Then press Ready in the lobby. Uses UDP port 8910 outbound.
+
 ## [Skill: Run Server]
 Starts the Godot dedicated server in headless mode (no rendering, no local player).
 **Command:**
