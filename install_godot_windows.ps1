@@ -11,7 +11,8 @@ $ErrorActionPreference = "Stop"
 
 $GodotVersion = "4.6.1-stable"
 $ExeName = "Godot_v4.6.1-stable_win64.exe"
-$ZipName = "Godot_v4.6.1-stable_win64.zip"
+# Official asset name includes ".exe" before ".zip" (Godot_vX.Y.Z-stable_win64.exe.zip).
+$ZipName = "Godot_v4.6.1-stable_win64.exe.zip"
 $DownloadUrl = "https://github.com/godotengine/godot-builds/releases/download/$GodotVersion/$ZipName"
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -33,8 +34,24 @@ if ((Test-Path $ExePath) -and -not $Force) {
 
 New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
 
+Write-Host "Checking download URL ..."
+try {
+    $head = Invoke-WebRequest -Uri $DownloadUrl -Method Head -UseBasicParsing
+    if ($head.StatusCode -lt 200 -or $head.StatusCode -ge 400) {
+        throw "HTTP $($head.StatusCode)"
+    }
+} catch {
+    Write-Error "Download URL not reachable: $DownloadUrl`n$($_.Exception.Message)"
+    exit 1
+}
+
 Write-Host "Downloading $DownloadUrl ..."
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
+
+if (-not (Test-Path $ZipPath) -or (Get-Item $ZipPath).Length -lt 1MB) {
+    Write-Error "Download failed or file too small: $ZipPath"
+    exit 1
+}
 
 Write-Host "Extracting to $ToolsDir ..."
 Expand-Archive -Path $ZipPath -DestinationPath $ToolsDir -Force
