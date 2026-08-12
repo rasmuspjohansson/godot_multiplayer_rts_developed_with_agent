@@ -8,6 +8,7 @@ const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
 ## Per-player unit layers (layer 2 is reserved for ground).
 const TEAM_COLLISION_LAYERS: Array[int] = [1, 4, 8, 16]
+const NEUTRAL_DRAGON_COLLISION_LAYER := 32
 ## When true, units pass through each other during movement (no physics blocking).
 ## Combat still uses distance checks in Unit3D._try_attack(), not collision contact.
 ## Set false to restore enemy-vs-enemy blocking via per-team collision_mask.
@@ -79,6 +80,9 @@ var _last_mouse: Vector2
 
 var armies: Array = []
 var all_units: Array = []
+var _map_dragon: CharacterBody3D = null
+var _dragon_ai_timer: float = 0.0
+const DRAGON_AI_TICK := 0.5
 var capture_points: Array = []
 var top_bar = null
 var draft_menu = null
@@ -93,6 +97,7 @@ var _rmb_press_screen: Vector2 = Vector2.ZERO
 var _rmb_press_ground: Vector2 = Vector2.ZERO
 var _rmb_drag_active: bool = false
 var _ghost_root_3d: Node3D
+var _ghost_marker_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
 var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 const MARQUEE_DRAG_THRESHOLD := 6.0
@@ -443,7 +448,7 @@ func _update_camera_position():
 		_camera.position = Vector3(0, _camera_distance * sin(rad), _camera_distance * cos(rad))
 		_camera.look_at(_camera_pivot.global_position, Vector3.UP)
 
-func _input(event: InputEvent):
+func _unhandled_input(event: InputEvent):
 	if multiplayer.is_server() or game_over:
 		return
 	if event is InputEventMouseButton:
@@ -466,6 +471,7 @@ func _input(event: InputEvent):
 			return
 		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
 			_handle_world3d_mouse_extended(event)
+			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion:
 		if _pan_drag:
 			var mm := event as InputEventMouseMotion
@@ -929,6 +935,87 @@ func _spawn_armies():
 		var axz = Vector2(a.global_position.x, a.global_position.z)
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name])
 	rpc("_client_spawn_armies", _serialize_armies())
+	_spawn_map_dragon()
+
+func _spawn_map_dragon() -> void:
+	if not multiplayer.is_server():
+		return
+	var cfg: Dictionary = MapConfig.neutral_dragon
+	if cfg.is_empty():
+		return
+	var pos := Vector2(float(cfg.get("x", MapConfig.width * 0.5)), float(cfg.get("y", MapConfig.height * 0.5)))
+	var color := str(cfg.get("color", "red"))
+	var unit := _make_dragon_unit_3d()
+	unit.set_script(_Unit3D)
+	unit.name = "MapDragon"
+	unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
+	unit.owner_name = "Dragon"
+	unit.army_id = "neutral_dragon"
+	unit.apply_dragon(color)
+	var uy: float = get_ground_height_at(pos.x, pos.y) + UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
+	unit.position = Vector3(pos.x, uy, pos.y)
+	if unit.has_method("initialize_goal_at_current"):
+		unit.initialize_goal_at_current()
+	add_child(unit)
+	all_units.append(unit)
+	_map_dragon = unit
+	print("TEST_MAP_DRAGON_SPAWN: dragon at (%d,%d) aggro=%.0f attack=%.0f" % [
+		int(pos.x), int(pos.y), UNIT_SPRITE_PATHS.dragon_aggro_radius(), unit.attack_range
+	])
+	rpc("_client_spawn_dragon", {
+		"x": pos.x,
+		"y": pos.y,
+		"color": color,
+		"hp": unit.hp,
+		"speed": unit.speed,
+		"attack": unit.attack,
+		"attack_range": unit.attack_range,
+		"half_height": unit.half_height,
+	})
+
+func _make_dragon_unit_3d() -> CharacterBody3D:
+	var unit := CharacterBody3D.new()
+	unit.collision_layer = NEUTRAL_DRAGON_COLLISION_LAYER
+	unit.collision_mask = 0 if UNIT_PASS_THROUGH else 0
+	var box := BoxShape3D.new()
+	box.size = Vector3(40, 66, 40)
+	var col := CollisionShape3D.new()
+	col.shape = box
+	unit.add_child(col)
+	return unit
+
+func _unit_half_height(unit: Node) -> float:
+	if unit != null and unit.get("half_height") != null:
+		return float(unit.half_height)
+	return UNIT_HALF_HEIGHT
+
+func _update_map_dragon_ai(delta: float) -> void:
+	if _map_dragon == null or not is_instance_valid(_map_dragon) or _map_dragon.is_dead:
+		return
+	_dragon_ai_timer += delta
+	if _dragon_ai_timer < DRAGON_AI_TICK:
+		return
+	_dragon_ai_timer = 0.0
+	var center := Vector2(_map_dragon.global_position.x, _map_dragon.global_position.z)
+	var aggro := UNIT_SPRITE_PATHS.dragon_aggro_radius()
+	var best: CharacterBody3D = null
+	var best_dist := aggro + 1.0
+	for u in get_units_in_radius(center, aggro):
+		if u == _map_dragon or u.get("is_dead"):
+			continue
+		if UNIT_SPRITE_PATHS.is_neutral_owner(int(u.get("owner_peer_id"))):
+			continue
+		var uxz := Vector2(u.global_position.x, u.global_position.z)
+		var dist := center.distance_to(uxz)
+		if dist < best_dist:
+			best_dist = dist
+			best = u
+	if best == null:
+		_map_dragon.is_moving = false
+		return
+	var target_xz := Vector2(best.global_position.x, best.global_position.z)
+	if _map_dragon.has_method("set_move_target"):
+		_map_dragon.set_move_target(target_xz)
 
 func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node3D:
 	var use_horse: bool = equipment.get("horse", false)
@@ -1259,6 +1346,7 @@ func _physics_process(delta: float):
 		_server_capture_and_resources(delta)
 		_update_unit_grid()
 		_update_aggressive_armies(delta)
+		_update_map_dragon_ai(delta)
 		sync_timer += delta
 		if sync_timer >= 0.05:
 			sync_timer = 0.0
@@ -1379,10 +1467,13 @@ func _raycast_terrain_grid_along_ray(from: Vector3, to: Vector3) -> Vector3:
 	if ray_len < 0.001:
 		return Vector3.ZERO
 	dir /= ray_len
-	var step := maxf(_terrain_step * 0.25, 1.0)
+	var step := maxf(_terrain_step * 0.5, 4.0)
+	const MAX_STEPS := 256
 	var traveled := 0.0
 	var prev := from
-	while traveled <= ray_len:
+	var steps := 0
+	while traveled <= ray_len and steps < MAX_STEPS:
+		steps += 1
 		var seg_end := minf(traveled + step, ray_len)
 		var p := from + dir * seg_end
 		var gy := _terrain_grid_height_at(p.x, p.z)
@@ -1486,35 +1577,46 @@ func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	print("%s: Anchor goal move %d units to click (%d,%d)" % [marker, n_units, int(click_c.x), int(click_c.y)])
 	rpc_id(1, "_server_move_group_formation", payload)
 
+func _ensure_ghost_marker_material() -> StandardMaterial3D:
+	if _ghost_marker_mat == null:
+		_ghost_marker_mat = StandardMaterial3D.new()
+		_ghost_marker_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.35)
+		_ghost_marker_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_ghost_marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_ghost_marker_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return _ghost_marker_mat
+
 func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
 	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
-	var units: Array = pack.get("units", [])
 	var positions: Array = pack.get("positions", [])
-	if units.is_empty():
+	if positions.is_empty():
 		return
 	if _ghost_root_3d == null:
 		_ghost_root_3d = Node3D.new()
 		_ghost_root_3d.name = "FormationGhosts3D"
 		add_child(_ghost_root_3d)
-	for c in _ghost_root_3d.get_children():
-		c.queue_free()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.35, 0.85, 0.45, 0.35)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	for p in positions:
-		var gy := get_ground_height_at(p.x, p.y)
+	var mat := _ensure_ghost_marker_material()
+	var ghosts: Array = _ghost_root_3d.get_children()
+	while ghosts.size() < positions.size():
 		var box := MeshInstance3D.new()
 		var bm := BoxMesh.new()
 		bm.size = Vector3(12, 4, 12)
 		box.mesh = bm
 		box.material_override = mat
-		box.position = Vector3(p.x, gy + 2.0, p.y)
 		_ghost_root_3d.add_child(box)
+		ghosts.append(box)
+	while ghosts.size() > positions.size():
+		var extra: Node = ghosts[ghosts.size() - 1]
+		extra.queue_free()
+		ghosts.remove_at(ghosts.size() - 1)
+	for i in range(positions.size()):
+		var p: Vector2 = positions[i]
+		var gy := get_ground_height_at(p.x, p.y)
+		var box: MeshInstance3D = ghosts[i]
+		box.position = Vector3(p.x, gy + 2.0, p.y)
 
 func _clear_formation_ghosts_3d():
 	if _ghost_root_3d:
@@ -1565,6 +1667,9 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 								_set_selection([army])
 							else:
 								_clear_selection()
+						else:
+							# Sky / backdrop / off-map click: deselect without raycast stall.
+							_clear_selection()
 				_marquee_active = false
 				if _marquee_overlay:
 					_marquee_overlay.set_marquee_rect(Rect2(), false)
@@ -1773,6 +1878,40 @@ func _client_spawn_armies_impl(data: Array):
 	call_deferred("_validate_unit_textures")
 	_schedule_visibility_checks()
 
+@rpc("authority", "reliable")
+func _client_spawn_dragon(data: Dictionary) -> void:
+	if _map_dragon != null and is_instance_valid(_map_dragon):
+		return
+	var unit := _make_dragon_unit_3d()
+	unit.set_script(_Unit3D)
+	unit.name = "MapDragon"
+	unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
+	unit.owner_name = "Dragon"
+	unit.army_id = "neutral_dragon"
+	var color := str(data.get("color", "red"))
+	unit.apply_dragon(color)
+	unit.hp = float(data.get("hp", unit.hp))
+	unit.sync_target_hp = unit.hp
+	unit.speed = float(data.get("speed", unit.speed))
+	unit.attack = float(data.get("attack", unit.attack))
+	unit.attack_range = float(data.get("attack_range", unit.attack_range))
+	var hh := float(data.get("half_height", unit.half_height))
+	unit.half_height = hh
+	var px := float(data.get("x", MapConfig.width * 0.5))
+	var pz := float(data.get("y", MapConfig.height * 0.5))
+	var uy := get_ground_height_at(px, pz) + hh
+	var pos := Vector3(px, uy, pz)
+	unit.position = pos
+	unit.sync_target_position = pos
+	unit.has_move_goal = false
+	add_child(unit)
+	if unit.has_method("refresh_visuals"):
+		unit.refresh_visuals()
+	all_units.append(unit)
+	_map_dragon = unit
+	print("TEST_MAP_DRAGON_SPAWN: client dragon at (%d,%d)" % [int(px), int(pz)])
+	call_deferred("_validate_units_height")
+
 func _load_image_texture(path: String) -> Texture2D:
 	var img := Image.new()
 	if img.load(path) == OK:
@@ -1973,10 +2112,11 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 		if node and is_instance_valid(node):
 			if node.get("is_dead"):
 				continue
-			var here_y = get_ground_height_at(pd["x"], pd["y"]) + UNIT_HALF_HEIGHT
+			var hh := _unit_half_height(node)
+			var here_y = get_ground_height_at(pd["x"], pd["y"]) + hh
 			var tx = pd.get("tx", pd["x"])
 			var ty = pd.get("ty", pd["y"])
-			var there_y = get_ground_height_at(tx, ty) + UNIT_HALF_HEIGHT
+			var there_y = get_ground_height_at(tx, ty) + hh
 			var here = Vector3(pd["x"], here_y, pd["y"])
 			var there = Vector3(tx, there_y, ty)
 			var err = node.global_position.distance_to(here)

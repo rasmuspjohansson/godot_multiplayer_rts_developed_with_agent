@@ -7,6 +7,14 @@ const STATIC_SPEARMAN_REL := "spearman/spearman.png"
 const MELEE_ATTACK_RANGE := 22.0
 const SPEAR_ATTACK_RANGE := 30.0
 const RANGED_ATTACK_RANGE := 120.0
+const DRAGON_SPRITE_WORLD_HEIGHT := 66.0
+const DRAGON_HALF_HEIGHT := 33.0
+const DRAGON_ATTACK_RANGE := 70.0
+const NEUTRAL_DRAGON_OWNER_ID := 0
+const DRAGON_FIGHT_ANIM_SPEED := 1.0
+
+static func dragon_aggro_radius() -> float:
+	return DRAGON_SPRITE_WORLD_HEIGHT * 2.0
 
 static func color_folder_for_peer(peer_id: int) -> String:
 	if peer_id in GameState.players:
@@ -22,9 +30,13 @@ static func unit_type_for_equipment(has_horse: bool, has_spear: bool) -> String:
 		return "spearman"
 	return "clubman"
 
-static func art_faces_right_for_unit(unit_type: String) -> bool:
-	# Knight Veo clips face right; foot soldiers match legacy static art (left).
-	return unit_type == "knight"
+static func is_neutral_owner(peer_id: int) -> bool:
+	return peer_id == NEUTRAL_DRAGON_OWNER_ID
+
+static func art_faces_right_for_unit(_unit_type: String) -> bool:
+	# All Veo-generated sprite clips face right. Legacy static PNG billboards
+	# face left and use the mesh UV flip path when spritesheets are unavailable.
+	return true
 
 static func default_attack_range_for_equipment(has_horse: bool, has_spear: bool) -> float:
 	var unit_type := unit_type_for_equipment(has_horse, has_spear)
@@ -44,6 +56,25 @@ static func folder_has_spritesheet(folder_path: String) -> bool:
 	var manifest_path := folder_path.path_join("spritesheet.json")
 	var png_path := folder_path.path_join("spritesheet.png")
 	return FileAccess.file_exists(manifest_path) and FileAccess.file_exists(png_path)
+
+static func spritesheet_duration(folder_path: String, speed_scale: float = 1.0) -> float:
+	var manifest_path := folder_path.path_join("spritesheet.json")
+	if not FileAccess.file_exists(manifest_path):
+		return 1.0
+	var f := FileAccess.open(manifest_path, FileAccess.READ)
+	if f == null:
+		return 1.0
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return 1.0
+	var d: Dictionary = parsed
+	var frame_count := maxi(1, int(d.get("frame_count", 1)))
+	var playback_fps := float(d.get("playback_fps", 8.0))
+	if playback_fps <= 0.0:
+		playback_fps = 8.0
+	if speed_scale <= 0.0:
+		speed_scale = 1.0
+	return float(frame_count) / (playback_fps * speed_scale)
 
 static func sprite_sound_path(folder_path: String) -> String:
 	return folder_path.path_join("sound.ogg")

@@ -17,6 +17,7 @@ var terrain_type: String = "flat"
 var terrain_features: Array = []
 var capture_points: Array = []
 var player_starts: Array = []
+var neutral_dragon: Dictionary = {}
 ## Precomputed hill parameters used ONLY by World._build_terrain() at startup
 ## to generate the ground mesh and collision heightmap. Runtime height queries
 ## must go through World.get_ground_height_at() (physics raycast) so that
@@ -52,12 +53,14 @@ func _load() -> void:
 		terrain_type = str(terrain.get("type", terrain_type))
 		terrain_features = terrain.get("features", [])
 	capture_points = parsed.get("capture_points", [])
+	neutral_dragon = parsed.get("neutral_dragon", {})
 	player_starts = parsed.get("player_starts", [])
 	if player_starts.is_empty():
 		_apply_fallback_player_starts()
 	_precompute_hills()
-	print("MapConfig: loaded '%s' (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills)" % [
-		name_, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size()
+	print("MapConfig: loaded '%s' (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, dragon=%s)" % [
+		name_, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
+		"yes" if not neutral_dragon.is_empty() else "no"
 	])
 
 func _precompute_hills() -> void:

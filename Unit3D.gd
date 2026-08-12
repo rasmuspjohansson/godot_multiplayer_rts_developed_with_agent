@@ -11,6 +11,9 @@ var owner_name: String = ""
 var army_id: String = ""
 var has_spear: bool = false
 var has_horse: bool = false
+var unit_type: String = ""
+var sprite_color: String = ""
+var half_height: float = 11.0
 var speed: float = 100.0 * 2.0 / 3.0 / 6.0
 var attack: float = 10.0
 var defense: float = 2.0
@@ -22,15 +25,51 @@ static func speed_for_equipment(horse: bool) -> float:
 func apply_equipment(horse: bool, spear: bool) -> void:
 	has_horse = horse
 	has_spear = spear
+	unit_type = ""
 	speed = speed_for_equipment(horse)
 	attack = 13.0 if spear else 10.0
 	attack_range = UNIT_SPRITE_PATHS.default_attack_range_for_equipment(horse, spear)
+	attack_cooldown = 1.0
+	fight_anim_speed = SPRITE_ANIM_SPEED
+
+func apply_dragon(color: String = "red") -> void:
+	has_horse = false
+	has_spear = false
+	unit_type = "dragon"
+	sprite_color = color
+	half_height = UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
+	speed = 90.0 / 6.0
+	attack = 28.0
+	defense = 10.0
+	attack_range = UNIT_SPRITE_PATHS.DRAGON_ATTACK_RANGE
+	hp = 300.0
+	sync_target_hp = 300.0
+	fight_anim_speed = UNIT_SPRITE_PATHS.DRAGON_FIGHT_ANIM_SPEED
+	var attack_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, "dragon", "attack")
+	attack_cooldown = UNIT_SPRITE_PATHS.spritesheet_duration(attack_path, fight_anim_speed)
+
+func get_unit_type() -> String:
+	if unit_type != "":
+		return unit_type
+	return UNIT_SPRITE_PATHS.unit_type_for_equipment(has_horse, has_spear)
+
+func is_dragon() -> bool:
+	return get_unit_type() == "dragon"
+
+func world_sprite_height() -> float:
+	if is_dragon():
+		return UNIT_SPRITE_PATHS.DRAGON_SPRITE_WORLD_HEIGHT
+	if has_horse:
+		return HORSE_SPRITE_WORLD_HEIGHT
+	return SPRITE_WORLD_HEIGHT
 
 ## Server: move goal in map XZ (same as legacy Unit move_target Vector2).
 var move_target: Vector2 = Vector2.ZERO
 var is_moving := false
 var attack_timer: float = 0.0
 var sync_attack_timer: float = 0.0
+var attack_cooldown: float = 1.0
+var fight_anim_speed: float = SPRITE_ANIM_SPEED
 
 var sync_target_position: Vector3 = Vector3.ZERO
 var has_move_goal: bool = false
@@ -119,7 +158,7 @@ func set_move_target(xz: Vector2):
 	_settled_goal = Vector3.ZERO
 	if not multiplayer.is_server():
 		var gy = _ground_y_at(xz.x, xz.y)
-		sync_target_position = Vector3(xz.x, gy + HALF_HEIGHT, xz.y)
+		sync_target_position = Vector3(xz.x, gy + half_height, xz.y)
 		has_move_goal = true
 
 ## Map XZ goal for anchor moves: server uses move_target while moving, else current position.
@@ -246,8 +285,7 @@ func _build_visual_mesh():
 	add_child(_mesh)
 
 func _sprite_pixel_size() -> float:
-	var h := HORSE_SPRITE_WORLD_HEIGHT if has_horse else SPRITE_WORLD_HEIGHT
-	return h / SPRITE_FRAME_PX
+	return world_sprite_height() / SPRITE_FRAME_PX
 
 func _scaled_pixel_size(char_height_px: int) -> float:
 	var base := _sprite_pixel_size()
@@ -260,7 +298,7 @@ func _update_sprite_feet_offset(feet_y_px: int, pixel_size: float) -> void:
 		return
 	var frame_center_px := SPRITE_FRAME_PX * 0.5
 	# Image Y grows downward; Sprite3D +Y is up. Align opaque feet row to -HALF_HEIGHT.
-	_sprite.position.y = -HALF_HEIGHT - (frame_center_px - float(feet_y_px)) * pixel_size
+	_sprite.position.y = -half_height - (frame_center_px - float(feet_y_px)) * pixel_size
 
 func _char_height_for_idle() -> int:
 	if _anim_idle != null:
@@ -282,19 +320,17 @@ func _static_frame_texture() -> Texture2D:
 	return _static_spearman_tex
 
 func _unit_art_faces_right() -> bool:
-	return UNIT_SPRITE_PATHS.art_faces_right_for_unit(
-		UNIT_SPRITE_PATHS.unit_type_for_equipment(has_horse, has_spear)
-	)
+	return UNIT_SPRITE_PATHS.art_faces_right_for_unit(get_unit_type())
 
 func _try_load_spritesheets() -> bool:
 	var color := _get_color_folder()
-	var unit_type := UNIT_SPRITE_PATHS.unit_type_for_equipment(has_horse, has_spear)
+	var u_type := get_unit_type()
 	_static_spearman_tex = UNIT_SPRITE_PATHS.load_static_spearman_texture(color)
 
-	var move_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "move")
-	var attack_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "attack")
-	var idle_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "idle")
-	var die_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, unit_type, "die")
+	var move_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, u_type, "move")
+	var attack_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, u_type, "attack")
+	var idle_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, u_type, "idle")
+	var die_path := UNIT_SPRITE_PATHS.ai_sprite_folder(color, u_type, "die")
 
 	if UNIT_SPRITE_PATHS.folder_has_spritesheet(move_path):
 		_anim_walking = SPRITESHEET_ANIM.try_load_folder(move_path)
@@ -312,6 +348,8 @@ func _try_load_spritesheets() -> bool:
 	return _anim_walking != null or _anim_fight != null or _anim_idle != null or _anim_die != null
 
 func _get_color_folder() -> String:
+	if sprite_color != "":
+		return sprite_color
 	return UNIT_SPRITE_PATHS.color_folder_for_peer(owner_peer_id)
 
 func _get_texture_path() -> String:
@@ -334,6 +372,8 @@ func _load_spearman_texture() -> Texture2D:
 	return null
 
 func _get_fallback_tint() -> Color:
+	if is_dragon():
+		return Color(0.85, 0.25, 0.2)
 	if owner_peer_id in GameState.players:
 		var ci = GameState.players[owner_peer_id].get("color_index", 0)
 		if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
@@ -419,6 +459,8 @@ func apply_network_sync(
 		_settled_goal = Vector3.ZERO
 	sync_target_hp = _hp_val
 	hp = _hp_val
+	if attack_t > sync_attack_timer and _anim_fight != null:
+		_anim_fight.reset()
 	sync_attack_timer = attack_t
 	_refresh_move_goal_state()
 
@@ -430,6 +472,13 @@ func _pick_anim_state() -> AnimState:
 	if _is_moving():
 		return AnimState.WALKING
 	return AnimState.IDLE
+
+func _fight_advance(delta: float):
+	if _anim_fight == null:
+		return null
+	if is_dragon():
+		return _anim_fight.advance(delta, false, fight_anim_speed)
+	return _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
 
 func _is_moving() -> bool:
 	if _goal_settled or not has_move_goal:
@@ -473,7 +522,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 				faces_right = false
 		AnimState.FIGHT:
 			if _anim_fight != null:
-				tex = _anim_fight.advance(delta, true, SPRITE_ANIM_SPEED)
+				tex = _fight_advance(delta)
 				char_height_px = _anim_fight.get_character_height_px()
 				feet_y_px = _anim_fight.get_feet_y_px()
 				faces_right = art_faces_right
@@ -559,7 +608,7 @@ func _server_process(delta: float):
 		var dist := cur.distance_to(move_target)
 		if dist <= GOAL_ARRIVAL_DIST:
 			var gy := _ground_y_at(move_target.x, move_target.y)
-			global_position = Vector3(move_target.x, gy + HALF_HEIGHT, move_target.y)
+			global_position = Vector3(move_target.x, gy + half_height, move_target.y)
 			velocity = Vector3.ZERO
 			is_moving = false
 		else:
@@ -567,7 +616,7 @@ func _server_process(delta: float):
 			velocity = Vector3(dir_xz.x * speed, 0.0, dir_xz.y * speed)
 			move_and_slide()
 			var gy2 := _ground_y_at(global_position.x, global_position.z)
-			global_position.y = gy2 + HALF_HEIGHT
+			global_position.y = gy2 + half_height
 
 	if global_position.x < -MAP_MARGIN or global_position.x > MAP_WIDTH_F + MAP_MARGIN \
 			or global_position.z < -MAP_MARGIN or global_position.z > MAP_HEIGHT_F + MAP_MARGIN:
@@ -598,7 +647,7 @@ func _client_physics(delta: float):
 			velocity = Vector3.ZERO
 			var gy := _ground_y_at(sync_target_position.x, sync_target_position.z)
 			global_position = Vector3(
-				sync_target_position.x, gy + HALF_HEIGHT, sync_target_position.z
+				sync_target_position.x, gy + half_height, sync_target_position.z
 			)
 		_refresh_move_goal_state()
 		move_and_slide()
@@ -631,6 +680,9 @@ func _try_attack():
 			continue
 		if child.owner_peer_id == owner_peer_id:
 			continue
+		if UNIT_SPRITE_PATHS.is_neutral_owner(owner_peer_id) \
+				and UNIT_SPRITE_PATHS.is_neutral_owner(int(child.get("owner_peer_id"))):
+			continue
 		var oth := child as CharacterBody3D
 		var dist := Vector2(global_position.x, global_position.z).distance_to(Vector2(oth.global_position.x, oth.global_position.z))
 		if dist <= attack_range:
@@ -639,7 +691,7 @@ func _try_attack():
 			print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [owner_name, army_id, child.get("owner_name"), child.get("army_id"), dist, dmg])
 			if child.has_method("take_damage"):
 				child.take_damage(dmg, owner_peer_id)
-			attack_timer = 1.0
+			attack_timer = attack_cooldown
 			return
 
 func take_damage(dmg: float, _attacker_id: int):
@@ -750,4 +802,4 @@ func _stick_to_terrain():
 		if global_position.y < ground_y and not _logged_height_invalid:
 			_logged_height_invalid = true
 			print("TEST_3D_UNIT_HEIGHT_INVALID: %s unit_was_below_ground" % name)
-		global_position.y = ground_y + HALF_HEIGHT
+		global_position.y = ground_y + half_height
