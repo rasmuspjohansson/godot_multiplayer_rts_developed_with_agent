@@ -1,6 +1,6 @@
 {
   "schema_version": "1.1",
-  "generated_at": "2026-08-12T11:05:01.048010+00:00",
+  "generated_at": "2026-08-17T18:25:53.104374+00:00",
   "action_id": "die",
   "action_description": "Death (one-shot)",
   "veo_prompt": "Side view, 2D game character animation, facing right. Animation of this exact spearman. He is struck and quietly collapses on the spot: knees buckle, he falls, the spear drops beside him. Undramatic death: the character simply crumples and falls down on the spot, then lies still. Animation plays once from standing through the fall to lying motionless on the ground, holding the final dead pose until the end of the clip. No looping; no dramatic flips, launches, or exaggerated throes. Camera locked; character stays centered; no lateral travel that drifts off frame. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying.",
@@ -17,22 +17,22 @@
   "trim_leading_frames": 15,
   "content_crop": true,
   "content_crop_bbox": {
-    "x": 386,
-    "y": 2,
-    "width": 731,
-    "height": 710
+    "x": 237,
+    "y": 167,
+    "width": 860,
+    "height": 482
   },
   "frame_stride": 5,
   "playback_fps": 4.8,
   "chroma_key": "green_screen_hsv_v6_dark_line_rescue",
   "dont_generate_video": false,
-  "reference_image": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/images/blue/spearman/spearman.png",
+  "reference_image": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/images/blue/spearman/spearman_veo.png",
   "tier": "Fast",
   "seconds": 4,
   "resolution": "720p",
   "veo_model": "veo-3.1-fast-generate-preview",
   "unit_type": "spearman",
-  "from_image_path": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/images/blue/spearman/spearman.png",
+  "from_image_path": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/images/blue/spearman/spearman_veo.png",
   "team_color": "blue",
   "prompt": "Side view, 2D game character animation, facing right. Animation of this exact spearman. He is struck and quietly collapses on the spot: knees buckle, he falls, the spear drops beside him. Undramatic death: the character simply crumples and falls down on the spot, then lies still. Animation plays once from standing through the fall to lying motionless on the ground, holding the final dead pose until the end of the clip. No looping; no dramatic flips, launches, or exaggerated throes. Camera locked; character stays centered; no lateral travel that drifts off frame. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying."
 }

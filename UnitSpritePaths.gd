@@ -23,7 +23,11 @@ static func color_folder_for_peer(peer_id: int) -> String:
 			return TEAM_COLOR_FOLDERS[ci]
 	return "blue"
 
-static func unit_type_for_equipment(has_horse: bool, has_spear: bool) -> String:
+static func unit_type_for_equipment(has_horse: bool, has_spear: bool, has_bow: bool = false) -> String:
+	if has_horse and has_bow:
+		return "bauer_horse_archer"
+	if has_bow:
+		return "bowman"
 	if has_horse:
 		return "knight"
 	if has_spear:
@@ -38,13 +42,16 @@ static func art_faces_right_for_unit(_unit_type: String) -> bool:
 	# face left and use the mesh UV flip path when spritesheets are unavailable.
 	return true
 
-static func default_attack_range_for_equipment(has_horse: bool, has_spear: bool) -> float:
-	var unit_type := unit_type_for_equipment(has_horse, has_spear)
-	if unit_type == "bowman":
+static func default_attack_range_for_equipment(has_horse: bool, has_spear: bool, has_bow: bool = false) -> float:
+	var unit_type := unit_type_for_equipment(has_horse, has_spear, has_bow)
+	if unit_type in ["bowman", "bauer_horse_archer"]:
 		return RANGED_ATTACK_RANGE
 	if has_spear:
 		return SPEAR_ATTACK_RANGE
 	return MELEE_ATTACK_RANGE
+
+static func uses_mounted_spacing(has_horse: bool, _has_spear: bool, _has_bow: bool) -> bool:
+	return has_horse
 
 static func ai_sprite_folder(color: String, unit_type: String, action: String) -> String:
 	return "%s/%s/%s/%s" % [AI_SPRITES_ROOT, color, unit_type, action]

@@ -1,0 +1,43 @@
+{
+  "name": "XL",
+  "size": {"width": 3840, "height": 2160},
+  "terrain": {
+    "type": "hills",
+    "features": [
+      {"type": "hill", "x": 1920.0, "y": 1080.0, "base_width": 900.0, "height": 28.0},
+      {"type": "hill", "x": 1200.0, "y": 1650.0, "base_width": 780.0, "height": 20.0},
+      {"type": "hill", "x": 2700.0, "y": 600.0, "base_width": 720.0, "height": 22.0}
+    ]
+  },
+  "neutral_dragons": [
+    {"x": 2342.4, "y": 604.8, "color": "red", "guard_cp": "Stables_2"},
+    {"x": 1920.0, "y": 1080.0, "color": "red", "guard_cp": "Blacksmith_2"}
+  ],
+  "capture_points": [
+    {"id": "Stables",      "type": "Stables",    "x": 1497.6, "y": 604.8},
+    {"id": "Blacksmith",   "type": "Blacksmith", "x": 2342.4, "y": 1490.4},
+    {"id": "Stables_2",    "type": "Stables",    "x": 2342.4, "y": 604.8},
+    {"id": "Stables_3",    "type": "Stables",    "x": 1497.6, "y": 1490.4},
+    {"id": "Blacksmith_2", "type": "Blacksmith", "x": 1920.0, "y": 1080.0},
+    {"id": "Blacksmith_3", "type": "Blacksmith", "x": 1920.0, "y": 540.0},
+    {"id": "Village",      "type": "Village",    "x": 960.0,  "y": 1080.0},
+    {"id": "Village_2",    "type": "Village",    "x": 2880.0, "y": 1080.0},
+    {"id": "Village_3",    "type": "Village",    "x": 1920.0, "y": 1620.0},
+    {"id": "Archery",      "type": "Archery",    "x": 1920.0, "y": 270.0},
+    {"id": "Archery_2",    "type": "Archery",    "x": 1920.0, "y": 1755.0}
+  ],
+  "player_starts": [
+    {"slot": 0, "corner": "NW", "armies": [
+      {"x": 599.04, "y": 1080.0, "direction": 0.0}
+    ]},
+    {"slot": 1, "corner": "SE", "armies": [
+      {"x": 3150.0, "y": 1080.0, "direction": 3.141593}
+    ]},
+    {"slot": 2, "corner": "NE", "armies": [
+      {"x": 3150.0, "y": 540.0, "direction": 3.141593}
+    ]},
+    {"slot": 3, "corner": "SW", "armies": [
+      {"x": 599.04, "y": 540.0, "direction": 0.0}
+    ]}
+  ]
+}

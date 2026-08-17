@@ -1,5 +1,5 @@
 {
-  "name": "default",
+  "name": "S",
   "size": {"width": 1280, "height": 720},
   "terrain": {
     "type": "hills",
@@ -12,7 +12,8 @@
   "neutral_dragon": {"x": 640.0, "y": 360.0, "color": "red"},
   "capture_points": [
     {"id": "Stables",    "type": "Stables",    "x": 499.2, "y": 201.6},
-    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8}
+    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8},
+    {"id": "Village",    "type": "Village",    "x": 640.0, "y": 580.0}
   ],
   "player_starts": [
     {"slot": 0, "corner": "NW", "armies": [

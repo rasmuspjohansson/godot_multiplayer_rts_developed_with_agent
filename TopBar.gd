@@ -22,7 +22,7 @@ func _ready():
 	label_left.offset_top = 5
 	label_left.offset_right = 900
 	label_left.offset_bottom = 30
-	label_left.add_theme_font_size_override("font_size", 18)
+	label_left.add_theme_font_size_override("font_size", 16)
 	label_left.add_theme_color_override("font_color", Color.WHITE)
 	add_child(label_left)
 
@@ -40,9 +40,23 @@ func _ready():
 	label_left.move_to_front()
 	label_right.move_to_front()
 
-func update_display(stables_count: int, blacksmith_count: int, horses: int, spears: int, player_name: String, player_color: Color = Color.WHITE):
+func update_display(
+	stables_count: int,
+	blacksmith_count: int,
+	village_count: int,
+	archery_count: int,
+	horses: int,
+	spears: int,
+	bows: int,
+	villagers: int,
+	player_name: String,
+	player_color: Color = Color.WHITE,
+) -> void:
 	if label_left:
-		label_left.text = "Stables: %d  Blacksmith: %d  Horses: %d  Spears: %d" % [stables_count, blacksmith_count, horses, spears]
+		label_left.text = (
+			"Stab:%d Blk:%d Vill:%d Arch:%d  H:%d S:%d B:%d V:%d"
+			% [stables_count, blacksmith_count, village_count, archery_count, horses, spears, bows, villagers]
+		)
 	if label_right:
 		label_right.text = "Player: %s" % player_name
 		label_right.add_theme_color_override("font_color", player_color)

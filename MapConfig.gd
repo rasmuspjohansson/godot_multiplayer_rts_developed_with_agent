@@ -1,16 +1,21 @@
 extends Node
-## Parses res://map.json once at startup and exposes the map description
+## Parses map JSON once at startup and exposes the map description
 ## (size, terrain, capture points, per-slot player starting positions).
 ## Every map-dependent constant in World.gd / Army3D.gd resolves through here.
+##
+## Map file is selected via --map=S|L|XL (default S) → res://maps/map_{size}.json
 
-const MAP_JSON_PATH := "res://map.json"
+const MAPS_DIR := "res://maps"
+const DEFAULT_MAP_SIZE := "S"
+const VALID_MAP_SIZES := ["S", "L", "XL"]
 
-# Built-in fallback values — used only if map.json is missing or unparseable so
+# Built-in fallback values — used only if map JSON is missing or unparseable so
 # the game (and the test harness) never hangs on a bad config.
 const _FALLBACK_WIDTH := 1280.0
 const _FALLBACK_HEIGHT := 720.0
 
-var name_: String = "default"
+var map_size: String = DEFAULT_MAP_SIZE
+var name_: String = "S"
 var width: float = _FALLBACK_WIDTH
 var height: float = _FALLBACK_HEIGHT
 var terrain_type: String = "flat"
@@ -18,6 +23,7 @@ var terrain_features: Array = []
 var capture_points: Array = []
 var player_starts: Array = []
 var neutral_dragon: Dictionary = {}
+var neutral_dragons: Array = []
 ## Precomputed hill parameters used ONLY by World._build_terrain() at startup
 ## to generate the ground mesh and collision heightmap. Runtime height queries
 ## must go through World.get_ground_height_at() (physics raycast) so that
@@ -28,40 +34,77 @@ var _hills: Array = []
 func _ready() -> void:
 	_load()
 
+func _parse_map_size_from_args() -> String:
+	var args: PackedStringArray = OS.get_cmdline_args() + OS.get_cmdline_user_args()
+	for i in range(args.size()):
+		var a := str(args[i])
+		if a.begins_with("--map="):
+			return a.split("=")[1].strip_edges().to_upper()
+		if a == "--map" and i + 1 < args.size():
+			return str(args[i + 1]).strip_edges().to_upper()
+	return DEFAULT_MAP_SIZE
+
+func _map_json_path(size: String) -> String:
+	return "%s/map_%s.json" % [MAPS_DIR, size]
+
 func _load() -> void:
-	var f := FileAccess.open(MAP_JSON_PATH, FileAccess.READ)
+	map_size = _parse_map_size_from_args()
+	if map_size not in VALID_MAP_SIZES:
+		push_warning("MapConfig: unknown --map=%s; using %s" % [map_size, DEFAULT_MAP_SIZE])
+		map_size = DEFAULT_MAP_SIZE
+	var path := _map_json_path(map_size)
+	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("MapConfig: %s missing; using fallback defaults" % MAP_JSON_PATH)
-		print("TEST_MAP_LOAD_FAIL: %s missing" % MAP_JSON_PATH)
+		push_error("MapConfig: %s missing; using fallback defaults" % path)
+		print("TEST_MAP_LOAD_FAIL: %s missing" % path)
 		_apply_fallback_player_starts()
 		return
 	var text := f.get_as_text()
 	f.close()
 	var parsed = JSON.parse_string(text)
 	if typeof(parsed) != TYPE_DICTIONARY:
-		push_error("MapConfig: %s did not parse to a dictionary" % MAP_JSON_PATH)
-		print("TEST_MAP_LOAD_FAIL: %s not a dict" % MAP_JSON_PATH)
+		push_error("MapConfig: %s did not parse to a dictionary" % path)
+		print("TEST_MAP_LOAD_FAIL: %s not a dict" % path)
 		_apply_fallback_player_starts()
 		return
-	name_ = str(parsed.get("name", name_))
-	var size = parsed.get("size", {})
-	if size is Dictionary:
-		width = float(size.get("width", width))
-		height = float(size.get("height", height))
+	name_ = str(parsed.get("name", map_size))
+	var size_dict = parsed.get("size", {})
+	if size_dict is Dictionary:
+		width = float(size_dict.get("width", width))
+		height = float(size_dict.get("height", height))
 	var terrain = parsed.get("terrain", {})
 	if terrain is Dictionary:
 		terrain_type = str(terrain.get("type", terrain_type))
 		terrain_features = terrain.get("features", [])
 	capture_points = parsed.get("capture_points", [])
+	neutral_dragons = parsed.get("neutral_dragons", [])
 	neutral_dragon = parsed.get("neutral_dragon", {})
+	if neutral_dragons.is_empty() and not neutral_dragon.is_empty():
+		neutral_dragons = [neutral_dragon.duplicate()]
 	player_starts = parsed.get("player_starts", [])
 	if player_starts.is_empty():
 		_apply_fallback_player_starts()
 	_precompute_hills()
-	print("MapConfig: loaded '%s' (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, dragon=%s)" % [
-		name_, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
-		"yes" if not neutral_dragon.is_empty() else "no"
+	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d dragons)" % [
+		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
+		get_neutral_dragons().size()
 	])
+
+func get_neutral_dragons() -> Array:
+	if not neutral_dragons.is_empty():
+		return neutral_dragons
+	if not neutral_dragon.is_empty():
+		return [neutral_dragon]
+	return []
+
+func max_armies_per_player() -> int:
+	var max_count := 1
+	for start in player_starts:
+		if typeof(start) != TYPE_DICTIONARY:
+			continue
+		var armies: Array = start.get("armies", [])
+		max_count = maxi(max_count, armies.size())
+	return max_count
 
 func _precompute_hills() -> void:
 	_hills.clear()

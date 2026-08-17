@@ -3,7 +3,7 @@ extends Node3D
 
 signal army_routed(army)
 
-# Map bounds come from `MapConfig` (res://map.json); access as MapConfig.width / MapConfig.height.
+# Map bounds come from `MapConfig` (maps/map_{S|L|XL}.json); access as MapConfig.width / MapConfig.height.
 
 const FOOT_SPACING := 10.0
 const MOUNTED_SPACING := 15.0

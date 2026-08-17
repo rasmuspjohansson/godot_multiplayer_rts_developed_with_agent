@@ -1,6 +1,6 @@
 # Automated RTS — Godot 4.6
 
-A minimal multiplayer RTS where players each start with control of **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture two control points (**Stables** and **Blacksmith**) that produce horses and spears. New armies can then be produced equipped with a combination of these resources. You win when every one of your opponent's armies has routed.
+A minimal multiplayer RTS where players each start with control of **two armies** on a tilted-3D arena. Each army has 10 soldiers in a formation. Players select armies, move them, and capture control points (**Stables**, **Blacksmith**, **Village**, **Archery**) that produce horses, spears, villagers, and bows. New armies require villagers plus optional equipment. You win when every one of your opponent's armies has routed.
 
 
 ![Screenshot from the game](from_game.jpg)
@@ -15,7 +15,7 @@ The game can be played by humans, but it is also fully **automatable** so an AI 
 | `prompts.txt` | Master instructions for the agent. |
 | `game.md` | Game design document. |
 | `tests.json` | Single source of truth for the automated test — every event to verify, every action the MockPlayer must perform, and extra standalone headless checks. |
-| `map.json` | Single source of truth for the map (size, terrain, capture-point positions, per-slot player starting positions). |
+| `maps/map_S.json`, `maps/map_L.json`, `maps/map_XL.json` | Map definitions (size, terrain, capture points, player starts, dragons). Selected via `--map=S|L|XL` (default S). |
 | `skills.md` | Shell commands for starting/stopping server + clients and collecting logs. |
 | `run_test.sh` / `verify_test_logs.sh` | Start the match and then verify the run against `tests.json`. |
 
@@ -44,21 +44,36 @@ Supported MockPlayer action types:
 - `move_army_to_cp` (`army_index`, `cp_id`) — send the selected army to `Stables` or `Blacksmith`.
 - `set_all_aggressive` (optional `wait_for_controls_cp`) — wait (polled) until the player controls the given CP, then flip all that player's armies to `aggressive`.
 
-### Map description (`map.json`)
+### Map sizes (`maps/map_*.json`)
 
-The arena is described entirely by `map.json`, parsed once at startup by the `MapConfig` autoload. This is the single place to change map size, capture-point locations, or player starting positions; swapping to a different map later just means writing a new JSON file.
+Maps are selected at launch with `--map=S|L|XL` (default **S**). [`MapConfig.gd`](MapConfig.gd) loads `res://maps/map_{size}.json` on startup (server and clients must use the same flag).
+
+| Map | Size | Armies per player | Capture points | Dragons |
+|-----|------|-------------------|----------------|---------|
+| **S** | 1280×720 | 2 (spear + horse) | 1 Stables, 1 Blacksmith, 1 Village | 1 (center) |
+| **L** | 2560×1440 | 1 club army | 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries | none |
+| **XL** | 3840×2160 | 1 club army | 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries | 2 (guarding central CPs) |
+
+```bash
+./run_test.sh              # default map S
+./run_test.sh --map L
+./run_test.sh --map XL --no_test
+```
+
+The arena is described entirely by the chosen map JSON. This is the single place to change map size, capture-point locations, or player starting positions.
 
 ```json
 {
-  "name": "default",
+  "name": "S",
   "size": {"width": 1280, "height": 720},
-  "terrain": {"type": "flat", "features": []},
+  "terrain": {"type": "hills", "features": []},
   "capture_points": [
     {"id": "Stables", "type": "Stables", "x": 499.2, "y": 201.6},
-    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8}
+    {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8},
+    {"id": "Village", "type": "Village", "x": 640.0, "y": 580.0}
   ],
   "player_starts": [
-    {"slot": 0, "corner": "NW", "armies": [{"x": 199.68, "y": 180.0, "direction": 0.0}, ...]},
+    {"slot": 0, "corner": "NW", "armies": [{"x": 199.68, "y": 180.0, "direction": 0.0, "spear": true}, ...]},
     {"slot": 1, "corner": "SE", "armies": [...]},
     {"slot": 2, "corner": "NE", "armies": [...]},
     {"slot": 3, "corner": "SW", "armies": [...]}
@@ -67,11 +82,12 @@ The arena is described entirely by `map.json`, parsed once at startup by the `Ma
 ```
 
 - `size` — play-area width (X) and height (Z in 3D). All camera and movement clamping uses these.
-- `terrain.type` is `"flat"` today; `terrain.features` is reserved for upcoming hills/mountains.
-- `capture_points[]` — the list of capturable objectives; the server spawns one pillar per entry and replicates them to clients.
-- `player_starts[]` — four corner slots (NW/SE/NE/SW). The first player to join gets slot 0, the second gets slot 1, etc. Each slot lists every army that player spawns, with explicit `{x, y, direction}`.
+- `terrain.type` / `terrain.features` — hills use Gaussian bumps; features scale with map size.
+- `capture_points[]` — capturable objectives; types: `Stables`, `Blacksmith`, `Village`, `Archery`. IDs `Stables` and `Blacksmith` are used by the auto-test on all map sizes.
+- `player_starts[]` — four corner slots (NW/SE/NE/SW). Join order assigns slot 0, 1, … Each slot lists armies with `{x, y, direction}`; optional `horse`/`spear`/`bow` for equipment.
+- `neutral_dragon` (S) or `neutral_dragons[]` (XL) — optional map guardians.
 
-`MockPlayer` never opens `map.json`; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.
+`MockPlayer` never opens map JSON; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.
 
 ### Event sequence
 
@@ -111,7 +127,9 @@ sequenceDiagram
 ## Running the automated test
 
 ```bash
-./run_test.sh                  # start server + two auto-test clients (MockPlayer)
+./run_test.sh                  # start server + two auto-test clients (map S)
+./run_test.sh --map L          # large map (2560×1440)
+./run_test.sh --map XL         # extra-large map (3840×2160)
 # wait until server.log contains TEST_GAME_OVER (~60–180s)
 ./verify_test_logs.sh          # check every tests.json marker + run other_tests
 ```

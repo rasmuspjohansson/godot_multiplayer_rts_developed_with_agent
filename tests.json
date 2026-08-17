@@ -34,7 +34,7 @@
       "logs": ["server.log"]
     },
     {
-      "description": "Server spawns two armies of 10 soldiers for each player",
+      "description": "Server spawns armies from the active map config (S/L/XL)",
       "marker": "TEST_ARMIES_SPAWNED",
       "logs": ["server.log"]
     },

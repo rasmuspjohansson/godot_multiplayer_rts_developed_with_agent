@@ -1,0 +1,37 @@
+{
+  "name": "L",
+  "size": {"width": 2560, "height": 1440},
+  "terrain": {
+    "type": "hills",
+    "features": [
+      {"type": "hill", "x": 1280.0, "y": 720.0, "base_width": 600.0, "height": 28.0},
+      {"type": "hill", "x": 800.0, "y": 1100.0, "base_width": 520.0, "height": 20.0},
+      {"type": "hill", "x": 1800.0, "y": 400.0, "base_width": 480.0, "height": 22.0}
+    ]
+  },
+  "capture_points": [
+    {"id": "Stables",     "type": "Stables",    "x": 998.4,  "y": 403.2},
+    {"id": "Blacksmith",  "type": "Blacksmith", "x": 1561.6, "y": 403.2},
+    {"id": "Stables_2",   "type": "Stables",    "x": 1561.6, "y": 993.6},
+    {"id": "Blacksmith_2","type": "Blacksmith", "x": 998.4,  "y": 993.6},
+    {"id": "Village",     "type": "Village",    "x": 640.0,  "y": 720.0},
+    {"id": "Village_2",   "type": "Village",    "x": 1920.0, "y": 720.0},
+    {"id": "Village_3",   "type": "Village",    "x": 1280.0, "y": 1080.0},
+    {"id": "Archery",     "type": "Archery",    "x": 1280.0, "y": 360.0},
+    {"id": "Archery_2",   "type": "Archery",    "x": 1280.0, "y": 1170.0}
+  ],
+  "player_starts": [
+    {"slot": 0, "corner": "NW", "armies": [
+      {"x": 399.36, "y": 720.0, "direction": 0.0}
+    ]},
+    {"slot": 1, "corner": "SE", "armies": [
+      {"x": 2100.0, "y": 720.0, "direction": 3.141593}
+    ]},
+    {"slot": 2, "corner": "NE", "armies": [
+      {"x": 2100.0, "y": 360.0, "direction": 3.141593}
+    ]},
+    {"slot": 3, "corner": "SW", "armies": [
+      {"x": 399.36, "y": 360.0, "direction": 0.0}
+    ]}
+  ]
+}

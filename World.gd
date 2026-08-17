@@ -1,5 +1,5 @@
 extends Node3D
-## Single world: server authority + 3D client (map XZ = 1280×720, ground at y=0).
+## Single world: server authority + 3D client; map size from MapConfig (S/L/XL).
 
 const _Army3D = preload("res://Army3D.gd")
 const _Unit3D = preload("res://Unit3D.gd")
@@ -15,15 +15,16 @@ const NEUTRAL_DRAGON_COLLISION_LAYER := 32
 ## See game.md "Physics / collision" for layer layout and friendly-blocking notes.
 const UNIT_PASS_THROUGH := false
 
-const ARMIES_PER_PLAYER := 2
+## Default armies per player when map JSON is unavailable (see MapConfig.max_armies_per_player()).
+const ARMIES_PER_PLAYER_FALLBACK := 2
 const UNITS_PER_ARMY := 10
-## Map width/height come from `MapConfig` (res://map.json). Access via
+## Map width/height come from `MapConfig` (maps/map_{S|L|XL}.json). Access via
 ## `MapConfig.width` / `MapConfig.height` elsewhere in this file.
 const CP_PEACE_SECONDS := 5.0
 const CAPTURE_RADIUS_SEEK := 120.0
 const DRAFT_COST_PER_EQUIPMENT := 10
 ## Off-map spawn/stop lanes for the legacy draft-army path. Recomputed from
-## MapConfig in `_init_offmap_lanes()` so they scale with `map.json` size.
+## MapConfig in `_init_offmap_lanes()` so they scale with map size.
 var WEST_SPAWN: Vector2 = Vector2.ZERO
 var EAST_SPAWN: Vector2 = Vector2.ZERO
 var WEST_STOP_X: float = 80.0
@@ -54,6 +55,14 @@ const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
 const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
 const CP_BLACKSMITH_TEXTURE_PATH := "res://images/background/blacksmith2.png"
+const CP_VILLAGE_TEXTURE_PATH := "res://images/capture_points/village/village.png"
+const CP_ARCHERY_TEXTURE_PATH := "res://images/capture_points/archery/archery.png"
+const CP_RESOURCE_BY_TYPE := {
+	"Stables": "horses",
+	"Blacksmith": "spears",
+	"Village": "villagers",
+	"Archery": "bows",
+}
 ## Capture point billboard height in world units (1/4 of initial 80-unit sprite scale).
 const CP_SPRITE_WORLD_HEIGHT := 20.0
 
@@ -80,7 +89,7 @@ var _last_mouse: Vector2
 
 var armies: Array = []
 var all_units: Array = []
-var _map_dragon: CharacterBody3D = null
+var _map_dragons: Array = []
 var _dragon_ai_timer: float = 0.0
 const DRAGON_AI_TICK := 0.5
 var capture_points: Array = []
@@ -100,6 +109,10 @@ var _ghost_root_3d: Node3D
 var _ghost_marker_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
 var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
+var _show_unit_range: bool = false
+var _show_range_cb: CheckBox = null
+var _range_markers_3d: Node3D
+var _range_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
 ## Terrain height grid built in `_build_terrain()`; used as fallback when physics raycast misses.
@@ -491,6 +504,7 @@ func _unhandled_input(event: InputEvent):
 func _process(_delta: float):
 	if not multiplayer.is_server():
 		_update_move_goal_markers_3d()
+		_update_unit_range_markers_3d()
 	if _camera_pivot == null:
 		return
 	if multiplayer.is_server():
@@ -559,6 +573,115 @@ func _update_move_goal_markers_3d():
 				node.queue_free()
 			_goal_marker_mesh_by_unit.erase(k)
 
+func _on_show_range_toggled(pressed: bool) -> void:
+	_show_unit_range = pressed
+	if not pressed:
+		_clear_range_markers()
+
+func _clear_range_markers() -> void:
+	for k in _range_marker_mesh_by_unit.keys().duplicate():
+		var node: MeshInstance3D = _range_marker_mesh_by_unit[k]
+		if is_instance_valid(node):
+			node.queue_free()
+		_range_marker_mesh_by_unit.erase(k)
+
+func _range_color_for_unit(unit: Node) -> Color:
+	var local_pid := multiplayer.get_unique_id()
+	if unit.get("owner_peer_id") == local_pid:
+		return Color(0.25, 0.85, 0.35, 0.55)
+	if UNIT_SPRITE_PATHS.is_neutral_owner(int(unit.get("owner_peer_id"))):
+		return Color(1.0, 0.55, 0.1, 0.55)
+	return Color(0.9, 0.25, 0.25, 0.55)
+
+func _make_range_ring_mesh(radius: float) -> ArrayMesh:
+	var segments := 64
+	var line_width := 1.4
+	var inner_r := maxf(0.5, radius - line_width * 0.5)
+	var outer_r := radius + line_width * 0.5
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for i in range(segments):
+		var a0 := TAU * float(i) / float(segments)
+		var a1 := TAU * float(i + 1) / float(segments)
+		var c0 := Vector2(cos(a0), sin(a0))
+		var c1 := Vector2(cos(a1), sin(a1))
+		var base := verts.size()
+		verts.append_array([
+			Vector3(c0.x * inner_r, 0.0, c0.y * inner_r),
+			Vector3(c0.x * outer_r, 0.0, c0.y * outer_r),
+			Vector3(c1.x * outer_r, 0.0, c1.y * outer_r),
+			Vector3(c1.x * inner_r, 0.0, c1.y * inner_r),
+		])
+		uvs.append_array([Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO])
+		indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+func _update_unit_range_markers_3d() -> void:
+	if not _show_unit_range:
+		return
+	if _range_markers_3d == null:
+		_range_markers_3d = Node3D.new()
+		_range_markers_3d.name = "UnitRangeMarkers3D"
+		add_child(_range_markers_3d)
+	var seen: Dictionary = {}
+	for unit in all_units:
+		if not is_instance_valid(unit) or not unit.is_inside_tree():
+			continue
+		if unit.get("is_dead"):
+			continue
+		var uname: String = str(unit.name)
+		seen[uname] = true
+		var radius: float = float(unit.get("attack_range"))
+		var unit_node := unit as Node3D
+		if unit_node == null:
+			continue
+		var pos: Vector3 = unit_node.global_position
+		var gy: float = get_ground_height_at(pos.x, pos.z) + 0.18
+		if not _range_marker_mesh_by_unit.has(uname):
+			var mi := MeshInstance3D.new()
+			mi.mesh = _make_range_ring_mesh(radius)
+			var mat := StandardMaterial3D.new()
+			mat.albedo_color = _range_color_for_unit(unit)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mi.material_override = mat
+			_range_markers_3d.add_child(mi)
+			_range_marker_mesh_by_unit[uname] = mi
+		var mesh_inst: MeshInstance3D = _range_marker_mesh_by_unit[uname]
+		mesh_inst.position = Vector3(pos.x, gy, pos.z)
+		var mat2: StandardMaterial3D = mesh_inst.material_override as StandardMaterial3D
+		if mat2 != null:
+			mat2.albedo_color = _range_color_for_unit(unit)
+		if absf(radius - _range_ring_radius(mesh_inst.mesh)) > 0.5:
+			mesh_inst.mesh = _make_range_ring_mesh(radius)
+	for k in _range_marker_mesh_by_unit.keys().duplicate():
+		if not seen.has(k):
+			var node: MeshInstance3D = _range_marker_mesh_by_unit[k]
+			if is_instance_valid(node):
+				node.queue_free()
+			_range_marker_mesh_by_unit.erase(k)
+
+func _range_ring_radius(mesh: Mesh) -> float:
+	if mesh == null or mesh.get_surface_count() == 0:
+		return 0.0
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	if verts.is_empty():
+		return 0.0
+	var max_r := 0.0
+	for v in verts:
+		max_r = maxf(max_r, Vector2(v.x, v.z).length())
+	return max_r
+
 func _setup_topbar():
 	var tb_script = preload("res://TopBar.gd")
 	top_bar = CanvasLayer.new()
@@ -576,7 +699,7 @@ func _setup_draft_menu():
 	panel.offset_left = 10
 	panel.offset_top = 590
 	panel.offset_right = 220
-	panel.offset_bottom = 710
+	panel.offset_bottom = 760
 	draft_menu.add_child(panel)
 	var vbox = VBoxContainer.new()
 	panel.add_child(vbox)
@@ -588,22 +711,32 @@ func _setup_draft_menu():
 	spear_cb.name = "SpearCheck"
 	spear_cb.text = "Spear"
 	vbox.add_child(spear_cb)
+	var bow_cb = CheckBox.new()
+	bow_cb.name = "BowCheck"
+	bow_cb.text = "Bow"
+	vbox.add_child(bow_cb)
+	_show_range_cb = CheckBox.new()
+	_show_range_cb.name = "ShowRangeCheck"
+	_show_range_cb.text = "Show range"
+	_show_range_cb.toggled.connect(_on_show_range_toggled)
+	vbox.add_child(_show_range_cb)
 	var create_btn = Button.new()
 	create_btn.name = "CreateArmyBtn"
 	create_btn.text = "Create army"
-	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb))
+	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb, bow_cb))
 	vbox.add_child(create_btn)
 
-func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox):
+func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox):
 	var use_horse = horse_cb.button_pressed
 	var use_spear = spear_cb.button_pressed
-	_request_draft(use_horse, use_spear)
+	var use_bow = bow_cb.button_pressed
+	_request_draft(use_horse, use_spear, use_bow)
 
-func request_draft_from_mock(use_horse: bool, use_spear: bool):
-	_request_draft(use_horse, use_spear)
+func request_draft_from_mock(use_horse: bool, use_spear: bool, use_bow: bool = false):
+	_request_draft(use_horse, use_spear, use_bow)
 
-func _request_draft(use_horse: bool, use_spear: bool):
-	rpc_id(1, "request_draft_army", use_horse, use_spear)
+func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool):
+	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow)
 
 @rpc("any_peer", "reliable")
 func _server_set_all_armies_aggressive():
@@ -744,7 +877,7 @@ func _server_mock_stuck_update(delta: float):
 			print("TEST_MOCK_IDLE_SEEK_REFRESH: server army=%s blob=(%.0f,%.0f)" % [aid, blob.x, blob.y])
 
 @rpc("any_peer", "reliable")
-func request_draft_army(use_horse: bool, use_spear: bool):
+func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false):
 	if not multiplayer.is_server() or game_over:
 		return
 	var sender_id = multiplayer.get_remote_sender_id()
@@ -753,15 +886,24 @@ func request_draft_army(use_horse: bool, use_spear: bool):
 	if sender_id not in GameState.players:
 		return
 	if not GameState.resources.has(sender_id):
-		GameState.resources[sender_id] = {"horses": 0, "spears": 0}
+		GameState.resources[sender_id] = GameState.default_resources()
 	var res = GameState.resources[sender_id]
+	var need_villagers := DRAFT_COST_PER_EQUIPMENT
 	var need_horses = DRAFT_COST_PER_EQUIPMENT if use_horse else 0
 	var need_spears = DRAFT_COST_PER_EQUIPMENT if use_spear else 0
-	if res["horses"] < need_horses or res["spears"] < need_spears:
-		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need %d horses, %d spears)" % [sender_id, need_horses, need_spears])
+	var need_bows = DRAFT_COST_PER_EQUIPMENT if use_bow else 0
+	if res.get("villagers", 0) < need_villagers \
+			or res.get("horses", 0) < need_horses \
+			or res.get("spears", 0) < need_spears \
+			or res.get("bows", 0) < need_bows:
+		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need vill=%d horse=%d spear=%d bow=%d)" % [
+			sender_id, need_villagers, need_horses, need_spears, need_bows
+		])
 		return
+	res["villagers"] -= need_villagers
 	res["horses"] -= need_horses
 	res["spears"] -= need_spears
+	res["bows"] -= need_bows
 	var pid = sender_id
 	var pname = GameState.players[pid]["name"]
 	var idx = army_index_per_player.get(pid, 3)
@@ -787,7 +929,7 @@ func request_draft_army(use_horse: bool, use_spear: bool):
 		spawn_pos = SOUTH_SPAWN
 		stop_pos = Vector2(SOUTH_SPAWN.x, SOUTH_STOP_Y)
 		dir = -PI / 2.0
-	var equipment = {"horse": use_horse, "spear": use_spear}
+	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
 	army.move_army(stop_pos)
@@ -797,7 +939,7 @@ func request_draft_army(use_horse: bool, use_spear: bool):
 	rpc("_client_spawn_drafted_army", data)
 	rpc("_client_move_army", aid, stop_pos)
 	_sync_capture_state()
-	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s)" % [aid, use_horse, use_spear])
+	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s)" % [aid, use_horse, use_spear, use_bow])
 
 @rpc("any_peer", "reliable")
 func _server_rotate_army(aid: String, delta_angle: float):
@@ -868,7 +1010,7 @@ func _set_player_sides():
 		var corner := str(start.get("corner", ""))
 		player_side[pid] = corner_to_side.get(corner, "west" if i % 2 == 0 else "east")
 	for pid in player_ids:
-		army_index_per_player[pid] = ARMIES_PER_PLAYER + 1
+		army_index_per_player[pid] = MapConfig.max_armies_per_player() + 1
 
 func _team_collision_layer_for_peer(peer_id: int) -> int:
 	var slot := 0
@@ -925,53 +1067,63 @@ func _spawn_armies():
 			var equipment = {
 				"horse": ac.get("horse", false),
 				"spear": ac.get("spear", false),
+				"bow": ac.get("bow", false),
 			}
 			var army = _create_army(army_id, pid, pname, pos, dir, equipment)
 			armies.append(army)
-	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), ARMIES_PER_PLAYER, UNITS_PER_ARMY])
+	var armies_per_player := MapConfig.max_armies_per_player()
+	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), armies_per_player, UNITS_PER_ARMY])
 	_match_started = true
 	_match_elapsed = 0.0
 	for a in armies:
 		var axz = Vector2(a.global_position.x, a.global_position.z)
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name])
 	rpc("_client_spawn_armies", _serialize_armies())
-	_spawn_map_dragon()
+	_spawn_map_dragons()
 
-func _spawn_map_dragon() -> void:
+func _spawn_map_dragons() -> void:
 	if not multiplayer.is_server():
 		return
-	var cfg: Dictionary = MapConfig.neutral_dragon
-	if cfg.is_empty():
+	var cfgs: Array = MapConfig.get_neutral_dragons()
+	if cfgs.is_empty():
 		return
-	var pos := Vector2(float(cfg.get("x", MapConfig.width * 0.5)), float(cfg.get("y", MapConfig.height * 0.5)))
-	var color := str(cfg.get("color", "red"))
-	var unit := _make_dragon_unit_3d()
-	unit.set_script(_Unit3D)
-	unit.name = "MapDragon"
-	unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
-	unit.owner_name = "Dragon"
-	unit.army_id = "neutral_dragon"
-	unit.apply_dragon(color)
-	var uy: float = get_ground_height_at(pos.x, pos.y) + UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
-	unit.position = Vector3(pos.x, uy, pos.y)
-	if unit.has_method("initialize_goal_at_current"):
-		unit.initialize_goal_at_current()
-	add_child(unit)
-	all_units.append(unit)
-	_map_dragon = unit
-	print("TEST_MAP_DRAGON_SPAWN: dragon at (%d,%d) aggro=%.0f attack=%.0f" % [
-		int(pos.x), int(pos.y), UNIT_SPRITE_PATHS.dragon_aggro_radius(), unit.attack_range
-	])
-	rpc("_client_spawn_dragon", {
-		"x": pos.x,
-		"y": pos.y,
-		"color": color,
-		"hp": unit.hp,
-		"speed": unit.speed,
-		"attack": unit.attack,
-		"attack_range": unit.attack_range,
-		"half_height": unit.half_height,
-	})
+	var dragon_data: Array = []
+	for i in range(cfgs.size()):
+		var cfg: Dictionary = cfgs[i]
+		if cfg.is_empty():
+			continue
+		var pos := Vector2(float(cfg.get("x", MapConfig.width * 0.5)), float(cfg.get("y", MapConfig.height * 0.5)))
+		var color := str(cfg.get("color", "red"))
+		var unit := _make_dragon_unit_3d()
+		unit.set_script(_Unit3D)
+		unit.name = "MapDragon_%d" % i
+		unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
+		unit.owner_name = "Dragon"
+		unit.army_id = "neutral_dragon_%d" % i
+		unit.apply_dragon(color)
+		var uy: float = get_ground_height_at(pos.x, pos.y) + UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
+		unit.position = Vector3(pos.x, uy, pos.y)
+		if unit.has_method("initialize_goal_at_current"):
+			unit.initialize_goal_at_current()
+		add_child(unit)
+		all_units.append(unit)
+		_map_dragons.append(unit)
+		print("TEST_MAP_DRAGON_SPAWN: dragon %d at (%d,%d) aggro=%.0f attack=%.0f" % [
+			i, int(pos.x), int(pos.y), UNIT_SPRITE_PATHS.dragon_aggro_radius(), unit.attack_range
+		])
+		dragon_data.append({
+			"index": i,
+			"x": pos.x,
+			"y": pos.y,
+			"color": color,
+			"hp": unit.hp,
+			"speed": unit.speed,
+			"attack": unit.attack,
+			"attack_range": unit.attack_range,
+			"half_height": unit.half_height,
+		})
+	if not dragon_data.is_empty():
+		rpc("_client_spawn_dragons", dragon_data)
 
 func _make_dragon_unit_3d() -> CharacterBody3D:
 	var unit := CharacterBody3D.new()
@@ -990,18 +1142,24 @@ func _unit_half_height(unit: Node) -> float:
 	return UNIT_HALF_HEIGHT
 
 func _update_map_dragon_ai(delta: float) -> void:
-	if _map_dragon == null or not is_instance_valid(_map_dragon) or _map_dragon.is_dead:
+	if _map_dragons.is_empty():
 		return
 	_dragon_ai_timer += delta
 	if _dragon_ai_timer < DRAGON_AI_TICK:
 		return
 	_dragon_ai_timer = 0.0
-	var center := Vector2(_map_dragon.global_position.x, _map_dragon.global_position.z)
+	for dragon in _map_dragons:
+		if dragon == null or not is_instance_valid(dragon) or dragon.is_dead:
+			continue
+		_update_one_map_dragon_ai(dragon)
+
+func _update_one_map_dragon_ai(dragon: CharacterBody3D) -> void:
+	var center := Vector2(dragon.global_position.x, dragon.global_position.z)
 	var aggro := UNIT_SPRITE_PATHS.dragon_aggro_radius()
 	var best: CharacterBody3D = null
 	var best_dist := aggro + 1.0
 	for u in get_units_in_radius(center, aggro):
-		if u == _map_dragon or u.get("is_dead"):
+		if u == dragon or u.get("is_dead"):
 			continue
 		if UNIT_SPRITE_PATHS.is_neutral_owner(int(u.get("owner_peer_id"))):
 			continue
@@ -1011,15 +1169,18 @@ func _update_map_dragon_ai(delta: float) -> void:
 			best_dist = dist
 			best = u
 	if best == null:
-		_map_dragon.is_moving = false
+		dragon.is_moving = false
+		if dragon.has_method("initialize_goal_at_current"):
+			dragon.initialize_goal_at_current()
 		return
 	var target_xz := Vector2(best.global_position.x, best.global_position.z)
-	if _map_dragon.has_method("set_move_target"):
-		_map_dragon.set_move_target(target_xz)
+	if dragon.has_method("set_move_target"):
+		dragon.set_move_target(target_xz)
 
 func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node3D:
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
+	var use_bow: bool = equipment.get("bow", false)
 	var army = Node3D.new()
 	army.set_script(preload("res://Army3D.gd"))
 	army.army_id = aid
@@ -1043,7 +1204,7 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 		unit.owner_peer_id = pid
 		unit.owner_name = pname
 		unit.army_id = aid
-		unit.apply_equipment(use_horse, use_spear)
+		unit.apply_equipment(use_horse, use_spear, use_bow)
 		unit.position = Vector3(fpos.x, uy, fpos.y)
 		unit.unit_died.connect(army.on_soldier_died)
 		add_child(unit)
@@ -1066,6 +1227,7 @@ func _serialize_armies() -> Array:
 		var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
 		var use_horse: bool = s0.has_horse if s0 else false
 		var use_spear: bool = s0.has_spear if s0 else false
+		var use_bow: bool = s0.has_bow if s0 else false
 		data.append({
 			"army_id": army.army_id,
 			"pid": army.owner_peer_id,
@@ -1076,6 +1238,7 @@ func _serialize_armies() -> Array:
 			"initial_count": army.initial_count,
 			"spear": use_spear,
 			"horse": use_horse,
+			"bow": use_bow,
 			"soldiers": soldier_data,
 			"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
 			"attack": s0.attack if s0 else 10.0,
@@ -1117,7 +1280,12 @@ func _sync_capture_state():
 		var owner_name := "---"
 		if c["owner_pid"] != 0 and GameState.players.has(c["owner_pid"]):
 			owner_name = GameState.players[c["owner_pid"]]["name"]
-		cp_data.append({"id": c["id"], "owner_pid": c["owner_pid"], "owner_name": owner_name})
+		cp_data.append({
+			"id": c["id"],
+			"type": c["type"],
+			"owner_pid": c["owner_pid"],
+			"owner_name": owner_name,
+		})
 	var res_data := {}
 	for pid in GameState.resources.keys():
 		res_data[pid] = GameState.resources[pid]
@@ -1135,6 +1303,7 @@ func _serialize_one_army(army) -> Dictionary:
 	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
 	var use_horse: bool = s0.has_horse if s0 else false
 	var use_spear: bool = s0.has_spear if s0 else false
+	var use_bow: bool = s0.has_bow if s0 else false
 	return {
 		"army_id": army.army_id,
 		"pid": army.owner_peer_id,
@@ -1145,6 +1314,7 @@ func _serialize_one_army(army) -> Dictionary:
 		"initial_count": army.initial_count,
 		"spear": use_spear,
 		"horse": use_horse,
+		"bow": use_bow,
 		"soldiers": soldier_data,
 		"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
 		"attack": s0.attack if s0 else 10.0,
@@ -1284,9 +1454,12 @@ func _server_capture_and_resources(delta: float):
 			c["resource_timer"] = float(c.get("resource_timer", 0.0)) + delta
 			if c["resource_timer"] >= CP_RESOURCE_INTERVAL:
 				c["resource_timer"] -= CP_RESOURCE_INTERVAL
-				var key = "horses" if c["type"] == "Stables" else "spears"
+				var cp_type: String = str(c["type"])
+				var key: String = CP_RESOURCE_BY_TYPE.get(cp_type, "")
+				if key.is_empty():
+					continue
 				if not GameState.resources.has(c["owner_pid"]):
-					GameState.resources[c["owner_pid"]] = {"horses": 0, "spears": 0}
+					GameState.resources[c["owner_pid"]] = GameState.default_resources()
 				GameState.resources[c["owner_pid"]][key] += 1
 				var total = GameState.resources[c["owner_pid"]][key]
 				print("TEST_RESOURCE: %s '%s' produced 1 %s for pid=%d (total=%d)" % [c["type"], c["id"], key, c["owner_pid"], total])
@@ -1400,11 +1573,15 @@ func _sync_unit_positions():
 		if u and is_instance_valid(u):
 			if not u.is_dead:
 				var here = u.global_position
-				var mt: Vector2 = u.move_target
+				var mt: Vector2
+				if u.is_moving:
+					mt = u.move_target
+				else:
+					mt = Vector2(here.x, here.z)
 				pos_data.append({
 					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
 					"tx": mt.x, "ty": mt.y,
-					"at": u.attack_timer,
+					"ic": u.in_combat,
 					"moving": u.is_moving,
 				})
 			else:
@@ -1824,6 +2001,7 @@ func _client_spawn_armies_impl(data: Array):
 	for ad in data:
 		var use_horse: bool = ad.get("horse", false)
 		var use_spear: bool = ad.get("spear", false)
+		var use_bow: bool = ad.get("bow", false)
 		var army = Node3D.new()
 		army.set_script(preload("res://Army3D.gd"))
 		add_child(army)
@@ -1845,7 +2023,7 @@ func _client_spawn_armies_impl(data: Array):
 			unit.owner_name = ad["name"]
 			unit.army_id = ad["army_id"]
 			if unit.has_method("apply_equipment"):
-				unit.apply_equipment(use_horse, use_spear)
+				unit.apply_equipment(use_horse, use_spear, use_bow)
 			if ad.has("speed"):
 				unit.speed = float(ad["speed"])
 				unit.attack = float(ad.get("attack", unit.attack))
@@ -1879,15 +2057,23 @@ func _client_spawn_armies_impl(data: Array):
 	_schedule_visibility_checks()
 
 @rpc("authority", "reliable")
-func _client_spawn_dragon(data: Dictionary) -> void:
-	if _map_dragon != null and is_instance_valid(_map_dragon):
-		return
+func _client_spawn_dragons(data: Array) -> void:
+	for entry in data:
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		_client_spawn_one_dragon(entry)
+
+func _client_spawn_one_dragon(data: Dictionary) -> void:
+	var index := int(data.get("index", _map_dragons.size()))
+	for existing in _map_dragons:
+		if existing != null and is_instance_valid(existing) and existing.name == "MapDragon_%d" % index:
+			return
 	var unit := _make_dragon_unit_3d()
 	unit.set_script(_Unit3D)
-	unit.name = "MapDragon"
+	unit.name = "MapDragon_%d" % index
 	unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
 	unit.owner_name = "Dragon"
-	unit.army_id = "neutral_dragon"
+	unit.army_id = "neutral_dragon_%d" % index
 	var color := str(data.get("color", "red"))
 	unit.apply_dragon(color)
 	unit.hp = float(data.get("hp", unit.hp))
@@ -1908,8 +2094,8 @@ func _client_spawn_dragon(data: Dictionary) -> void:
 	if unit.has_method("refresh_visuals"):
 		unit.refresh_visuals()
 	all_units.append(unit)
-	_map_dragon = unit
-	print("TEST_MAP_DRAGON_SPAWN: client dragon at (%d,%d)" % [int(px), int(pz)])
+	_map_dragons.append(unit)
+	print("TEST_MAP_DRAGON_SPAWN: client dragon %d at (%d,%d)" % [index, int(px), int(pz)])
 	call_deferred("_validate_units_height")
 
 func _load_image_texture(path: String) -> Texture2D:
@@ -1924,10 +2110,15 @@ func _load_image_texture(path: String) -> Texture2D:
 	return null
 
 func _capture_point_texture(cp_type: String) -> Texture2D:
-	var path := CP_STABLES_TEXTURE_PATH
-	if cp_type == "Blacksmith":
-		path = CP_BLACKSMITH_TEXTURE_PATH
-	return _load_image_texture(path)
+	match cp_type:
+		"Blacksmith":
+			return _load_image_texture(CP_BLACKSMITH_TEXTURE_PATH)
+		"Village":
+			return _load_image_texture(CP_VILLAGE_TEXTURE_PATH)
+		"Archery":
+			return _load_image_texture(CP_ARCHERY_TEXTURE_PATH)
+		_:
+			return _load_image_texture(CP_STABLES_TEXTURE_PATH)
 
 func _capture_point_modulate(owner_pid: int) -> Color:
 	if owner_pid != 0 and owner_pid in GameState.players:
@@ -1991,25 +2182,32 @@ func _client_update_capture(cp_data: Array, res_data: Dictionary):
 		GameState.resources[int(pid_str)] = res_data[pid_str]
 	_update_topbar_local(cp_data, res_data)
 
+func _count_owned_cps_by_type(cp_data: Array, owner_pid: int) -> Dictionary:
+	var counts := {"Stables": 0, "Blacksmith": 0, "Village": 0, "Archery": 0}
+	for d in cp_data:
+		if d.get("owner_pid", 0) != owner_pid:
+			continue
+		var cp_type: String = str(d.get("type", d.get("id", "")))
+		if counts.has(cp_type):
+			counts[cp_type] += 1
+	return counts
+
 func _update_topbar_local(cp_data: Array, res_data):
 	if top_bar == null:
 		return
 	var my_pid = multiplayer.get_unique_id()
-	var stables_count := 0
-	var blacksmith_count := 0
+	var cp_counts := _count_owned_cps_by_type(cp_data, my_pid)
 	var my_horses := 0
 	var my_spears := 0
-	for d in cp_data:
-		if d.get("owner_pid", 0) == my_pid:
-			if d["id"] == "Stables":
-				stables_count += 1
-			elif d["id"] == "Blacksmith":
-				blacksmith_count += 1
+	var my_bows := 0
+	var my_villagers := 0
 	if res_data is Dictionary:
 		var res = res_data.get(my_pid, res_data.get(str(my_pid), null))
 		if res is Dictionary:
 			my_horses = res.get("horses", 0)
 			my_spears = res.get("spears", 0)
+			my_bows = res.get("bows", 0)
+			my_villagers = res.get("villagers", 0)
 	var player_name = GameState.local_player_name
 	if player_name == "":
 		player_name = "Unknown Player"
@@ -2018,7 +2216,18 @@ func _update_topbar_local(cp_data: Array, res_data):
 		var ci = GameState.players[my_pid]["color_index"]
 		if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
 			player_color = GameState.PLAYER_COLORS[ci]
-	top_bar.update_display(stables_count, blacksmith_count, my_horses, my_spears, player_name, player_color)
+	top_bar.update_display(
+		cp_counts["Stables"],
+		cp_counts["Blacksmith"],
+		cp_counts["Village"],
+		cp_counts["Archery"],
+		my_horses,
+		my_spears,
+		my_bows,
+		my_villagers,
+		player_name,
+		player_color,
+	)
 
 @rpc("authority", "reliable")
 func _client_move_army(aid: String, target: Vector2):
@@ -2037,6 +2246,9 @@ func _client_rotate_army(aid: String, new_dir: float):
 @rpc("authority", "reliable")
 func _client_spawn_drafted_army(army_data: Dictionary):
 	var ad = army_data
+	var use_horse: bool = ad.get("horse", false)
+	var use_spear: bool = ad.get("spear", false)
+	var use_bow: bool = ad.get("bow", false)
 	var army = Node3D.new()
 	army.set_script(preload("res://Army3D.gd"))
 	add_child(army)
@@ -2046,8 +2258,6 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 	army.direction = ad["dir"]
 	army.name = "Army_%s" % ad["army_id"]
 	army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
-	var use_horse: bool = ad.get("horse", false)
-	var use_spear: bool = ad.get("spear", false)
 	army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
 	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
 	army.position = Vector3(ad["x"], gy, ad["y"])
@@ -2060,7 +2270,7 @@ func _client_spawn_drafted_army(army_data: Dictionary):
 		unit.owner_name = ad["name"]
 		unit.army_id = ad["army_id"]
 		if unit.has_method("apply_equipment"):
-			unit.apply_equipment(use_horse, use_spear)
+			unit.apply_equipment(use_horse, use_spear, use_bow)
 		if ad.has("speed"):
 			unit.speed = float(ad["speed"])
 			unit.attack = float(ad.get("attack", unit.attack))
@@ -2125,7 +2335,7 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 					here,
 					there,
 					float(pd.get("hp", node.get("hp"))),
-					float(pd.get("at", 0.0)),
+					bool(pd.get("ic", false)),
 					CORRECTION_THRESHOLD,
 				)
 			else:
@@ -2136,8 +2346,8 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 				if "sync_target_hp" in node:
 					node.set("sync_target_hp", pd["hp"])
 					node.set("hp", pd["hp"])
-				if "sync_attack_timer" in node:
-					node.set("sync_attack_timer", pd.get("at", 0.0))
+				if "sync_in_combat" in node:
+					node.set("sync_in_combat", bool(pd.get("ic", false)))
 	for dn in dead_names:
 		var dead_node = get_node_or_null(NodePath(str(dn)))
 		if dead_node and dead_node.has_method("is_in_death_sequence") and dead_node.is_in_death_sequence():

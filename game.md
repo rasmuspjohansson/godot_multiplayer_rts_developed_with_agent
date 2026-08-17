@@ -19,17 +19,28 @@
 - For 2 players: first connected = **West** (left), second = **East** (right). Drafted armies spawn from the player's side and walk in until fully visible (stop_when_visible).
 
 ## Army System (Total War Style)
-- Each player starts with **2 armies** (no equipment).
+- On map **S**, each player starts with **2 armies** (spear + horse). On **L** and **XL**, each player starts with **1 club army** (no equipment).
 - Each army has **10 soldiers** arranged in a **2-row x 5-column** formation.
 - An army has a **center position** and a **facing direction** (angle in radians).
 - Soldier positions are calculated from the army center + grid offset rotated by facing angle.
 - When soldiers die, surviving soldiers **repack** to fill gaps (grid shrinks).
 
 ## Drafting
-- **Draft menu**: Lower-left of screen. Checkboxes **Horse** and **Spear**, button **Create army**.
-- **Cost**: 10 horses if Horse checked, 10 spears if Spear checked (both = 10 of each). Player must have enough resources.
+- **Draft menu**: Lower-left of screen. Checkboxes **Horse**, **Spear**, and **Bow**, button **Create army**.
+- **Cost**: **10 villagers** for every army, plus **10** of each checked equipment type (horse / spear / bow). Player must have enough resources.
 - **Created army**: 10 soldiers, spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
-- **Equipment effects**: Horse → speed 67 → 140. Spear → attack 10 → 13, range 50 → 65. Both = both bonuses. Starting armies have no equipment.
+- **Unit types** (equipment priority): Horse+Bow → **bauer_horse_archer**; Bow → **bowman**; Horse → **knight**; Spear → **spearman**; none → **clubman**.
+- **Equipment effects**: Horse → mounted speed/HP. Spear → higher attack/melee range. Bow / bauer_horse_archer → ranged attack. Starting armies on map S use spear/horse from JSON; L/XL start with clubmen.
+
+## Capture Points & Resources
+- Map **S**: 1 Stables, 1 Blacksmith, 1 Village (3 CPs total). Map **L**: 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries (9 CPs). Map **XL**: 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries (11 CPs), plus **2 neutral dragons**.
+- Capture points start **unowned**.
+- A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
+- Once captured, each type produces **1** resource every **2 seconds**: **Stables** → horses, **Blacksmith** → spears, **Village** → villagers, **Archery** → bows.
+- Capture points can be **taken over** by the opposing player using the same proximity rule.
+- Each player starts with **10 horses, 10 spears, 10 bows, and 10 villagers** in inventory (`GameState.resources`).
+- Resources are displayed in the top-bar HUD (CP counts + inventory).
+- **Seek enemy**: If an army has been at a capture point for **5 seconds** with **no combat** occurring anywhere, the server orders that army to seek and continuously follow the **closest enemy army** (move target is updated every tick so the army follows when the enemy moves). A manual move order (right-click) cancels follow.
 
 ## Physics / collision
 - Units have a `CollisionShape3D` box (14×22×14) on each `CharacterBody3D`. **Enemy teams block each other** during movement; **friendlies pass through** (same collision layer).
@@ -49,22 +60,13 @@
 | Defense | 2     |
 | Range   | 50.0  |
 
-## Capture Points & Resources
-- The map has **2 capture points**: one **Stables** and one **Blacksmith**.
-- Capture points start **unowned**.
-- A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
-- Once captured: **Stables** produces **horses** (inventory resource), **Blacksmith** produces **spears** (inventory resource), each **1** every **2 seconds**.
-- Capture points can be **taken over** by the opposing player using the same proximity rule.
-- Resources (horses, spears) are tracked per player in `GameState` and displayed in the top-bar HUD.
-- **Seek enemy**: If an army has been at a capture point for **5 seconds** with **no combat** occurring anywhere, the server orders that army to seek and continuously follow the **closest enemy army** (move target is updated every tick so the army follows when the enemy moves). A manual move order (right-click) cancels follow.
-
 ## Lobby
 - **Name input field**: Player can enter display name. Pre-filled from `--name=<value>` if provided, otherwise **Unknown Player**. Name is sent to the server when pressing Ready (duplicate names are allowed; army identity uses peer id).
 - **Color picker**: Players choose one of 5 colors by clicking a colored box. First player gets the first color preselected; each new player gets the first not-already-used color. Taken colors are greyed out; players can change to any free color. Units in the game use the chosen color.
 
 ## Top Bar HUD
 - A `CanvasLayer` UI bar at the top of the screen during gameplay.
-- **Left**: `Stables: <N>  Blacksmith: <N>  Horses: <N>  Spears: <N>` (capture point counts owned by the player, then horses/spears in inventory).
+- **Left**: `Stab/Blk/Vill/Arch` CP counts owned, then `H/S/B/V` inventory (horses, spears, bows, villagers).
 - **Right**: `Player: <display name>`.
 - Updated every sync tick from the server.
 

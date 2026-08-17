@@ -8,6 +8,13 @@ const PLAYER_COLORS: Array = [
 	Color.PURPLE
 ]
 
+const STARTING_RESOURCES := {
+	"horses": 10,
+	"spears": 10,
+	"bows": 10,
+	"villagers": 10,
+}
+
 var players := {}
 var local_player_name := ""
 var is_auto_test := false
@@ -16,12 +23,15 @@ var resources := {}
 var capture_points := {}
 var last_combat_time: float = -999.0
 
+static func default_resources() -> Dictionary:
+	return STARTING_RESOURCES.duplicate()
+
 func reset_match_state():
 	resources.clear()
 	capture_points.clear()
 	last_combat_time = -999.0
 	for pid in players.keys():
-		resources[pid] = {"horses": 0, "spears": 0}
+		resources[pid] = default_resources()
 
 #region agent log
 const _AGENT_DEBUG_LOG := "/home/rasmus/projects/godot/.cursor/debug-7aa3b9.log"
