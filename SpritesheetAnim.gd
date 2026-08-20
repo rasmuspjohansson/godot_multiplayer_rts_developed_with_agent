@@ -16,6 +16,7 @@ var _accum: float = 0.0
 var _finished: bool = false
 var _char_height_cache: Dictionary = {}
 var _feet_y_cache: Dictionary = {}
+var _max_char_height_px: int = -1
 
 static func load_from_folder(folder_path: String):
 	if _cache.has(folder_path):
@@ -96,6 +97,19 @@ func get_character_height_px(frame_index: int = -1) -> int:
 	var height: int = _frame_h if bounds.y < 0 else int(bounds.w)
 	_char_height_cache[frame_index] = height
 	return height
+
+func get_max_character_height_px() -> int:
+	if _sheet_image == null:
+		return _frame_h
+	if _max_char_height_px >= 0:
+		return _max_char_height_px
+	var max_h := 0
+	for i in range(_frame_count):
+		max_h = maxi(max_h, get_character_height_px(i))
+	if max_h <= 0:
+		max_h = _frame_h
+	_max_char_height_px = max_h
+	return _max_char_height_px
 
 func get_feet_y_px(frame_index: int = -1) -> int:
 	if _sheet_image == null:

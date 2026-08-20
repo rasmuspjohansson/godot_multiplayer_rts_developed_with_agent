@@ -144,8 +144,17 @@ var _current_art_faces_right := false
 var _anim_state: AnimState = AnimState.IDLE
 var _dying := false
 var _death_free_scheduled := false
-## Feet row from idle/walk frame 0; die keeps this anchor so the unit does not slide when pose changes.
+## Feet row from idle/walk frame 0; fight/die use clip-specific anchors so poses don't lift.
 var _anchor_feet_y_px: int = 0
+var _anchor_fight_feet_y_px: int = 0
+var _anchor_die_feet_y_px: int = 0
+## Per-clip display scale from sheet max character height vs walk reference (constant for whole clip).
+var _scale_walk: float = 1.0
+var _scale_fight: float = 1.0
+var _scale_idle: float = 1.0
+var _scale_die: float = 1.0
+const CLIP_DISPLAY_SCALE_MIN := 0.25
+const CLIP_DISPLAY_SCALE_MAX := 4.0
 var _goal_settled := false
 var _settled_goal: Vector3 = Vector3.ZERO
 
@@ -232,6 +241,12 @@ func _clear_visual_mesh() -> void:
 	_current_art_faces_right = false
 	_anim_state = AnimState.IDLE
 	_anchor_feet_y_px = 0
+	_anchor_fight_feet_y_px = 0
+	_anchor_die_feet_y_px = 0
+	_scale_walk = 1.0
+	_scale_fight = 1.0
+	_scale_idle = 1.0
+	_scale_die = 1.0
 	_goal_settled = false
 	_settled_goal = Vector3.ZERO
 	set_process(false)
@@ -241,7 +256,8 @@ func _build_visual_mesh():
 	if _try_load_spritesheets():
 		_texture_loaded = true
 		_uses_spritesheets = true
-		var px_size := _sprite_pixel_size()
+		_compute_clip_display_scales()
+		var px_size := _scaled_sprite_pixel_size(AnimState.IDLE)
 		_sprite = Sprite3D.new()
 		_sprite.texture = _idle_frame_texture()
 		_current_art_faces_right = _unit_art_faces_right()
@@ -254,6 +270,14 @@ func _build_visual_mesh():
 		elif _anim_walking != null:
 			idle_feet = _anim_walking.get_feet_y_px(0)
 		_anchor_feet_y_px = idle_feet
+		if _anim_fight != null:
+			_anchor_fight_feet_y_px = _anim_fight.get_feet_y_px(0)
+		else:
+			_anchor_fight_feet_y_px = idle_feet
+		if _anim_die != null:
+			_anchor_die_feet_y_px = _anim_die.get_feet_y_px(0)
+		else:
+			_anchor_die_feet_y_px = idle_feet
 		_update_sprite_feet_offset(idle_feet, px_size)
 		_audio_player = AudioStreamPlayer3D.new()
 		_audio_player.name = "SpriteAudio"
@@ -300,6 +324,43 @@ func _build_visual_mesh():
 
 func _sprite_pixel_size() -> float:
 	return world_sprite_height() / SPRITE_FRAME_PX
+
+func _clip_display_scale(anim, ref_h: int) -> float:
+	if anim == null or ref_h <= 0:
+		return 1.0
+	var sheet_max_h: int = anim.get_max_character_height_px()
+	if sheet_max_h <= 0:
+		return 1.0
+	return clampf(float(ref_h) / float(sheet_max_h), CLIP_DISPLAY_SCALE_MIN, CLIP_DISPLAY_SCALE_MAX)
+
+func _reference_character_height_px() -> int:
+	if _anim_walking != null:
+		return _anim_walking.get_max_character_height_px()
+	if _anim_idle != null:
+		return _anim_idle.get_max_character_height_px()
+	return int(SPRITE_FRAME_PX)
+
+func _compute_clip_display_scales() -> void:
+	var ref_h := _reference_character_height_px()
+	_scale_walk = _clip_display_scale(_anim_walking, ref_h)
+	_scale_fight = _clip_display_scale(_anim_fight, ref_h)
+	_scale_idle = _clip_display_scale(_anim_idle, ref_h)
+	_scale_die = _clip_display_scale(_anim_die, ref_h)
+
+func _scale_for_state(state: AnimState) -> float:
+	match state:
+		AnimState.WALKING:
+			return _scale_walk
+		AnimState.FIGHT:
+			return _scale_fight
+		AnimState.IDLE:
+			return _scale_idle
+		AnimState.DIE:
+			return _scale_die
+	return 1.0
+
+func _scaled_sprite_pixel_size(state: AnimState) -> float:
+	return _sprite_pixel_size() * _scale_for_state(state)
 
 func _update_sprite_feet_offset(feet_y_px: int, pixel_size: float) -> void:
 	if _sprite == null:
@@ -395,6 +456,7 @@ func begin_death() -> void:
 	is_dead = true
 	velocity = Vector3.ZERO
 	has_move_goal = false
+	_apply_ground_height()
 	if _audio_player != null:
 		_audio_player.stop()
 	if _uses_spritesheets and _anim_die != null:
@@ -509,7 +571,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 		AnimState.DIE:
 			if _anim_die != null:
 				tex = _anim_die.advance(delta, false, SPRITE_ANIM_SPEED)
-				feet_y_px = _anchor_feet_y_px if _anchor_feet_y_px > 0 else int(SPRITE_FRAME_PX) - 1
+				feet_y_px = _anchor_die_feet_y_px if _anchor_die_feet_y_px > 0 else int(SPRITE_FRAME_PX) - 1
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -517,7 +579,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 		AnimState.FIGHT:
 			if _anim_fight != null:
 				tex = _fight_advance(delta)
-				feet_y_px = _anim_fight.get_feet_y_px()
+				feet_y_px = _anchor_fight_feet_y_px if _anchor_fight_feet_y_px > 0 else _anim_fight.get_feet_y_px(0)
 				faces_right = art_faces_right
 			else:
 				tex = _static_frame_texture()
@@ -539,7 +601,7 @@ func _apply_anim_state(state: AnimState, delta: float) -> void:
 				tex = _static_frame_texture()
 				faces_right = false
 	if tex != null:
-		var px_size := _sprite_pixel_size()
+		var px_size := _scaled_sprite_pixel_size(state)
 		_sprite.texture = tex
 		_sprite.pixel_size = px_size
 		_update_sprite_feet_offset(feet_y_px, px_size)
@@ -598,16 +660,15 @@ func _server_process(delta: float):
 		var cur := Vector2(global_position.x, global_position.z)
 		var dist := cur.distance_to(move_target)
 		if dist <= GOAL_ARRIVAL_DIST:
-			var gy := _ground_y_at(move_target.x, move_target.y)
-			global_position = Vector3(move_target.x, gy + half_height, move_target.y)
+			global_position.x = move_target.x
+			global_position.z = move_target.y
 			velocity = Vector3.ZERO
 			is_moving = false
 		else:
 			var dir_xz := (move_target - cur).normalized()
 			velocity = Vector3(dir_xz.x * speed, 0.0, dir_xz.y * speed)
 			move_and_slide()
-			var gy2 := _ground_y_at(global_position.x, global_position.z)
-			global_position.y = gy2 + half_height
+	_apply_ground_height()
 
 	if global_position.x < -MAP_MARGIN or global_position.x > MapConfig.width + MAP_MARGIN \
 			or global_position.z < -MAP_MARGIN or global_position.z > MapConfig.height + MAP_MARGIN:
@@ -676,6 +737,7 @@ func _try_attack():
 func _client_physics(delta: float):
 	if _dying:
 		velocity = Vector3.ZERO
+		_apply_ground_height()
 		_update_visual_tint()
 		_update_facing()
 		return
@@ -690,18 +752,15 @@ func _client_physics(delta: float):
 			velocity = dir * speed
 		else:
 			velocity = Vector3.ZERO
-			var gy := _ground_y_at(sync_target_position.x, sync_target_position.z)
-			global_position = Vector3(
-				sync_target_position.x, gy + half_height, sync_target_position.z
-			)
+			global_position.x = sync_target_position.x
+			global_position.z = sync_target_position.z
 		_refresh_move_goal_state()
 		move_and_slide()
-		_stick_to_terrain()
 		hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
 	else:
 		velocity = Vector3.ZERO
 		move_and_slide()
-		_stick_to_terrain()
+	_apply_ground_height()
 	_update_visual_tint()
 	if not _uses_spritesheets:
 		_update_facing()
@@ -807,11 +866,10 @@ func _update_visual_tint():
 	else:
 		_material.albedo_color = Color.WHITE
 
-func _stick_to_terrain():
-	var world = get_parent()
-	if world != null and world.has_method("get_ground_height_at"):
-		var ground_y = world.get_ground_height_at(global_position.x, global_position.z)
-		if global_position.y < ground_y and not _logged_height_invalid:
-			_logged_height_invalid = true
-			print("TEST_3D_UNIT_HEIGHT_INVALID: %s unit_was_below_ground" % name)
-		global_position.y = ground_y + half_height
+func _apply_ground_height() -> void:
+	var ground_y := _ground_y_at(global_position.x, global_position.z)
+	if global_position.y < ground_y - 0.01 and not _logged_height_invalid:
+		_logged_height_invalid = true
+		print("TEST_3D_UNIT_HEIGHT_INVALID: %s unit_was_below_ground" % name)
+	global_position.y = ground_y + half_height
+	velocity.y = 0.0

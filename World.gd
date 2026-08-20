@@ -1035,6 +1035,7 @@ func _configure_unit_collision(unit: CharacterBody3D, peer_id: int) -> void:
 
 func _make_server_unit_3d(peer_id: int) -> CharacterBody3D:
 	var unit = CharacterBody3D.new()
+	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	_configure_unit_collision(unit, peer_id)
 	var box = BoxShape3D.new()
 	box.size = Vector3(14, 22, 14)
@@ -1127,6 +1128,7 @@ func _spawn_map_dragons() -> void:
 
 func _make_dragon_unit_3d() -> CharacterBody3D:
 	var unit := CharacterBody3D.new()
+	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	unit.collision_layer = NEUTRAL_DRAGON_COLLISION_LAYER
 	unit.collision_mask = 0 if UNIT_PASS_THROUGH else 0
 	var box := BoxShape3D.new()
@@ -1983,6 +1985,7 @@ func _add_play_boundary_line():
 
 func _make_client_unit_3d(peer_id: int) -> CharacterBody3D:
 	var unit = CharacterBody3D.new()
+	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	_configure_unit_collision(unit, peer_id)
 	var box = BoxShape3D.new()
 	box.size = Vector3(14, 22, 14)
