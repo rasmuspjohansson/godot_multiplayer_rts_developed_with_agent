@@ -19,7 +19,7 @@
 - For 2 players: first connected = **West** (left), second = **East** (right). Drafted armies spawn from the player's side and walk in until fully visible (stop_when_visible).
 
 ## Army System (Total War Style)
-- On map **S**, each player starts with **2 armies** (spear + horse). On **L** and **XL**, each player starts with **1 club army** (no equipment).
+- On map **S** and **XL**, each player starts with **2 armies** (spear + horse). On **L**, each player starts with **1 club army** (no equipment).
 - Each army has **10 soldiers** arranged in a **2-row x 5-column** formation.
 - An army has a **center position** and a **facing direction** (angle in radians).
 - Soldier positions are calculated from the army center + grid offset rotated by facing angle.
@@ -30,10 +30,10 @@
 - **Cost**: **10 villagers** for every army, plus **10** of each checked equipment type (horse / spear / bow). Player must have enough resources.
 - **Created army**: 10 soldiers, spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
 - **Unit types** (equipment priority): Horse+Bow → **bauer_horse_archer**; Bow → **bowman**; Horse → **knight**; Spear → **spearman**; none → **clubman**.
-- **Equipment effects**: Horse → mounted speed/HP. Spear → higher attack/melee range. Bow / bauer_horse_archer → ranged attack. Starting armies on map S use spear/horse from JSON; L/XL start with clubmen.
+- **Equipment effects**: Horse → mounted speed/HP. Spear → higher attack/melee range. Bow / bauer_horse_archer → ranged attack. Starting armies on map S and XL use spear/horse from JSON; L starts with clubmen.
 
 ## Capture Points & Resources
-- Map **S**: 1 Stables, 1 Blacksmith, 1 Village (3 CPs total). Map **L**: 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries (9 CPs). Map **XL**: 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries (11 CPs), plus **2 neutral dragons**.
+- Map **S**: 1 Stables, 1 Blacksmith, 1 Village (3 CPs total). Map **L**: 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries (9 CPs). Map **XL**: mountainous (3 large peaks + 1 ridge), 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries (11 CPs), no dragons.
 - Capture points start **unowned**.
 - A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
 - Once captured, each type produces **1** resource every **2 seconds**: **Stables** → horses, **Blacksmith** → spears, **Village** → villagers, **Archery** → bows.

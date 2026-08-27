@@ -52,7 +52,7 @@ Maps are selected at launch with `--map=S|L|XL` (default **S**). [`MapConfig.gd`
 |-----|------|-------------------|----------------|---------|
 | **S** | 1280×720 | 2 (spear + horse) | 1 Stables, 1 Blacksmith, 1 Village | 1 (center) |
 | **L** | 2560×1440 | 1 club army | 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries | none |
-| **XL** | 3840×2160 | 1 club army | 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries | 2 (guarding central CPs) |
+| **XL** | 3840×2160 | 2 (spear + horse) | 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries | none (mountainous) |
 
 ```bash
 ./run_test.sh              # default map S
@@ -82,10 +82,10 @@ The arena is described entirely by the chosen map JSON. This is the single place
 ```
 
 - `size` — play-area width (X) and height (Z in 3D). All camera and movement clamping uses these.
-- `terrain.type` / `terrain.features` — hills use Gaussian bumps; features scale with map size.
+- `terrain.type` / `terrain.features` — hills use radial Gaussian bumps; ridges use a Gaussian spine between two endpoints (`x1/y1` → `x2/y2`, `width`, `height`). Height at any point is the max over all features.
 - `capture_points[]` — capturable objectives; types: `Stables`, `Blacksmith`, `Village`, `Archery`. IDs `Stables` and `Blacksmith` are used by the auto-test on all map sizes.
 - `player_starts[]` — four corner slots (NW/SE/NE/SW). Join order assigns slot 0, 1, … Each slot lists armies with `{x, y, direction}`; optional `horse`/`spear`/`bow` for equipment.
-- `neutral_dragon` (S) or `neutral_dragons[]` (XL) — optional map guardians.
+- `neutral_dragon` (S) or `neutral_dragons[]` (optional on other maps) — optional map guardians.
 
 `MockPlayer` never opens map JSON; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.
 

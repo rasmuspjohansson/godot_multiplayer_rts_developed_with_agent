@@ -4,15 +4,12 @@
   "terrain": {
     "type": "hills",
     "features": [
-      {"type": "hill", "x": 1920.0, "y": 1080.0, "base_width": 900.0, "height": 28.0},
-      {"type": "hill", "x": 1200.0, "y": 1650.0, "base_width": 780.0, "height": 20.0},
-      {"type": "hill", "x": 2700.0, "y": 600.0, "base_width": 720.0, "height": 22.0}
+      {"type": "hill", "x": 1100.0, "y": 950.0, "base_width": 2200.0, "height": 560.0},
+      {"type": "hill", "x": 2900.0, "y": 1550.0, "base_width": 2000.0, "height": 480.0},
+      {"type": "hill", "x": 3000.0, "y": 520.0, "base_width": 1800.0, "height": 420.0},
+      {"type": "ridge", "x1": 500.0, "y1": 1850.0, "x2": 3300.0, "y2": 350.0, "width": 850.0, "height": 320.0}
     ]
   },
-  "neutral_dragons": [
-    {"x": 2342.4, "y": 604.8, "color": "red", "guard_cp": "Stables_2"},
-    {"x": 1920.0, "y": 1080.0, "color": "red", "guard_cp": "Blacksmith_2"}
-  ],
   "capture_points": [
     {"id": "Stables",      "type": "Stables",    "x": 1497.6, "y": 604.8},
     {"id": "Blacksmith",   "type": "Blacksmith", "x": 2342.4, "y": 1490.4},
@@ -28,16 +25,20 @@
   ],
   "player_starts": [
     {"slot": 0, "corner": "NW", "armies": [
-      {"x": 599.04, "y": 1080.0, "direction": 0.0}
+      {"x": 599.04, "y": 540.0, "direction": 0.0, "spear": true},
+      {"x": 599.04, "y": 1620.0, "direction": 0.0, "horse": true}
     ]},
     {"slot": 1, "corner": "SE", "armies": [
-      {"x": 3150.0, "y": 1080.0, "direction": 3.141593}
+      {"x": 3150.0, "y": 1620.0, "direction": 3.141593, "spear": true},
+      {"x": 3150.0, "y": 540.0, "direction": 3.141593, "horse": true}
     ]},
     {"slot": 2, "corner": "NE", "armies": [
-      {"x": 3150.0, "y": 540.0, "direction": 3.141593}
+      {"x": 3150.0, "y": 540.0, "direction": 3.141593, "spear": true},
+      {"x": 3150.0, "y": 1620.0, "direction": 3.141593, "horse": true}
     ]},
     {"slot": 3, "corner": "SW", "armies": [
-      {"x": 599.04, "y": 540.0, "direction": 0.0}
+      {"x": 599.04, "y": 1620.0, "direction": 0.0, "spear": true},
+      {"x": 599.04, "y": 540.0, "direction": 0.0, "horse": true}
     ]}
   ]
 }

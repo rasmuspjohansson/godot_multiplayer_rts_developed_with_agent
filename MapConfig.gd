@@ -28,8 +28,10 @@ var neutral_dragons: Array = []
 ## to generate the ground mesh and collision heightmap. Runtime height queries
 ## must go through World.get_ground_height_at() (physics raycast) so that
 ## future on-ground objects (rocks, walls, buildings) also count.
-## Each entry: {cx, cz, sigma, peak}.
+## Each hill entry: {cx, cz, sigma, peak}.
 var _hills: Array = []
+## Each ridge entry: {x1, z1, x2, z2, sigma, peak}.
+var _ridges: Array = []
 
 func _ready() -> void:
 	_load()
@@ -84,10 +86,10 @@ func _load() -> void:
 	player_starts = parsed.get("player_starts", [])
 	if player_starts.is_empty():
 		_apply_fallback_player_starts()
-	_precompute_hills()
-	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d dragons)" % [
+	_precompute_terrain_features()
+	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d ridges, %d dragons)" % [
 		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
-		get_neutral_dragons().size()
+		_ridges.size(), get_neutral_dragons().size()
 	])
 
 func get_neutral_dragons() -> Array:
@@ -106,25 +108,58 @@ func max_armies_per_player() -> int:
 		max_count = maxi(max_count, armies.size())
 	return max_count
 
-func _precompute_hills() -> void:
+func _precompute_terrain_features() -> void:
 	_hills.clear()
+	_ridges.clear()
 	for f in terrain_features:
 		if typeof(f) != TYPE_DICTIONARY:
 			continue
-		if str(f.get("type", "")) != "hill":
-			continue
-		var bw := float(f.get("base_width", 0.0))
-		var peak := float(f.get("height", 0.0))
-		if bw <= 0.0 or peak == 0.0:
-			continue
-		# base_width is the full footprint diameter (~1% of peak at edge): sigma = base_width / 6.
-		var sigma := bw / 6.0
-		_hills.append({
-			"cx": float(f.get("x", 0.0)),
-			"cz": float(f.get("y", 0.0)),
-			"sigma": sigma,
-			"peak": peak,
-		})
+		var ftype := str(f.get("type", ""))
+		if ftype == "hill":
+			var bw := float(f.get("base_width", 0.0))
+			var peak := float(f.get("height", 0.0))
+			if bw <= 0.0 or peak == 0.0:
+				continue
+			var sigma := bw / 6.0
+			_hills.append({
+				"cx": float(f.get("x", 0.0)),
+				"cz": float(f.get("y", 0.0)),
+				"sigma": sigma,
+				"peak": peak,
+			})
+		elif ftype == "ridge":
+			var width := float(f.get("width", 0.0))
+			var rpeak := float(f.get("height", 0.0))
+			if width <= 0.0 or rpeak == 0.0:
+				continue
+			_ridges.append({
+				"x1": float(f.get("x1", 0.0)),
+				"z1": float(f.get("y1", 0.0)),
+				"x2": float(f.get("x2", 0.0)),
+				"z2": float(f.get("y2", 0.0)),
+				"sigma": width / 6.0,
+				"peak": rpeak,
+			})
+
+func _ridge_height_at(x: float, z: float, ridge: Dictionary) -> float:
+	var ax: float = ridge.x1
+	var az: float = ridge.z1
+	var bx: float = ridge.x2
+	var bz: float = ridge.z2
+	var abx: float = bx - ax
+	var abz: float = bz - az
+	var ab_len_sq: float = abx * abx + abz * abz
+	if ab_len_sq < 0.001:
+		return 0.0
+	var apx: float = x - ax
+	var apz: float = z - az
+	var t: float = clampf((apx * abx + apz * abz) / ab_len_sq, 0.0, 1.0)
+	var cx: float = ax + abx * t
+	var cz: float = az + abz * t
+	var dx: float = x - cx
+	var dz: float = z - cz
+	var s: float = ridge.sigma
+	return ridge.peak * exp(-(dx * dx + dz * dz) / (2.0 * s * s))
 
 ## Analytical max-of-Gaussians ground elevation at (x, z). Used ONLY at terrain
 ## build time (World._build_terrain) to produce mesh vertices and the collision
@@ -139,6 +174,10 @@ func sample_height(x: float, z: float) -> float:
 		var v: float = hill.peak * exp(-(dx * dx + dz * dz) / (2.0 * s * s))
 		if v > h:
 			h = v
+	for ridge in _ridges:
+		var rv: float = _ridge_height_at(x, z, ridge)
+		if rv > h:
+			h = rv
 	return h
 
 func _apply_fallback_player_starts() -> void:

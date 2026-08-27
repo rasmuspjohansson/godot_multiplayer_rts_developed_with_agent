@@ -38,11 +38,18 @@ var SOUTH_STOP_Y: float = 0.0
 const GRID_CELL_SIZE := 125.0
 const CP_CAPTURE_RADIUS := 120.0
 const CP_RESOURCE_INTERVAL := 2.0
+# Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
+const UNIT_HALF_HEIGHT := 11.0
 ## Zoomed out: bird's-eye; zoomed in: pitch approaches horizontal + look-at near soldier head height.
 const CAMERA_PITCH_MAX_DEG := 45.0
 const CAMERA_PITCH_MIN_DEG := 8.0
-## Added to terrain height at pivot XZ when fully zoomed in (above unit center ~11, toward head).
-const LOOK_HEIGHT_ABOVE_GROUND_MAX := 20.0 / 3.0
+const CAMERA_EYE_HEIGHT_MIN := UNIT_HALF_HEIGHT + 4.0
+const CAMERA_EYE_HEIGHT_MAX := 0.0
+const CAMERA_CLEARANCE_MIN := 18.0
+const CAMERA_CLEARANCE_MAX := 100.0
+const CAMERA_GROUND_SMOOTH_SPEED := 800.0
+const CAMERA_PITCH_SMOOTH_SPEED := 900.0
+const CAMERA_SLOPE_LOOK_AHEAD := 50.0
 const CAMERA_MIN_DISTANCE := 200.0 / 3.0
 const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
@@ -51,8 +58,6 @@ const ARMY_CLICK_RADIUS := 80.0
 # Client: only snap to server HERE when error exceeds this (real desync only)
 const CORRECTION_THRESHOLD := 120.0
 const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
-# Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
-const UNIT_HALF_HEIGHT := 11.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
 const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
@@ -85,7 +90,11 @@ var _server_captures: Array = []
 var _camera: Camera3D
 var _camera_pivot: Node3D
 var _camera_distance: float = 500.0
-var _look_at: Vector3
+var _look_at_xz: Vector2 = Vector2.ZERO
+var _smoothed_ground_y: float = 0.0
+var _smoothed_ahead_ground_y: float = 0.0
+var _smoothed_pitch_deg: float = CAMERA_PITCH_MAX_DEG
+var _camera_smoothing_initialized: bool = false
 var _pan_drag := false
 var _last_mouse: Vector2
 
@@ -123,6 +132,28 @@ var _terrain_heights: PackedFloat32Array = PackedFloat32Array()
 var _terrain_cols: int = 0
 var _terrain_rows: int = 0
 var _terrain_step: float = _TERRAIN_STEP
+var _max_terrain_height: float = 0.0
+
+func _map_diagonal() -> float:
+	return sqrt(MapConfig.width * MapConfig.width + MapConfig.height * MapConfig.height)
+
+func _camera_max_distance() -> float:
+	return maxf(CAMERA_MAX_DISTANCE, _map_diagonal() * 0.45)
+
+func _camera_far() -> float:
+	return maxf(8000.0, _map_diagonal() + _max_terrain_height + _camera_max_distance() * 2.0)
+
+func _camera_pan_speed() -> float:
+	return CAMERA_PAN_SPEED * (MapConfig.width / 1280.0)
+
+func _ground_ray_length() -> float:
+	return _map_diagonal() + _max_terrain_height + 2000.0
+
+func _recompute_max_terrain_height() -> void:
+	_max_terrain_height = 0.0
+	for h in _terrain_heights:
+		if h > _max_terrain_height:
+			_max_terrain_height = h
 
 func _client_unit_scene_visible(u: Node) -> bool:
 	if not u.is_visible_in_tree():
@@ -154,11 +185,12 @@ func _log_unit_visibility(phase: String) -> void:
 			print("TEST_ALL_UNITS_SCENE_VISIBLE: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
 		else:
 			print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
-	var saved_look := _look_at
+	var saved_look := _look_at_xz
 	var saved_dist := _camera_distance
-	_look_at = Vector3(MapConfig.width / 2.0, 0.0, MapConfig.height / 2.0)
-	_camera_distance = CAMERA_MAX_DISTANCE
-	_update_camera_position()
+	_look_at_xz = Vector2(MapConfig.width / 2.0, MapConfig.height / 2.0)
+	_camera_distance = _camera_max_distance()
+	_camera_smoothing_initialized = false
+	_update_camera_position(0.0)
 	var in_frustum := 0
 	for u2 in all_units:
 		if not is_instance_valid(u2) or not u2.is_inside_tree():
@@ -171,9 +203,10 @@ func _log_unit_visibility(phase: String) -> void:
 		print("TEST_ALL_UNITS_IN_FRUSTUM: client=%s phase=%s ok=true visible=%d total=%d" % [pname, phase, in_frustum, total])
 	else:
 		print("TEST_ALL_UNITS_IN_FRUSTUM_FAIL: client=%s phase=%s in_frustum=%d total_alive=%d" % [pname, phase, in_frustum, total])
-	_look_at = saved_look
+	_look_at_xz = saved_look
 	_camera_distance = saved_dist
-	_update_camera_position()
+	_camera_smoothing_initialized = false
+	_update_camera_position(0.0)
 
 func _schedule_visibility_checks() -> void:
 	if multiplayer.is_server():
@@ -191,7 +224,7 @@ func _on_visibility_mid_timeout() -> void:
 
 func _ready():
 	_init_offmap_lanes()
-	_look_at = Vector3(MapConfig.width / 2.0, 0, MapConfig.height / 2.0)
+	_look_at_xz = Vector2(MapConfig.width / 2.0, MapConfig.height / 2.0)
 	var ground_collision = get_node_or_null("GroundCollision")
 	if ground_collision is StaticBody3D:
 		ground_collision.collision_layer = 2
@@ -327,7 +360,8 @@ func _build_terrain() -> void:
 		if shape_node is CollisionShape3D:
 			shape_node.shape = terrain_shape
 			shape_node.transform = Transform3D.IDENTITY
-	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills" % [cols, rows, int(step), MapConfig._hills.size()])
+	_recompute_max_terrain_height()
+	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges" % [cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size()])
 
 func _load_ground_texture() -> Texture2D:
 	return _load_image_texture(GROUND_TEXTURE_PATH)
@@ -430,9 +464,11 @@ func _setup_camera():
 	_camera.reparent(_camera_pivot)
 	# Closer views: reduce clipping through nearby geometry
 	_camera.near = 0.35
+	_camera.far = _camera_far()
 	# Default is false; without an active camera the viewport draws no 3D (ground, units, CPs all missing).
 	_camera.current = true
-	_update_camera_position()
+	_camera_smoothing_initialized = false
+	_update_camera_position(0.0)
 	#region agent log
 	GameState.agent_debug_log("H1", "World.gd:_setup_camera", "camera_after_setup", {
 		"camera_current": _camera.current,
@@ -443,28 +479,64 @@ func _setup_camera():
 
 ## 0 = zoomed out (overview), 1 = zoomed in (soldier-like framing).
 func _camera_zoom_t() -> float:
-	var span := CAMERA_MAX_DISTANCE - CAMERA_MIN_DISTANCE
+	var max_dist := _camera_max_distance()
+	var span := max_dist - CAMERA_MIN_DISTANCE
 	if span <= 0.001:
 		return 0.0
-	return clampf((CAMERA_MAX_DISTANCE - _camera_distance) / span, 0.0, 1.0)
+	return clampf((max_dist - _camera_distance) / span, 0.0, 1.0)
 
-func _camera_pitch_deg_for_zoom() -> float:
+func _target_pitch_deg_for_zoom() -> float:
 	var t := _camera_zoom_t()
 	return lerpf(CAMERA_PITCH_MAX_DEG, CAMERA_PITCH_MIN_DEG, t)
 
-func _camera_pivot_y_for_zoom() -> float:
-	var gy := get_ground_height_at(_look_at.x, _look_at.z)
-	var t := _camera_zoom_t()
-	return gy + lerpf(0.0, LOOK_HEIGHT_ABOVE_GROUND_MAX, t)
+func _terrain_focus_y(zoom_t: float, ground_y: float) -> float:
+	var eye := lerpf(CAMERA_EYE_HEIGHT_MAX, CAMERA_EYE_HEIGHT_MIN, zoom_t)
+	return ground_y + eye
 
-func _update_camera_position():
-	if _camera_pivot == null:
+func _terrain_camera_clearance(zoom_t: float) -> float:
+	return lerpf(CAMERA_CLEARANCE_MAX, CAMERA_CLEARANCE_MIN, zoom_t)
+
+func _clamp_look_at_xz(v: Vector2) -> Vector2:
+	return Vector2(clampf(v.x, 0.0, MapConfig.width), clampf(v.y, 0.0, MapConfig.height))
+
+func _camera_look_ahead_xz() -> Vector2:
+	return _clamp_look_at_xz(_look_at_xz + Vector2(0.0, -CAMERA_SLOPE_LOOK_AHEAD))
+
+func _update_camera_position(delta: float = 0.0) -> void:
+	if _camera_pivot == null or _camera == null:
 		return
-	_camera_pivot.position = Vector3(_look_at.x, _camera_pivot_y_for_zoom(), _look_at.z)
-	if _camera:
-		var rad := deg_to_rad(_camera_pitch_deg_for_zoom())
-		_camera.position = Vector3(0, _camera_distance * sin(rad), _camera_distance * cos(rad))
-		_camera.look_at(_camera_pivot.global_position, Vector3.UP)
+	var ahead_xz := _camera_look_ahead_xz()
+	var target_ground := get_ground_height_at(_look_at_xz.x, _look_at_xz.y)
+	var target_ahead_ground := get_ground_height_at(ahead_xz.x, ahead_xz.y)
+	var target_pitch := _target_pitch_deg_for_zoom()
+	if not _camera_smoothing_initialized or delta <= 0.0:
+		_smoothed_ground_y = target_ground
+		_smoothed_ahead_ground_y = target_ahead_ground
+		_smoothed_pitch_deg = target_pitch
+		_camera_smoothing_initialized = true
+	else:
+		_smoothed_ground_y = move_toward(_smoothed_ground_y, target_ground, CAMERA_GROUND_SMOOTH_SPEED * delta)
+		_smoothed_ahead_ground_y = move_toward(
+			_smoothed_ahead_ground_y, target_ahead_ground, CAMERA_GROUND_SMOOTH_SPEED * delta
+		)
+		_smoothed_pitch_deg = move_toward(_smoothed_pitch_deg, target_pitch, CAMERA_PITCH_SMOOTH_SPEED * delta)
+	var zoom_t := _camera_zoom_t()
+	var focus_y := _terrain_focus_y(zoom_t, _smoothed_ground_y)
+	var focus := Vector3(_look_at_xz.x, focus_y, _look_at_xz.y)
+	_camera_pivot.position = focus
+	var rad := deg_to_rad(_smoothed_pitch_deg)
+	var offset := Vector3(0.0, _camera_distance * sin(rad), _camera_distance * cos(rad))
+	var cam_pos := focus + offset
+	var ground_cam := get_ground_height_at(cam_pos.x, cam_pos.z)
+	var min_cam_y := ground_cam + _terrain_camera_clearance(zoom_t)
+	if cam_pos.y < min_cam_y:
+		cam_pos.y = min_cam_y
+	_camera.global_position = cam_pos
+	var look_xz := _look_at_xz.lerp(ahead_xz, zoom_t)
+	var look_ground := lerpf(_smoothed_ground_y, _smoothed_ahead_ground_y, zoom_t)
+	var look_y := _terrain_focus_y(zoom_t, look_ground)
+	var look_target := Vector3(look_xz.x, look_y, look_xz.y)
+	_camera.look_at(look_target, Vector3.UP)
 
 func _unhandled_input(event: InputEvent):
 	if multiplayer.is_server() or game_over:
@@ -473,12 +545,10 @@ func _unhandled_input(event: InputEvent):
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_camera_distance = maxf(CAMERA_MIN_DISTANCE, _camera_distance - CAMERA_ZOOM_SPEED)
-			_update_camera_position()
 			get_viewport().set_input_as_handled()
 			return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			_camera_distance = minf(CAMERA_MAX_DISTANCE, _camera_distance + CAMERA_ZOOM_SPEED)
-			_update_camera_position()
+			_camera_distance = minf(_camera_max_distance(), _camera_distance + CAMERA_ZOOM_SPEED)
 			get_viewport().set_input_as_handled()
 			return
 		if mb.button_index == MOUSE_BUTTON_MIDDLE:
@@ -495,18 +565,17 @@ func _unhandled_input(event: InputEvent):
 			var mm := event as InputEventMouseMotion
 			var delta := mm.position - _last_mouse
 			_last_mouse = mm.position
-			_look_at.x -= delta.x * 0.5
-			_look_at.z -= delta.y * 0.5
-			_look_at.x = clampf(_look_at.x, 0, MapConfig.width)
-			_look_at.z = clampf(_look_at.z, 0, MapConfig.height)
-			_update_camera_position()
+			var pan_scale := _camera_distance / 600.0
+			_look_at_xz.x -= delta.x * 0.5 * pan_scale
+			_look_at_xz.y -= delta.y * 0.5 * pan_scale
+			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 			get_viewport().set_input_as_handled()
 		else:
 			_handle_world3d_mouse_extended(event)
 	elif event is InputEventKey and event.pressed:
 		_handle_key(event)
 
-func _process(_delta: float):
+func _process(delta: float):
 	if not multiplayer.is_server():
 		_update_move_goal_markers_3d()
 		_update_unit_range_markers_3d()
@@ -514,20 +583,20 @@ func _process(_delta: float):
 		return
 	if multiplayer.is_server():
 		return
-	var pan := Vector3.ZERO
+	var pan_speed := _camera_pan_speed()
+	var pan := Vector2.ZERO
 	if Input.is_key_pressed(KEY_A):
-		pan.x -= CAMERA_PAN_SPEED
+		pan.x -= pan_speed
 	if Input.is_key_pressed(KEY_D):
-		pan.x += CAMERA_PAN_SPEED
+		pan.x += pan_speed
 	if Input.is_key_pressed(KEY_W):
-		pan.z -= CAMERA_PAN_SPEED
+		pan.y -= pan_speed
 	if Input.is_key_pressed(KEY_S):
-		pan.z += CAMERA_PAN_SPEED
-	if pan != Vector3.ZERO:
-		_look_at += pan * get_process_delta_time()
-		_look_at.x = clampf(_look_at.x, 0, MapConfig.width)
-		_look_at.z = clampf(_look_at.z, 0, MapConfig.height)
-		_update_camera_position()
+		pan.y += pan_speed
+	if pan != Vector2.ZERO:
+		_look_at_xz += pan * delta
+		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+	_update_camera_position(delta)
 
 func _update_move_goal_markers_3d():
 	if _move_goal_markers_3d == null:
@@ -1847,54 +1916,88 @@ func _on_army_routed(army):
 func _raycast_ground() -> Vector3:
 	return _raycast_ground_at_screen(get_viewport().get_mouse_position())
 
+func _terrain_in_map_bounds(x: float, z: float) -> bool:
+	return x >= 0.0 and z >= 0.0 and x <= MapConfig.width and z <= MapConfig.height
+
+func _ray_param_from(from: Vector3, dir: Vector3, pt: Vector3) -> float:
+	return (pt - from).dot(dir)
+
+## Terrain pick: closest hit along the camera ray. Grid crossings are preferred over a later
+## trimesh hit — shallow rays can skim peak trimesh and strike the backslope instead.
 func _raycast_ground_at_screen(screen: Vector2) -> Vector3:
 	if _camera == null:
 		return Vector3.ZERO
 	var from := _camera.project_ray_origin(screen)
-	var to := from + _camera.project_ray_normal(screen) * 10000.0
+	var dir := _camera.project_ray_normal(screen).normalized()
+	var ray_len := _ground_ray_length()
+	var to := from + dir * ray_len
+	var best := Vector3.ZERO
+	var best_t := INF
 	var space_state := get_world_3d().direct_space_state
 	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 2  # ground layer only, same as get_ground_height_at
+	query.collision_mask = 2
 	query.hit_back_faces = true
-	var hit := space_state.intersect_ray(query)
-	if not hit.is_empty():
-		return hit.position
-	return _raycast_terrain_grid_along_ray(from, to)
+	var phys_hit := space_state.intersect_ray(query)
+	if not phys_hit.is_empty():
+		var pp: Vector3 = phys_hit.position
+		if _terrain_in_map_bounds(pp.x, pp.z):
+			best = pp
+			best_t = _ray_param_from(from, dir, pp)
+	for crossing in _terrain_grid_crossings_along_ray(from, to):
+		var pt: Vector3 = crossing
+		if not _terrain_in_map_bounds(pt.x, pt.z):
+			continue
+		var t := _ray_param_from(from, dir, pt)
+		if t < best_t:
+			best_t = t
+			best = pt
+	return best
 
-## When physics trimesh misses (common with ArrayMesh collision), march the camera ray
-## against the same height grid used to build the visible terrain.
-func _raycast_terrain_grid_along_ray(from: Vector3, to: Vector3) -> Vector3:
+## Collect every ray/terrain Y-crossing along the camera ray (not just the first).
+func _terrain_grid_crossings_along_ray(from: Vector3, to: Vector3) -> Array:
+	var out: Array = []
 	if _terrain_heights.is_empty():
-		return Vector3.ZERO
+		return out
 	var dir := to - from
 	var ray_len := dir.length()
 	if ray_len < 0.001:
-		return Vector3.ZERO
+		return out
 	dir /= ray_len
-	var step := maxf(_terrain_step * 0.5, 4.0)
-	const MAX_STEPS := 256
+	var step := maxf(_terrain_step * 0.25, 2.0)
+	var max_steps := mini(ceili(ray_len / step) + 4, 2048)
 	var traveled := 0.0
 	var prev := from
+	var prev_in_bounds := _terrain_in_map_bounds(prev.x, prev.z)
 	var steps := 0
-	while traveled <= ray_len and steps < MAX_STEPS:
+	while traveled <= ray_len and steps < max_steps:
 		steps += 1
 		var seg_end := minf(traveled + step, ray_len)
 		var p := from + dir * seg_end
-		var gy := _terrain_grid_height_at(p.x, p.z)
-		var prev_gy := _terrain_grid_height_at(prev.x, prev.z)
-		if prev.y >= prev_gy - 0.01 and p.y <= gy + 0.05:
-			var above0 := prev.y - prev_gy
-			var above1 := p.y - gy
-			var denom := above0 - above1
-			var frac := 0.5
-			if absf(denom) > 0.0001:
-				frac = clampf(above0 / denom, 0.0, 1.0)
-			var hit := prev.lerp(p, frac)
-			hit.y = _terrain_grid_height_at(hit.x, hit.z)
-			return hit
+		var in_bounds := _terrain_in_map_bounds(p.x, p.z)
+		if prev_in_bounds and in_bounds:
+			var gy := _terrain_grid_height_at(p.x, p.z)
+			var prev_gy := _terrain_grid_height_at(prev.x, prev.z)
+			if prev.y >= prev_gy - 0.01 and p.y <= gy + 0.05:
+				var above0 := prev.y - prev_gy
+				var above1 := p.y - gy
+				var denom := above0 - above1
+				var frac := 0.5
+				if absf(denom) > 0.0001:
+					frac = clampf(above0 / denom, 0.0, 1.0)
+				var hit := prev.lerp(p, frac)
+				hit.y = _terrain_grid_height_at(hit.x, hit.z)
+				out.append(hit)
 		prev = p
+		prev_in_bounds = in_bounds
 		traveled = seg_end
-	return Vector3.ZERO
+	return out
+
+## First crossing only; used by tests and legacy callers.
+func _raycast_terrain_grid_along_ray(from: Vector3, to: Vector3) -> Vector3:
+	var crossings := _terrain_grid_crossings_along_ray(from, to)
+	if crossings.is_empty():
+		return Vector3.ZERO
+	return crossings[0]
 
 func _rect_from_points(a: Vector2, b: Vector2) -> Rect2:
 	var p := Vector2(minf(a.x, b.x), minf(a.y, b.y))
@@ -2253,8 +2356,9 @@ func _terrain_grid_height_at(x: float, z: float) -> float:
 
 func get_ground_height_at(x: float, z: float) -> float:
 	var space = get_world_3d().direct_space_state
-	var from_vec = Vector3(x, 500.0, z)
-	var to_vec = Vector3(x, -100.0, z)
+	var from_y := _max_terrain_height + 500.0
+	var from_vec = Vector3(x, from_y, z)
+	var to_vec = Vector3(x, -200.0, z)
 	var query = PhysicsRayQueryParameters3D.create(from_vec, to_vec)
 	query.collision_mask = 2
 	query.hit_back_faces = true

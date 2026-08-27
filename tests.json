@@ -114,6 +114,10 @@
     {
       "description_of_test": "Headless 3D client spawn: horse armies receive mounted speed on client units",
       "implementation": "godot --headless --path . -s test_world3d_horse_speed.gd 2>&1 | grep -q 'TEST_WORLD3D_HORSE_SPEED_OK'"
+    },
+    {
+      "description_of_test": "XL map bounds: peak height probe and far-corner ground raycast succeed",
+      "implementation": "godot --headless --path . --map=XL -s test_xl_map_bounds.gd 2>&1 | grep -q 'TEST_XL_MAP_BOUNDS_OK'"
     }
   ],
   "ad_hoc_tests": [
