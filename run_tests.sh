@@ -21,6 +21,9 @@ echo "=== Headless: test_world3d_goal_arrival.gd ==="
 echo "=== Headless: test_xl_map_bounds.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_xl_map_bounds.gd
 
+echo "=== Headless: test_camera_w_pan_zoom_out.gd (--map=XL) ==="
+"$GODOT_BIN" --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd
+
 if [[ "${1:-}" == "--with-logs" ]]; then
 	echo "=== verify_test_logs.sh ==="
 	./verify_test_logs.sh

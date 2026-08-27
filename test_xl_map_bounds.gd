@@ -188,6 +188,47 @@ func _begin():
 		quit(1)
 		return
 
+	# --- Zoom-aware pan bounds (zoom-in reclamp; W pan covered by test_camera_w_pan_zoom_out.gd) ---
+	w._camera_distance = w._camera_max_distance()
+	var ext_raw: Vector4
+	var visible_north_z: float
+
+	w._camera_distance = w.CAMERA_MIN_DISTANCE
+	w._look_at_xz = Vector2(0.0, 0.0)
+	w._camera_smoothing_initialized = false
+	w._update_camera_position(0.0)
+	w._look_at_xz = w._clamp_look_at_xz(w._look_at_xz)
+	if w._look_at_xz.x > 40.0 or w._look_at_xz.y > 40.0:
+		print(
+			"TEST_XL_MAP_BOUNDS_FAIL: zoomed-in corner clamp look=(%.1f,%.1f)"
+			% [w._look_at_xz.x, w._look_at_xz.y]
+		)
+		quit(1)
+		return
+
+	var zoom_out_north_z: float = w._look_at_xz.y
+	w._camera_distance = w._camera_max_distance()
+	w._look_at_xz = Vector2(map_cfg.width * 0.5, zoom_out_north_z)
+	w._camera_smoothing_initialized = false
+	w._update_camera_position(0.0)
+	w._camera_distance = w.CAMERA_MIN_DISTANCE
+	w._look_at_xz = w._clamp_look_at_xz(w._look_at_xz)
+	w._update_camera_position(0.0)
+	ext_raw = w._camera_ground_view_extents_raw(w._look_at_xz)
+	var ext_scaled: Vector4 = w._camera_ground_view_extents_for(w._look_at_xz)
+	if ext_scaled.z > 5.0:
+		print(
+			"TEST_XL_MAP_BOUNDS_FAIL: zoomed-in north extent too large ext_n=%.1f"
+			% ext_scaled.z
+		)
+		quit(1)
+		return
+	visible_north_z = w._look_at_xz.y - ext_scaled.z
+	if visible_north_z < -20.0:
+		print("TEST_XL_MAP_BOUNDS_FAIL: zoom-in reclamp north edge off map z=%.1f" % visible_north_z)
+		quit(1)
+		return
+
 	print(
 		"TEST_XL_MAP_BOUNDS_OK: peak=%.1f hit=(%.0f,%.0f,%.0f) max_zoom=%.0f far=%.0f"
 		% [peak_h, hit.x, hit.y, hit.z, max_dist, far_plane]

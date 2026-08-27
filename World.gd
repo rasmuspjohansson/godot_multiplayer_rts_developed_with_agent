@@ -50,6 +50,7 @@ const CAMERA_CLEARANCE_MAX := 100.0
 const CAMERA_GROUND_SMOOTH_SPEED := 800.0
 const CAMERA_PITCH_SMOOTH_SPEED := 900.0
 const CAMERA_SLOPE_LOOK_AHEAD := 50.0
+const CAMERA_PAN_EDGE_PADDING := 30.0
 const CAMERA_MIN_DISTANCE := 200.0 / 3.0
 const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
@@ -95,6 +96,9 @@ var _smoothed_ground_y: float = 0.0
 var _smoothed_ahead_ground_y: float = 0.0
 var _smoothed_pitch_deg: float = CAMERA_PITCH_MAX_DEG
 var _camera_smoothing_initialized: bool = false
+var _pan_bounds_cache_pivot: Vector2 = Vector2(INF, INF)
+var _pan_bounds_cache_dist: float = -1.0
+var _pan_bounds_cache_result: Vector4 = Vector4.ZERO
 var _pan_drag := false
 var _last_mouse: Vector2
 
@@ -496,16 +500,194 @@ func _terrain_focus_y(zoom_t: float, ground_y: float) -> float:
 func _terrain_camera_clearance(zoom_t: float) -> float:
 	return lerpf(CAMERA_CLEARANCE_MAX, CAMERA_CLEARANCE_MIN, zoom_t)
 
+func _look_ahead_xz_unclamped(base: Vector2) -> Vector2:
+	return base + Vector2(0.0, -CAMERA_SLOPE_LOOK_AHEAD)
+
+func _viewport_ground_sample_screens() -> Array:
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	var points: Array = []
+	var cols := 3
+	var rows := 3
+	for row in range(rows):
+		for col in range(cols):
+			points.append(
+				Vector2(
+					vp_size.x * float(col) / float(cols - 1),
+					vp_size.y * float(row) / float(rows - 1)
+				)
+			)
+	return points
+
+func _invalidate_pan_bounds_cache() -> void:
+	_pan_bounds_cache_pivot = Vector2(INF, INF)
+	_pan_bounds_cache_dist = -1.0
+
+## Apply camera pose for ground sampling (matches _update_camera_position when at current pivot).
+func _apply_camera_pose_for_extents(look_xz: Vector2) -> void:
+	if _camera_pivot == null or _camera == null:
+		return
+	var ahead_xz := _look_ahead_xz_unclamped(look_xz)
+	var zoom_t := _camera_zoom_t()
+	var ground_y: float
+	var ahead_ground: float
+	if look_xz.is_equal_approx(_look_at_xz) and _camera_smoothing_initialized:
+		ground_y = _smoothed_ground_y
+		ahead_ground = _smoothed_ahead_ground_y
+	else:
+		ground_y = get_ground_height_at(look_xz.x, look_xz.y)
+		ahead_ground = get_ground_height_at(ahead_xz.x, ahead_xz.y)
+	var focus_y := _terrain_focus_y(zoom_t, ground_y)
+	var focus := Vector3(look_xz.x, focus_y, look_xz.y)
+	_camera_pivot.position = focus
+	var rad := deg_to_rad(_smoothed_pitch_deg)
+	var offset := Vector3(0.0, _camera_distance * sin(rad), _camera_distance * cos(rad))
+	var cam_pos := focus + offset
+	var ground_cam := get_ground_height_at(cam_pos.x, cam_pos.z)
+	var min_cam_y := ground_cam + _terrain_camera_clearance(zoom_t)
+	if cam_pos.y < min_cam_y:
+		cam_pos.y = min_cam_y
+	_camera.global_position = cam_pos
+	var look_target_xz := look_xz.lerp(ahead_xz, zoom_t)
+	var look_ground := lerpf(ground_y, ahead_ground, zoom_t)
+	var look_y := _terrain_focus_y(zoom_t, look_ground)
+	_camera.look_at(Vector3(look_target_xz.x, look_y, look_target_xz.y), Vector3.UP)
+
+func _raycast_ground_along_camera_ray(from: Vector3, dir: Vector3) -> Vector3:
+	dir = dir.normalized()
+	var ray_len := _ground_ray_length()
+	var to := from + dir * ray_len
+	var best := Vector3.ZERO
+	var best_t := INF
+	var space_state := get_world_3d().direct_space_state
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 2
+	query.hit_back_faces = true
+	var phys_hit := space_state.intersect_ray(query)
+	if not phys_hit.is_empty():
+		var pp: Vector3 = phys_hit.position
+		if _terrain_in_map_bounds(pp.x, pp.z):
+			best = pp
+			best_t = _ray_param_from(from, dir, pp)
+	for crossing in _terrain_grid_crossings_along_ray(from, to):
+		var pt: Vector3 = crossing
+		if not _terrain_in_map_bounds(pt.x, pt.z):
+			continue
+		var t := _ray_param_from(from, dir, pt)
+		if t < best_t:
+			best_t = t
+			best = pt
+	return best
+
+func _ground_hit_at_screen_for_pose(screen: Vector2, look_xz: Vector2) -> Vector3:
+	if _camera == null:
+		return Vector3.ZERO
+	_apply_camera_pose_for_extents(look_xz)
+	var from := _camera.project_ray_origin(screen)
+	var dir := _camera.project_ray_normal(screen)
+	return _raycast_ground_along_camera_ray(from, dir)
+
+func _raycast_ground_at_screen_with_current_pose(screen: Vector2) -> Vector3:
+	if _camera == null:
+		return Vector3.ZERO
+	var from := _camera.project_ray_origin(screen)
+	var dir := _camera.project_ray_normal(screen)
+	return _raycast_ground_along_camera_ray(from, dir)
+
+## Visible ground AABB from viewport samples: (min_x, max_x, min_z, max_z).
+func _visible_ground_xz_bounds(look_xz: Vector2) -> Vector4:
+	if _camera == null:
+		return Vector4.ZERO
+	if look_xz.is_equal_approx(_pan_bounds_cache_pivot) and is_equal_approx(_camera_distance, _pan_bounds_cache_dist):
+		return _pan_bounds_cache_result
+	_apply_camera_pose_for_extents(look_xz)
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for sp in _viewport_ground_sample_screens():
+		var screen: Vector2 = sp
+		var hit: Vector3 = _raycast_ground_at_screen_with_current_pose(screen)
+		if hit == Vector3.ZERO:
+			continue
+		min_x = minf(min_x, hit.x)
+		max_x = maxf(max_x, hit.x)
+		min_z = minf(min_z, hit.z)
+		max_z = maxf(max_z, hit.z)
+	if min_z == INF and max_z == -INF and min_x == INF and max_x == -INF:
+		_pan_bounds_cache_pivot = look_xz
+		_pan_bounds_cache_dist = _camera_distance
+		_pan_bounds_cache_result = Vector4.ZERO
+		return Vector4.ZERO
+	var result := Vector4(min_x, max_x, min_z, max_z)
+	_pan_bounds_cache_pivot = look_xz
+	_pan_bounds_cache_dist = _camera_distance
+	_pan_bounds_cache_result = result
+	return result
+
 func _clamp_look_at_xz(v: Vector2) -> Vector2:
-	return Vector2(clampf(v.x, 0.0, MapConfig.width), clampf(v.y, 0.0, MapConfig.height))
+	var zoom_t := _camera_zoom_t()
+	if zoom_t > 0.85:
+		return Vector2(
+			clampf(v.x, 0.0, MapConfig.width),
+			clampf(v.y, 0.0, MapConfig.height)
+		)
+	_invalidate_pan_bounds_cache()
+	var pad := CAMERA_PAN_EDGE_PADDING if zoom_t < 0.05 else CAMERA_PAN_EDGE_PADDING * maxf(zoom_t, 0.35)
+	var recover_y := maxf(40.0, _camera_pan_speed() / 60.0)
+	for _i in range(3):
+		var b := _visible_ground_xz_bounds(v)
+		if b == Vector4.ZERO:
+			if zoom_t < 0.05:
+				v.y += recover_y
+			continue
+		var delta := Vector2.ZERO
+		if b.z < pad:
+			delta.y -= b.z - pad
+		if b.w > MapConfig.height - pad:
+			delta.y -= b.w - (MapConfig.height - pad)
+		if b.x < pad:
+			delta.x -= b.x - pad
+		if b.y > MapConfig.width - pad:
+			delta.x -= b.y - (MapConfig.width - pad)
+		if delta.length_squared() < 0.01:
+			break
+		v += delta
+		_invalidate_pan_bounds_cache()
+	return v
+
+func _ray_hit_plane_y(from: Vector3, dir: Vector3, plane_y: float) -> Variant:
+	if absf(dir.y) < 0.0001:
+		return null
+	var t := (plane_y - from.y) / dir.y
+	if t < 0.0:
+		return null
+	return from + dir * t
+
+## Ground footprint beyond pivot: (west, east, north, south) in map X/Z units.
+func _camera_ground_view_extents_raw(look_xz: Vector2) -> Vector4:
+	var b := _visible_ground_xz_bounds(look_xz)
+	if b == Vector4.ZERO:
+		return Vector4.ZERO
+	var pad := CAMERA_PAN_EDGE_PADDING
+	return Vector4(
+		look_xz.x - b.x + pad,
+		b.y - look_xz.x + pad,
+		look_xz.y - b.z + pad,
+		b.w - look_xz.y + pad
+	)
+
+func _camera_ground_view_extents_for(look_xz: Vector2) -> Vector4:
+	var raw := _camera_ground_view_extents_raw(look_xz)
+	var margin_t := 1.0 - _camera_zoom_t()
+	return Vector4(raw.x * margin_t, raw.y * margin_t, raw.z * margin_t, raw.w * margin_t)
 
 func _camera_look_ahead_xz() -> Vector2:
-	return _clamp_look_at_xz(_look_at_xz + Vector2(0.0, -CAMERA_SLOPE_LOOK_AHEAD))
+	return _clamp_look_at_xz(_look_ahead_xz_unclamped(_look_at_xz))
 
 func _update_camera_position(delta: float = 0.0) -> void:
 	if _camera_pivot == null or _camera == null:
 		return
-	var ahead_xz := _camera_look_ahead_xz()
+	var ahead_xz := _look_ahead_xz_unclamped(_look_at_xz)
 	var target_ground := get_ground_height_at(_look_at_xz.x, _look_at_xz.y)
 	var target_ahead_ground := get_ground_height_at(ahead_xz.x, ahead_xz.y)
 	var target_pitch := _target_pitch_deg_for_zoom()
@@ -520,6 +702,7 @@ func _update_camera_position(delta: float = 0.0) -> void:
 			_smoothed_ahead_ground_y, target_ahead_ground, CAMERA_GROUND_SMOOTH_SPEED * delta
 		)
 		_smoothed_pitch_deg = move_toward(_smoothed_pitch_deg, target_pitch, CAMERA_PITCH_SMOOTH_SPEED * delta)
+	ahead_xz = _look_ahead_xz_unclamped(_look_at_xz)
 	var zoom_t := _camera_zoom_t()
 	var focus_y := _terrain_focus_y(zoom_t, _smoothed_ground_y)
 	var focus := Vector3(_look_at_xz.x, focus_y, _look_at_xz.y)
@@ -545,10 +728,14 @@ func _unhandled_input(event: InputEvent):
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
 			_camera_distance = maxf(CAMERA_MIN_DISTANCE, _camera_distance - CAMERA_ZOOM_SPEED)
+			_invalidate_pan_bounds_cache()
+			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 			get_viewport().set_input_as_handled()
 			return
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			_camera_distance = minf(_camera_max_distance(), _camera_distance + CAMERA_ZOOM_SPEED)
+			_invalidate_pan_bounds_cache()
+			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 			get_viewport().set_input_as_handled()
 			return
 		if mb.button_index == MOUSE_BUTTON_MIDDLE:
@@ -568,6 +755,7 @@ func _unhandled_input(event: InputEvent):
 			var pan_scale := _camera_distance / 600.0
 			_look_at_xz.x -= delta.x * 0.5 * pan_scale
 			_look_at_xz.y -= delta.y * 0.5 * pan_scale
+			_invalidate_pan_bounds_cache()
 			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 			get_viewport().set_input_as_handled()
 		else:
@@ -595,6 +783,7 @@ func _process(delta: float):
 		pan.y += pan_speed
 	if pan != Vector2.ZERO:
 		_look_at_xz += pan * delta
+		_invalidate_pan_bounds_cache()
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 	_update_camera_position(delta)
 
@@ -1928,30 +2117,8 @@ func _raycast_ground_at_screen(screen: Vector2) -> Vector3:
 	if _camera == null:
 		return Vector3.ZERO
 	var from := _camera.project_ray_origin(screen)
-	var dir := _camera.project_ray_normal(screen).normalized()
-	var ray_len := _ground_ray_length()
-	var to := from + dir * ray_len
-	var best := Vector3.ZERO
-	var best_t := INF
-	var space_state := get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 2
-	query.hit_back_faces = true
-	var phys_hit := space_state.intersect_ray(query)
-	if not phys_hit.is_empty():
-		var pp: Vector3 = phys_hit.position
-		if _terrain_in_map_bounds(pp.x, pp.z):
-			best = pp
-			best_t = _ray_param_from(from, dir, pp)
-	for crossing in _terrain_grid_crossings_along_ray(from, to):
-		var pt: Vector3 = crossing
-		if not _terrain_in_map_bounds(pt.x, pt.z):
-			continue
-		var t := _ray_param_from(from, dir, pt)
-		if t < best_t:
-			best_t = t
-			best = pt
-	return best
+	var dir := _camera.project_ray_normal(screen)
+	return _raycast_ground_along_camera_ray(from, dir)
 
 ## Collect every ray/terrain Y-crossing along the camera ray (not just the first).
 func _terrain_grid_crossings_along_ray(from: Vector3, to: Vector3) -> Array:

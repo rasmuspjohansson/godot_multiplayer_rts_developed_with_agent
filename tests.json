@@ -118,6 +118,10 @@
     {
       "description_of_test": "XL map bounds: peak height probe and far-corner ground raycast succeed",
       "implementation": "godot --headless --path . --map=XL -s test_xl_map_bounds.gd 2>&1 | grep -q 'TEST_XL_MAP_BOUNDS_OK'"
+    },
+    {
+      "description_of_test": "XL max zoom: hold W until north map edge reaches viewport (visible ground min_z <= 40)",
+      "implementation": "godot --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd 2>&1 | grep -q 'TEST_CAMERA_W_PAN_OK'"
     }
   ],
   "ad_hoc_tests": [
