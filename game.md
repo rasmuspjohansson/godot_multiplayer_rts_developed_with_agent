@@ -42,6 +42,19 @@
 - Resources are displayed in the top-bar HUD (CP counts + inventory).
 - **Seek enemy**: If an army has been at a capture point for **5 seconds** with **no combat** occurring anywhere, the server orders that army to seek and continuously follow the **closest enemy army** (move target is updated every tick so the army follows when the enemy moves). A manual move order (right-click) cancels follow.
 
+## Army orders and stances
+
+Army-level control (select with LMB / marquee). Command bar appears when an army is selected.
+
+| Control | Action |
+|---------|--------|
+| **Move** (default, `M`) | RMB on ground: move formation. RMB drag: line formation. |
+| **Attack-Move** (`G`) | Same as Move but units engage enemies along the way. |
+| **Attack** (`A`) | LMB on enemy army or dragon: pursue and attack that target. |
+| **Aggressive / Defensive / Hold / Passive** | Stance buttons on command bar. Aggressive with no order auto-chases nearest enemy. |
+
+Behaviour spec: `RTS_Unit_Behaviour_Spec.md`. Move orders are **not** cancelled when attacked. Attack orders lock onto the commanded target. Ranged units (bow, horse archer) can attack while moving.
+
 ## Physics / collision
 - Units have a `CollisionShape3D` box (14×22×14) on each `CharacterBody3D`. **Enemy teams block each other** during movement; **friendlies pass through** (same collision layer).
 - **Combat** uses distance checks in `Unit3D._try_attack()`, not physics contact.

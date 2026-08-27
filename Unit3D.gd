@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 const SPRITESHEET_ANIM := preload("res://SpritesheetAnim.gd")
 const UNIT_SPRITE_PATHS := preload("res://UnitSpritePaths.gd")
+const UNIT_BEHAVIOUR := preload("res://UnitBehaviour.gd")
 
 signal unit_died(peer_id: int)
 
@@ -90,6 +91,10 @@ var has_move_goal: bool = false
 var sync_target_hp: float = 100.0
 var hp: float = 100.0
 var is_dead := false
+## Server combat: preferred target node name from army ATTACK order.
+var commanded_target_name: String = ""
+## Mirrors parent army stance (Army3D.Stance).
+var army_stance: int = 1
 
 const HALF_HEIGHT := 11.0
 const GOAL_ARRIVAL_DIST := 0.2
@@ -212,6 +217,10 @@ func _ground_y_at(x: float, z: float) -> float:
 func set_selected(val: bool):
 	_selected = val
 	_update_visual_tint()
+
+func set_combat_directives(cmd_target: String, stance: int) -> void:
+	commanded_target_name = cmd_target
+	army_stance = stance
 
 func _clear_visual_mesh() -> void:
 	if _sprite != null and is_instance_valid(_sprite):
@@ -718,21 +727,54 @@ func _update_combat_state() -> void:
 		return
 	in_combat = not _hostiles_in_attack_range().is_empty()
 
+func _can_attack_this_tick() -> bool:
+	var prof: Dictionary = UNIT_BEHAVIOUR.profile_for_unit(self)
+	if prof.get("attack_while_moving", false):
+		return true
+	return not is_moving
+
+func _pick_attack_target(hostiles: Array):
+	if hostiles.is_empty():
+		return null
+	if commanded_target_name != "":
+		for h in hostiles:
+			if str(h.name) == commanded_target_name:
+				return h
+		return null
+	if army_stance == 3:
+		return null
+	if not UNIT_BEHAVIOUR.stance_allows_auto_engage(army_stance):
+		return null
+	var best = null
+	var best_dist := 1e10
+	var center := Vector2(global_position.x, global_position.z)
+	for h in hostiles:
+		var hxz := Vector2(h.global_position.x, h.global_position.z)
+		var d := center.distance_to(hxz)
+		if d < best_dist:
+			best_dist = d
+			best = h
+	return best
+
 func _try_attack():
-	for child in _hostiles_in_attack_range():
-		var dmg = max(1.0, attack - float(child.get("defense")))
-		var oth := child as CharacterBody3D
-		var dist := Vector2(global_position.x, global_position.z).distance_to(
-			Vector2(oth.global_position.x, oth.global_position.z)
-		)
-		GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
-		print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [
-			owner_name, army_id, child.get("owner_name"), child.get("army_id"), dist, dmg
-		])
-		if child.has_method("take_damage"):
-			child.take_damage(dmg, owner_peer_id)
-		attack_timer = attack_cooldown
+	if not _can_attack_this_tick():
 		return
+	var hostiles := _hostiles_in_attack_range()
+	var child = _pick_attack_target(hostiles)
+	if child == null:
+		return
+	var dmg = max(1.0, attack - float(child.get("defense")))
+	var oth := child as CharacterBody3D
+	var dist := Vector2(global_position.x, global_position.z).distance_to(
+		Vector2(oth.global_position.x, oth.global_position.z)
+	)
+	GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
+	print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [
+		owner_name, army_id, child.get("owner_name"), child.get("army_id"), dist, dmg
+	])
+	if child.has_method("take_damage"):
+		child.take_damage(dmg, owner_peer_id)
+	attack_timer = attack_cooldown
 
 func _client_physics(delta: float):
 	if _dying:

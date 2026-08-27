@@ -1,9 +1,10 @@
 extends Node3D
-## 3D army: same behavior as legacy Army (formation, move, rotate, rout) on XZ map.
+## 3D army: formation, movement, orders, stances (XZ map).
 
 signal army_routed(army)
 
-# Map bounds come from `MapConfig` (maps/map_{S|L|XL}.json); access as MapConfig.width / MapConfig.height.
+enum Stance { AGGRESSIVE, DEFENSIVE, HOLD, PASSIVE }
+enum OrderType { NONE, MOVE, ATTACK, ATTACK_MOVE }
 
 const FOOT_SPACING := 10.0
 const MOUNTED_SPACING := 15.0
@@ -19,8 +20,13 @@ var initial_count: int = 10
 var soldiers: Array = []
 var is_routed := false
 var is_selected := false
-## "defensive" (stay put / follow move orders) or "aggressive" (server chases closest enemy each tick).
-var stance: String = "defensive"
+
+var stance: int = Stance.DEFENSIVE
+var order_type: int = OrderType.NONE
+var order_target_army_id := ""
+var order_target_unit_name := ""
+var order_destination := Vector2.ZERO
+var hold_position := Vector2.ZERO
 
 const ROUT_THRESHOLD := 0.3
 
@@ -73,15 +79,56 @@ func calculate_formation_positions(center: Vector2, dir: float, count: int) -> A
 			idx += 1
 	return positions
 
-func assign_formation_targets():
+func assign_formation_at(center: Vector2) -> void:
 	if is_routed:
 		return
 	var alive = get_alive_soldiers()
-	var c_xz := Vector2(global_position.x, global_position.z)
-	var positions = calculate_formation_positions(c_xz, direction, alive.size())
+	var positions = calculate_formation_positions(center, direction, alive.size())
 	for i in range(min(alive.size(), positions.size())):
 		if alive[i].has_method("set_move_target"):
 			alive[i].set_move_target(positions[i])
+
+func assign_formation_targets():
+	assign_formation_at(Vector2(global_position.x, global_position.z))
+
+func issue_move(dest: Vector2) -> void:
+	order_type = OrderType.MOVE
+	order_target_army_id = ""
+	order_target_unit_name = ""
+	order_destination = _clamp_map_xz(dest)
+	move_army(order_destination)
+
+func issue_attack_move(dest: Vector2) -> void:
+	order_type = OrderType.ATTACK_MOVE
+	order_target_army_id = ""
+	order_target_unit_name = ""
+	order_destination = _clamp_map_xz(dest)
+	move_army(order_destination)
+
+func issue_attack_army(enemy_army_id: String) -> void:
+	order_type = OrderType.ATTACK
+	order_target_army_id = enemy_army_id
+	order_target_unit_name = ""
+	hold_position = Vector2(global_position.x, global_position.z)
+
+func issue_attack_unit(unit_name: String) -> void:
+	order_type = OrderType.ATTACK
+	order_target_army_id = ""
+	order_target_unit_name = unit_name
+	hold_position = Vector2(global_position.x, global_position.z)
+
+func set_stance(s: int) -> void:
+	stance = s
+	if s == Stance.HOLD:
+		hold_position = Vector2(global_position.x, global_position.z)
+
+func clear_order() -> void:
+	order_type = OrderType.NONE
+	order_target_army_id = ""
+	order_target_unit_name = ""
+
+func has_player_order() -> bool:
+	return order_type != OrderType.NONE
 
 func move_army(target: Vector2):
 	if is_routed:
@@ -134,9 +181,15 @@ func repack_formation():
 
 func _do_rout():
 	is_routed = true
+	clear_order()
 	var remaining = get_alive_count()
 	print("TEST_ROUT: Army '%s' routed (%d/%d alive) owner=%s" % [army_id, remaining, initial_count, owner_name])
 	for s in get_alive_soldiers():
 		s.set("is_dead", true)
 		s.queue_free()
 	army_routed.emit(self)
+
+func apply_combat_directives_to_soldiers(commanded_name: String) -> void:
+	for s in get_alive_soldiers():
+		if s.has_method("set_combat_directives"):
+			s.set_combat_directives(commanded_name, stance)

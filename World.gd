@@ -5,6 +5,8 @@ const _Army3D = preload("res://Army3D.gd")
 const _Unit3D = preload("res://Unit3D.gd")
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
+const _ArmyCommandBar = preload("res://ArmyCommandBar.gd")
+const _UnitBehaviour = preload("res://UnitBehaviour.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
 ## Per-player unit layers (layer 2 is reserved for ground).
 const TEAM_COLLISION_LAYERS: Array[int] = [1, 4, 8, 16]
@@ -95,6 +97,7 @@ const DRAGON_AI_TICK := 0.5
 var capture_points: Array = []
 var top_bar = null
 var draft_menu = null
+var _army_command_bar: Control = null
 var game_over := false
 var selected_armies: Array = []
 var _marquee_start_screen: Vector2 = Vector2.ZERO
@@ -207,6 +210,8 @@ func _ready():
 		_setup_background_music()
 	_setup_topbar()
 	_setup_draft_menu()
+	if not multiplayer.is_server():
+		_setup_army_command_bar()
 	_add_play_boundary_line()
 	call_deferred("_agent_debug_log_world_ready")
 
@@ -726,6 +731,20 @@ func _setup_draft_menu():
 	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb, bow_cb))
 	vbox.add_child(create_btn)
 
+func _setup_army_command_bar() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 45
+	layer.name = "ArmyCommandLayer"
+	add_child(layer)
+	_army_command_bar = _ArmyCommandBar.new()
+	_army_command_bar.name = "ArmyCommandBar"
+	_army_command_bar.offset_left = 10
+	_army_command_bar.offset_top = 400
+	_army_command_bar.offset_right = 520
+	_army_command_bar.offset_bottom = 480
+	layer.add_child(_army_command_bar)
+	_army_command_bar.stance_pressed.connect(_on_command_bar_stance)
+
 func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox):
 	var use_horse = horse_cb.button_pressed
 	var use_spear = spear_cb.button_pressed
@@ -752,17 +771,97 @@ func _server_set_all_armies_aggressive():
 			continue
 		if a.owner_peer_id != sender:
 			continue
-		a.stance = "aggressive"
+		a.set_stance(_Army3D.Stance.AGGRESSIVE)
 		n += 1
-	rpc("_client_set_army_stance_for_owner", sender, "aggressive")
+	var ids: Array = []
+	for a in armies:
+		if a and is_instance_valid(a) and not a.is_routed and a.owner_peer_id == sender:
+			ids.append(a.army_id)
+	rpc("_client_sync_army_stance", ids, _Army3D.Stance.AGGRESSIVE)
 	var marker = "TEST_A_AGGRESSIVE" if pname == "A" else "TEST_B_AGGRESSIVE"
 	print("%s: Player '%s' set %d armies to aggressive" % [marker, pname, n])
 
 @rpc("authority", "reliable")
+func _client_sync_army_stance(army_ids: Array, new_stance: int):
+	for aid in army_ids:
+		var army = _find_army(str(aid))
+		if army and is_instance_valid(army):
+			army.set_stance(new_stance)
+
+@rpc("authority", "reliable")
 func _client_set_army_stance_for_owner(owner_pid: int, new_stance: String):
+	var s := _Army3D.Stance.DEFENSIVE
+	match new_stance:
+		"aggressive":
+			s = _Army3D.Stance.AGGRESSIVE
+		"hold":
+			s = _Army3D.Stance.HOLD
+		"passive":
+			s = _Army3D.Stance.PASSIVE
+	var ids: Array = []
 	for a in armies:
 		if a and is_instance_valid(a) and a.owner_peer_id == owner_pid:
-			a.stance = new_stance
+			ids.append(a.army_id)
+	_client_sync_army_stance(ids, s)
+
+@rpc("any_peer", "reliable")
+func _server_armies_set_stance(army_ids: Array, stance: int):
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var synced: Array = []
+	for aid in army_ids:
+		var army = _find_army(str(aid))
+		if army == null or army.owner_peer_id != sender or army.is_routed:
+			continue
+		army.set_stance(stance)
+		synced.append(str(aid))
+	if not synced.is_empty():
+		rpc("_client_sync_army_stance", synced, stance)
+
+@rpc("any_peer", "reliable")
+func _server_army_order_attack(army_id: String, target_army_id: String, target_unit_name: String):
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var army = _find_army(army_id)
+	if army == null or army.owner_peer_id != sender or army.is_routed:
+		return
+	army_follow_target.erase(army_id)
+	if target_army_id != "":
+		army.issue_attack_army(target_army_id)
+		print("TEST_ARMY_ATTACK: %s -> army %s" % [army_id, target_army_id])
+	elif target_unit_name != "":
+		army.issue_attack_unit(target_unit_name)
+		print("TEST_ARMY_ATTACK: %s -> unit %s" % [army_id, target_unit_name])
+	rpc("_client_army_order_attack", army_id, target_army_id, target_unit_name)
+
+@rpc("authority", "reliable")
+func _client_army_order_attack(army_id: String, target_army_id: String, target_unit_name: String):
+	var army = _find_army(army_id)
+	if army == null:
+		return
+	if target_army_id != "":
+		army.issue_attack_army(target_army_id)
+	elif target_unit_name != "":
+		army.issue_attack_unit(target_unit_name)
+
+@rpc("any_peer", "reliable")
+func _server_armies_order_attack_move(army_ids: Array, dest_x: float, dest_y: float):
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var dest := Vector2(dest_x, dest_y)
+	for aid in army_ids:
+		var army = _find_army(str(aid))
+		if army == null or army.owner_peer_id != sender or army.is_routed:
+			continue
+		army_follow_target.erase(str(aid))
+		army.issue_attack_move(dest)
+		rpc("_client_move_army", str(aid), dest)
+	print("TEST_ARMY_ATTACK_MOVE: sender=%d dest=(%d,%d) armies=%d" % [
+		sender, int(dest.x), int(dest.y), army_ids.size()
+	])
 
 @rpc("any_peer", "reliable")
 func _server_move_army(aid: String, target: Vector2):
@@ -777,7 +876,7 @@ func _server_move_army(aid: String, target: Vector2):
 	var marker = "TEST_009_MOVE" if army.owner_name == "A" else "TEST_009_MOVE_B"
 	print("%s: Server moving army '%s' to (%d,%d)" % [marker, aid, int(target.x), int(target.y)])
 	army_follow_target.erase(aid)
-	army.move_army(target)
+	army.issue_move(target)
 	rpc("_client_move_army", aid, target)
 
 func _army_center_xz_server(army) -> Vector2:
@@ -955,7 +1054,7 @@ func _server_rotate_army(aid: String, delta_angle: float):
 	rpc("_client_rotate_army", aid, army.direction)
 
 @rpc("any_peer", "reliable")
-func _server_move_group_formation(unit_targets: Array):
+func _server_move_group_formation(unit_targets: Array, attack_move: bool = false):
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
@@ -979,12 +1078,17 @@ func _server_move_group_formation(unit_targets: Array):
 		affected[u.army_id] = true
 		assigned += 1
 	if assigned > 0:
-		print("TEST_GROUP_FORMATION: server assigned=%d sender=%d" % [assigned, sender])
+		print("TEST_GROUP_FORMATION: server assigned=%d sender=%d attack_move=%s" % [
+			assigned, sender, attack_move
+		])
 	for aid_str in affected.keys():
 		army_follow_target.erase(aid_str)
 		var army = _find_army(aid_str)
 		if army == null:
 			continue
+		army.order_type = _Army3D.OrderType.ATTACK_MOVE if attack_move else _Army3D.OrderType.MOVE
+		army.order_target_army_id = ""
+		army.order_target_unit_name = ""
 		var alive = army.get_alive_soldiers()
 		if alive.is_empty():
 			continue
@@ -994,8 +1098,9 @@ func _server_move_group_formation(unit_targets: Array):
 			var mt: Vector2 = s.move_target
 			cx += mt.x
 			cz += mt.y
-		var gy = get_ground_height_at(cx / float(alive.size()), cz / float(alive.size()))
-		army.global_position = Vector3(cx / float(alive.size()), gy, cz / float(alive.size()))
+		army.order_destination = Vector2(cx / float(alive.size()), cz / float(alive.size()))
+		var gy = get_ground_height_at(army.order_destination.x, army.order_destination.y)
+		army.global_position = Vector3(army.order_destination.x, gy, army.order_destination.y)
 
 func _set_player_sides():
 	# Assign each player a map-slot (index into MapConfig.player_starts) by
@@ -1474,10 +1579,7 @@ const MATCH_TIMEOUT_SECONDS := 120.0
 var _match_elapsed: float = 0.0
 var _match_started: bool = false
 
-## Server: for every aggressive (non-routed) army, retarget it to the current position
-## of its closest enemy army once per second. Sets every soldier's goal to a formation
-## slot *around* the enemy center (not via Army3D.move_army, which uses a per-soldier
-## delta that shrinks on repeated ticks and ends up nearly stationary).
+## Server: aggressive stance with no explicit order — chase closest enemy periodically.
 func _update_aggressive_armies(delta: float):
 	_aggressive_timer += delta
 	if _aggressive_timer < AGGRESSIVE_TICK_INTERVAL:
@@ -1486,16 +1588,17 @@ func _update_aggressive_armies(delta: float):
 	for a in armies:
 		if a == null or not is_instance_valid(a) or a.is_routed:
 			continue
-		if a.get("stance") != "aggressive":
+		if a.stance != _Army3D.Stance.AGGRESSIVE:
+			continue
+		if a.has_player_order():
 			continue
 		var enemy = _get_closest_enemy_army(a)
 		if enemy == null:
 			continue
+		a.issue_attack_army(enemy.army_id)
 		var exz := _army_center_xz_server(enemy)
 		exz = Vector2(clampf(exz.x, 0.0, float(MapConfig.width)), clampf(exz.y, 0.0, float(MapConfig.height)))
 		army_follow_target.erase(a.army_id)
-		# Park the army center at the enemy and place each soldier in a formation slot
-		# around that center, directly (bypasses per-call delta drift in move_army).
 		var gy := get_ground_height_at(exz.x, exz.y)
 		a.global_position = Vector3(exz.x, gy, exz.y)
 		var alive: Array = a.get_alive_soldiers()
@@ -1508,10 +1611,131 @@ func _update_aggressive_armies(delta: float):
 			alive[i].sync_target_position = Vector3(p.x, uy, p.y)
 			if alive[i].has_method("set_move_target"):
 				alive[i].set_move_target(p)
+		_apply_army_combat_directives(a)
 		rpc("_client_move_army", a.army_id, exz)
 		print("TEST_AGGRESSIVE_TICK: army=%s owner=%s target_enemy=%s at=(%d,%d)" % [
 			a.army_id, a.owner_name, enemy.army_id, int(exz.x), int(exz.y)
 		])
+
+func _resolve_attack_order_xz(army) -> Vector2:
+	if army.order_target_army_id != "":
+		var enemy = _find_army(army.order_target_army_id)
+		if enemy == null or enemy.is_routed:
+			army.clear_order()
+			return Vector2.ZERO
+		return _army_center_xz_server(enemy)
+	if army.order_target_unit_name != "":
+		var node = get_node_or_null(NodePath(army.order_target_unit_name))
+		if node == null or not is_instance_valid(node) or node.get("is_dead"):
+			army.clear_order()
+			return Vector2.ZERO
+		return Vector2(node.global_position.x, node.global_position.z)
+	return Vector2.ZERO
+
+func _units_in_army(army_id: String) -> Array:
+	var out: Array = []
+	for u in all_units:
+		if u and is_instance_valid(u) and not u.is_dead and str(u.army_id) == army_id:
+			out.append(u)
+	return out
+
+func _nearest_unit_name_to(units: Array, pos: Vector2) -> String:
+	var best := ""
+	var best_dist := 1e10
+	for u in units:
+		var uxz := Vector2(u.global_position.x, u.global_position.z)
+		var d := pos.distance_to(uxz)
+		if d < best_dist:
+			best_dist = d
+			best = str(u.name)
+	return best
+
+func _apply_army_combat_directives(army) -> void:
+	var cmd_name := ""
+	if army.order_type == _Army3D.OrderType.ATTACK:
+		if army.order_target_army_id != "":
+			var enemies := _units_in_army(army.order_target_army_id)
+			for s in army.get_alive_soldiers():
+				var spos := Vector2(s.global_position.x, s.global_position.z)
+				cmd_name = _nearest_unit_name_to(enemies, spos)
+				if s.has_method("set_combat_directives"):
+					s.set_combat_directives(cmd_name, army.stance)
+			return
+		cmd_name = army.order_target_unit_name
+	army.apply_combat_directives_to_soldiers(cmd_name)
+
+func _apply_formation_goals_server(army, center: Vector2) -> void:
+	center = Vector2(
+		clampf(center.x, 0.0, float(MapConfig.width)),
+		clampf(center.y, 0.0, float(MapConfig.height))
+	)
+	var gy := get_ground_height_at(center.x, center.y)
+	army.global_position = Vector3(center.x, gy, center.y)
+	var alive: Array = army.get_alive_soldiers()
+	var positions: Array = army.calculate_formation_positions(center, army.direction, alive.size())
+	for i in range(alive.size()):
+		var p: Vector2 = positions[i]
+		p.x = clampf(p.x, 0.0, float(MapConfig.width))
+		p.y = clampf(p.y, 0.0, float(MapConfig.height))
+		var uy := get_ground_height_at(p.x, p.y) + _unit_half_height(alive[i])
+		alive[i].sync_target_position = Vector3(p.x, uy, p.y)
+		if alive[i].has_method("set_move_target"):
+			alive[i].set_move_target(p)
+
+func _max_pursuit_for_army(army) -> float:
+	var max_p := 40.0
+	for s in army.get_alive_soldiers():
+		var prof: Dictionary = _UnitBehaviour.profile_for_unit(s)
+		max_p = maxf(max_p, float(prof.get("pursuit_distance", 80.0)))
+	return max_p
+
+func _update_army_orders(delta: float) -> void:
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed:
+			continue
+		if a.order_type == _Army3D.OrderType.NONE:
+			_apply_army_combat_directives(a)
+			continue
+		if a.order_type == _Army3D.OrderType.MOVE:
+			a.order_destination = Vector2(a.global_position.x, a.global_position.z)
+			_apply_army_combat_directives(a)
+			continue
+		if a.order_type == _Army3D.OrderType.ATTACK_MOVE:
+			var dest: Vector2 = a.order_destination
+			var acenter := Vector2(a.global_position.x, a.global_position.z)
+			var to_dest := dest - acenter
+			if to_dest.length() > GOAL_ARRIVAL_DIST:
+				var step := minf(to_dest.length(), 50.0 * delta)
+				acenter += to_dest.normalized() * step
+			else:
+				acenter = dest
+			_apply_formation_goals_server(a, acenter)
+			_apply_army_combat_directives(a)
+			continue
+		if a.order_type == _Army3D.OrderType.ATTACK:
+			var target_xz := _resolve_attack_order_xz(a)
+			if target_xz == Vector2.ZERO:
+				continue
+			var acenter := Vector2(a.global_position.x, a.global_position.z)
+			var to_target := target_xz - acenter
+			if to_target.length() > 5.0:
+				var step := minf(to_target.length(), 50.0 * delta)
+				var new_center := acenter + to_target.normalized() * step
+				if a.stance != _Army3D.Stance.AGGRESSIVE:
+					var pursuit := _max_pursuit_for_army(a)
+					if a.stance == _Army3D.Stance.HOLD:
+						pursuit *= 0.5
+					if new_center.distance_to(a.hold_position) > pursuit:
+						var from_hold: Vector2 = new_center - a.hold_position
+						if from_hold.length() > 0.01:
+							new_center = a.hold_position + from_hold.normalized() * pursuit
+						else:
+							new_center = a.hold_position
+				acenter = new_center
+			_apply_formation_goals_server(a, acenter)
+			_apply_army_combat_directives(a)
+
+const GOAL_ARRIVAL_DIST := 0.2
 
 func _physics_process(delta: float):
 	if multiplayer.is_server() and not game_over:
@@ -1520,6 +1744,7 @@ func _physics_process(delta: float):
 			return
 		_server_capture_and_resources(delta)
 		_update_unit_grid()
+		_update_army_orders(delta)
 		_update_aggressive_armies(delta)
 		_update_map_dragon_ai(delta)
 		sync_timer += delta
@@ -1681,6 +1906,8 @@ func _clear_selection():
 		if a and is_instance_valid(a):
 			a.deselect()
 	selected_armies.clear()
+	if _army_command_bar != null:
+		_army_command_bar.set_visible_bar(false)
 
 func _set_selection(armies: Array):
 	_clear_selection()
@@ -1688,6 +1915,8 @@ func _set_selection(armies: Array):
 		if a and is_instance_valid(a) and not a.is_routed:
 			selected_armies.append(a)
 			a.select()
+	if _army_command_bar != null:
+		_army_command_bar.set_visible_bar(selected_armies.size() > 0)
 
 func _get_selected_non_routed() -> Array:
 	var out := []
@@ -1728,6 +1957,10 @@ func _first_alive_soldier_3d(army) -> Node3D:
 
 ## Single RMB click: shift every selected soldier's goal by the same delta so the anchor's goal lands on click.
 ## Delta uses the first alive soldier of the first selected army's current goal (not physical position).
+func _is_attack_move_mode() -> bool:
+	return _army_command_bar != null \
+		and _army_command_bar.get_order_mode() == _ArmyCommandBar.OrderMode.ATTACK_MOVE
+
 func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
@@ -1754,7 +1987,7 @@ func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	if payload.is_empty():
 		return
 	print("%s: Anchor goal move %d units to click (%d,%d)" % [marker, n_units, int(click_c.x), int(click_c.y)])
-	rpc_id(1, "_server_move_group_formation", payload)
+	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
 
 func _ensure_ghost_marker_material() -> StandardMaterial3D:
 	if _ghost_marker_mat == null:
@@ -1817,7 +2050,7 @@ func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 		var p: Vector2 = positions[i]
 		p = _clamp_map_v2(p)
 		payload.append({"n": str(u.name), "x": p.x, "y": p.y})
-	rpc_id(1, "_server_move_group_formation", payload)
+	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
 
 func _handle_world3d_mouse_extended(event: InputEvent):
 	var my_id := multiplayer.get_unique_id()
@@ -1841,13 +2074,18 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 					else:
 						var hit := _raycast_ground_at_screen(_marquee_start_screen)
 						if hit != Vector3.ZERO:
-							var army = _get_army_at(Vector2(hit.x, hit.z), my_id)
-							if army:
-								_set_selection([army])
+							var click_xz := Vector2(hit.x, hit.z)
+							if _army_command_bar != null \
+									and _army_command_bar.get_order_mode() == _ArmyCommandBar.OrderMode.ATTACK \
+									and not _get_selected_non_routed().is_empty():
+								_issue_armies_attack_at(click_xz)
 							else:
-								_clear_selection()
+								var army = _get_army_at(click_xz, my_id)
+								if army:
+									_set_selection([army])
+								else:
+									_clear_selection()
 						else:
-							# Sky / backdrop / off-map click: deselect without raycast stall.
 							_clear_selection()
 				_marquee_active = false
 				if _marquee_overlay:
@@ -1886,6 +2124,14 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 				_update_formation_ghosts_3d(_rmb_press_ground, cur)
 
 func _handle_key(event: InputEventKey):
+	if event is InputEventKey and event.pressed and not event.echo:
+		if _army_command_bar != null:
+			if event.keycode == KEY_M:
+				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.MOVE)
+			elif event.keycode == KEY_A:
+				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.ATTACK)
+			elif event.keycode == KEY_G:
+				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.ATTACK_MOVE)
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
@@ -1896,6 +2142,78 @@ func _handle_key(event: InputEventKey):
 	elif event.keycode == KEY_RIGHT or event.keycode == KEY_E:
 		for army in sel:
 			rpc_id(1, "_server_rotate_army", army.army_id, rotate_amount)
+
+func _on_command_bar_stance(stance: int) -> void:
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var ids: Array = []
+	for a in sel:
+		ids.append(a.army_id)
+	rpc_id(1, "_server_armies_set_stance", ids, stance)
+
+func _get_enemy_army_at(pos_2d: Vector2, for_peer_id: int):
+	var best = null
+	var best_dist = ARMY_CLICK_RADIUS
+	for army in armies:
+		if army.owner_peer_id == for_peer_id or army.is_routed:
+			continue
+		var a_pos = Vector2(army.global_position.x, army.global_position.z)
+		var dist = pos_2d.distance_to(a_pos)
+		if dist < best_dist:
+			best_dist = dist
+			best = army
+	return best
+
+func _get_attackable_unit_at(pos_2d: Vector2, for_peer_id: int):
+	var best = null
+	var best_dist := ARMY_CLICK_RADIUS
+	for dragon in _map_dragons:
+		if dragon == null or not is_instance_valid(dragon) or dragon.get("is_dead"):
+			continue
+		var dxz := Vector2(dragon.global_position.x, dragon.global_position.z)
+		var dist := pos_2d.distance_to(dxz)
+		if dist < best_dist:
+			best_dist = dist
+			best = dragon
+	for u in all_units:
+		if u == null or not is_instance_valid(u) or u.get("is_dead"):
+			continue
+		if u.owner_peer_id == for_peer_id:
+			continue
+		if UNIT_SPRITE_PATHS.is_neutral_owner(int(u.get("owner_peer_id"))):
+			continue
+		var uxz := Vector2(u.global_position.x, u.global_position.z)
+		var dist2 := pos_2d.distance_to(uxz)
+		if dist2 < best_dist:
+			best_dist = dist2
+			best = u
+	return best
+
+func _issue_armies_attack_at(pos: Vector2) -> void:
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var my_id := multiplayer.get_unique_id()
+	var enemy_army = _get_enemy_army_at(pos, my_id)
+	if enemy_army != null:
+		for a in sel:
+			rpc_id(1, "_server_army_order_attack", a.army_id, enemy_army.army_id, "")
+		return
+	var unit = _get_attackable_unit_at(pos, my_id)
+	if unit != null:
+		for a in sel:
+			rpc_id(1, "_server_army_order_attack", a.army_id, "", str(unit.name))
+
+func _issue_armies_attack_move_3d(dest: Vector2) -> void:
+	var sel := _get_selected_non_routed()
+	if sel.is_empty():
+		return
+	var ids: Array = []
+	for a in sel:
+		ids.append(a.army_id)
+	var dest_c := _clamp_map_v2(dest)
+	rpc_id(1, "_server_armies_order_attack_move", ids, dest_c.x, dest_c.y)
 
 func _get_army_at(pos_2d: Vector2, peer_id: int):
 	var best = null
