@@ -1,15 +1,12 @@
 
-ad horse soldier for red and blue. (test if I can do this via gemmini api )
+ad water to the map (with a bit of reflections? OBS only fast solutions ok here .. )
 
-make a strategy for if soldiers should stop , slow downn or something. during combat. (dependent on waht soldier?)
 
-make ground uneven terrain.
 
 ad obsticles that cant be walked though. 
 
 Replace capture points with images.(that later can be updated to sprites)
 
-update images to sprites 
 
 Add wall building and stone capture points.
 
@@ -18,4 +15,3 @@ Add one-time capture points(loot) that give the player a single resource boost w
 make arrows fly through the air.
 make cavalary cahrges work. 
 
-make images for all combinations of the wepons and horses possible. (use gemini python api intergration)
