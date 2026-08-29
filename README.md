@@ -82,9 +82,22 @@ The arena is described entirely by the chosen map JSON. This is the single place
 ```
 
 - `size` — play-area width (X) and height (Z in 3D). All camera and movement clamping uses these.
-- `terrain.type` / `terrain.features` — hills use radial Gaussian bumps; ridges use a Gaussian spine between two endpoints (`x1/y1` → `x2/y2`, `width`, `height`). Height at any point is the max over all features.
+- `terrain.type` / `terrain.features` — analytical terrain built at startup. Height at any point is the **max** over positive features (`hill`, `ridge`, `spline_ridge`, `plateau`), then **valleys** carve downward (clamped to 0). Feature schemas:
+  - **hill** — radial Gaussian bump: `{type, x, y, base_width, height}` (`y` is map Z).
+  - **ridge** — straight Gaussian spine: `{type, x1, y1, x2, y2, width, height}`.
+  - **spline_ridge** — curved Gaussian spine through control points: `{type, points: [{x, y}, ...], width, height}` (≥2 points; Catmull-Rom spline).
+  - **plateau** — flat top with smooth rim: `{type, x, y, radius, falloff, height}`.
+  - **plateau_polygon** — flat polygon top with smooth exterior falloff: `{type, points: [{x, y}, ...], height, falloff}` (≥3 points).
+  - **valley** — radial carve (subtract from positive height): `{type, x, y, base_width, depth}`.
+  - **valley_polygon** — smooth polygon depression (inverted hill): `{type, points: [{x, y}, ...], depth, falloff}` (≥3 points).
 - `capture_points[]` — capturable objectives; types: `Stables`, `Blacksmith`, `Village`, `Archery`. IDs `Stables` and `Blacksmith` are used by the auto-test on all map sizes.
 - `player_starts[]` — four corner slots (NW/SE/NE/SW). Join order assigns slot 0, 1, … Each slot lists armies with `{x, y, direction}`; optional `horse`/`spear`/`bow` for equipment.
+- `lighting` (optional) — directional sun applied at runtime after terrain is built. [`World.gd`](World.gd) scales sun orbit and shadow distance from map size and final max terrain height.
+  - `sun_azimuth_deg` — compass bearing where the sun sits: **0 = north (−Z)**, **90 = east (+X)**, **180 = south (+Z)**. Default **275**.
+  - `sun_elevation_deg` — degrees above the horizon. Default **0** (low horizontal sun).
+  - `energy` — directional light strength (vertex height tint remains the primary summit signal). Default **0.12**.
+  - `color` — RGB array, e.g. `[1.0, 0.98, 0.95]`.
+  - `shadow_max_distance` — `null` = auto (`max(800, map_diagonal × 0.35 + max_terrain_height × 1.5)`); or a fixed number.
 - `neutral_dragon` (S) or `neutral_dragons[]` (optional on other maps) — optional map guardians.
 
 `MockPlayer` never opens map JSON; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.

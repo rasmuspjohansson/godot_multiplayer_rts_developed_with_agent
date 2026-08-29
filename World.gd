@@ -61,6 +61,8 @@ const CORRECTION_THRESHOLD := 120.0
 const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
+const LAKES_WATER_TEXTURE_PATH := "res://images/background/lakes_water.png"
+const _WaterBuilder = preload("res://WaterBuilder.gd")
 const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
 const CP_BLACKSMITH_TEXTURE_PATH := "res://images/background/blacksmith2.png"
 const CP_VILLAGE_TEXTURE_PATH := "res://images/capture_points/village/village.png"
@@ -129,6 +131,14 @@ var _show_unit_range: bool = false
 var _show_range_cb: CheckBox = null
 var _range_markers_3d: Node3D
 var _range_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
+var _sun_azimuth_deg: float = 275.0
+var _sun_elevation_deg: float = 0.0
+var _sun_energy: float = 0.12
+var _sun_light_color: Color = Color(1.0, 0.98, 0.95)
+var _lighting_azimuth_value_label: Label = null
+var _lighting_elevation_value_label: Label = null
+var _lighting_energy_value_label: Label = null
+var _lighting_summary_label: Label = null
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
 ## Terrain height grid built in `_build_terrain()`; used as fallback when physics raycast misses.
@@ -158,6 +168,186 @@ func _recompute_max_terrain_height() -> void:
 	for h in _terrain_heights:
 		if h > _max_terrain_height:
 			_max_terrain_height = h
+
+func _sun_orbit_position(
+	azimuth_deg: float,
+	elevation_deg: float,
+	center: Vector3,
+	radius: float
+) -> Vector3:
+	var az := deg_to_rad(azimuth_deg)
+	var el := deg_to_rad(elevation_deg)
+	var cos_el := cos(el)
+	return center + Vector3(
+		sin(az) * cos_el * radius,
+		sin(el) * radius,
+		-cos(az) * cos_el * radius
+	)
+
+func _lighting_shadow_max_distance(lighting: Dictionary) -> float:
+	var configured: float = float(lighting.get("shadow_max_distance", -1.0))
+	if configured >= 0.0:
+		return configured
+	return maxf(800.0, _map_diagonal() * 0.35 + _max_terrain_height * 1.5)
+
+func _configure_map_lighting() -> void:
+	var cfg := MapConfig.get_lighting()
+	_sun_azimuth_deg = cfg.sun_azimuth_deg
+	_sun_elevation_deg = cfg.sun_elevation_deg
+	_sun_energy = cfg.energy
+	var color_arr: Array = cfg.color
+	_sun_light_color = Color(
+		float(color_arr[0]),
+		float(color_arr[1]),
+		float(color_arr[2])
+	)
+	_apply_sun_lighting()
+	var shadow_dist := _lighting_shadow_max_distance(cfg)
+	print(
+		"TEST_LIGHTING_OK: az=%.1f el=%.1f energy=%.2f shadow=%.1f max_h=%.1f"
+		% [_sun_azimuth_deg, _sun_elevation_deg, _sun_energy, shadow_dist, _max_terrain_height]
+	)
+
+func _apply_sun_lighting() -> void:
+	var light := get_node_or_null("DirectionalLight3D")
+	if light == null:
+		return
+	var cfg := MapConfig.get_lighting()
+	var center := Vector3(
+		MapConfig.width * 0.5,
+		_max_terrain_height * 0.5,
+		MapConfig.height * 0.5
+	)
+	var orbit_radius := maxf(
+		_map_diagonal() * 0.35,
+		_max_terrain_height * 2.5 + 300.0
+	)
+	light.global_position = _sun_orbit_position(
+		_sun_azimuth_deg, _sun_elevation_deg, center, orbit_radius
+	)
+	light.look_at(center, Vector3.UP)
+	light.light_color = _sun_light_color
+	light.light_energy = _sun_energy
+	light.directional_shadow_max_distance = _lighting_shadow_max_distance(cfg)
+	_update_lighting_tuning_display()
+
+func _update_lighting_tuning_display() -> void:
+	if _lighting_azimuth_value_label != null:
+		_lighting_azimuth_value_label.text = "%.0f" % _sun_azimuth_deg
+	if _lighting_elevation_value_label != null:
+		_lighting_elevation_value_label.text = "%.0f" % _sun_elevation_deg
+	if _lighting_energy_value_label != null:
+		_lighting_energy_value_label.text = "%.2f" % _sun_energy
+	if _lighting_summary_label != null:
+		_lighting_summary_label.text = (
+			'"sun_azimuth_deg": %.1f, "sun_elevation_deg": %.1f, "energy": %.2f'
+			% [_sun_azimuth_deg, _sun_elevation_deg, _sun_energy]
+		)
+
+func _on_lighting_azimuth_changed(value: float) -> void:
+	_sun_azimuth_deg = value
+	_apply_sun_lighting()
+
+func _on_lighting_elevation_changed(value: float) -> void:
+	_sun_elevation_deg = value
+	_apply_sun_lighting()
+
+func _on_lighting_energy_changed(value: float) -> void:
+	_sun_energy = value
+	_apply_sun_lighting()
+
+func _setup_lighting_tuning_panel() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "LightingTuningLayer"
+	layer.layer = 50
+	add_child(layer)
+
+	var panel := PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel.offset_left = -300.0
+	panel.offset_top = 40.0
+	panel.offset_right = -10.0
+	panel.offset_bottom = 230.0
+	layer.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 8)
+	margin.add_theme_constant_override("margin_top", 6)
+	margin.add_theme_constant_override("margin_right", 8)
+	margin.add_theme_constant_override("margin_bottom", 6)
+	panel.add_child(margin)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 6)
+	margin.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "Sun lighting"
+	title.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(title)
+
+	_add_lighting_slider_row(vbox, "Azimuth", 0.0, 360.0, 1.0, _sun_azimuth_deg, _on_lighting_azimuth_changed, "azimuth")
+	_add_lighting_slider_row(vbox, "Elevation", 0.0, 90.0, 1.0, _sun_elevation_deg, _on_lighting_elevation_changed, "elevation")
+	_add_lighting_slider_row(vbox, "Energy", 0.0, 2.0, 0.01, _sun_energy, _on_lighting_energy_changed, "energy")
+
+	var hint := Label.new()
+	hint.text = "Copy for map JSON:"
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
+	vbox.add_child(hint)
+
+	_lighting_summary_label = Label.new()
+	_lighting_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_lighting_summary_label.add_theme_font_size_override("font_size", 11)
+	_lighting_summary_label.add_theme_color_override("font_color", Color(0.95, 0.95, 0.7))
+	vbox.add_child(_lighting_summary_label)
+	_update_lighting_tuning_display()
+
+func _add_lighting_slider_row(
+	parent: Control,
+	label_text: String,
+	min_v: float,
+	max_v: float,
+	step: float,
+	initial: float,
+	changed_cb: Callable,
+	value_key: String
+) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	parent.add_child(row)
+
+	var name_label := Label.new()
+	name_label.text = label_text
+	name_label.custom_minimum_size = Vector2(70.0, 0.0)
+	name_label.add_theme_font_size_override("font_size", 12)
+	row.add_child(name_label)
+
+	var slider := HSlider.new()
+	slider.min_value = min_v
+	slider.max_value = max_v
+	slider.step = step
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.value = initial
+	slider.value_changed.connect(changed_cb)
+	row.add_child(slider)
+
+	var value_label := Label.new()
+	value_label.custom_minimum_size = Vector2(44.0, 0.0)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.add_theme_font_size_override("font_size", 12)
+	if value_key == "energy":
+		value_label.text = "%.2f" % initial
+	else:
+		value_label.text = "%.0f" % initial
+	match value_key:
+		"azimuth":
+			_lighting_azimuth_value_label = value_label
+		"elevation":
+			_lighting_elevation_value_label = value_label
+		"energy":
+			_lighting_energy_value_label = value_label
+	row.add_child(value_label)
 
 func _client_unit_scene_visible(u: Node) -> bool:
 	if not u.is_visible_in_tree():
@@ -234,6 +424,7 @@ func _ready():
 		ground_collision.collision_layer = 2
 		ground_collision.collision_mask = 0
 	_build_terrain()
+	add_water()
 	_build_background()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
@@ -247,6 +438,7 @@ func _ready():
 		_setup_background_music()
 	_setup_topbar()
 	_setup_draft_menu()
+	_setup_lighting_tuning_panel()
 	if not multiplayer.is_server():
 		_setup_army_command_bar()
 	_add_play_boundary_line()
@@ -270,6 +462,72 @@ func _init_offmap_lanes() -> void:
 ## collision layer 2, so later objects placed on top of the ground will
 ## automatically count without touching any call sites.
 const _TERRAIN_STEP := 20.0
+const _TERRAIN_FLOOR_H := 5.0
+const _TERRAIN_TINT_RADIUS := 4
+const _TERRAIN_FLAT_SPAN := 4.0
+const _TERRAIN_VALLEY_TINT := Color(0.90, 0.95, 0.86)
+const _TERRAIN_PEAK_TINT := Color(1.10, 1.06, 0.92)
+
+func _terrain_height_stats(heights: PackedFloat32Array) -> Dictionary:
+	var max_h := 0.0
+	var sorted: Array = []
+	sorted.resize(heights.size())
+	for k in range(heights.size()):
+		var hv: float = heights[k]
+		max_h = maxf(max_h, hv)
+		sorted[k] = hv
+	sorted.sort()
+	var n: int = sorted.size()
+	var p50: float = sorted[mini(n / 2, n - 1)] if n > 0 else 0.0
+	var p90: float = sorted[mini(int(n * 0.90), n - 1)] if n > 0 else 0.0
+	return {"max_h": max_h, "p50": p50, "p90": p90}
+
+func _terrain_local_height_range(
+	heights: PackedFloat32Array,
+	cols: int,
+	rows: int,
+	i: int,
+	j: int,
+	radius: int
+) -> Vector2:
+	var local_min := INF
+	var local_max := -INF
+	for dj in range(-radius, radius + 1):
+		for di in range(-radius, radius + 1):
+			var ni: int = clampi(i + di, 0, cols - 1)
+			var nj: int = clampi(j + dj, 0, rows - 1)
+			var hv: float = heights[nj * cols + ni]
+			local_min = minf(local_min, hv)
+			local_max = maxf(local_max, hv)
+	return Vector2(local_min, local_max)
+
+func _terrain_vertex_tint_t(
+	y: float,
+	heights: PackedFloat32Array,
+	cols: int,
+	rows: int,
+	i: int,
+	j: int,
+	max_h: float,
+	p50: float,
+	p90: float
+) -> float:
+	var local_range: Vector2 = _terrain_local_height_range(
+		heights, cols, rows, i, j, _TERRAIN_TINT_RADIUS
+	)
+	var local_min: float = local_range.x
+	var span: float = local_range.y - local_min
+	var t_local: float = clampf((y - local_min) / maxf(span, 1.0), 0.0, 1.0)
+	var t_global: float = clampf((y - p50) / maxf(p90 - p50, 1.0), 0.0, 1.0)
+	var t_absolute: float = 0.0
+	if max_h > _TERRAIN_FLOOR_H:
+		t_absolute = clampf((y - _TERRAIN_FLOOR_H) / (max_h - _TERRAIN_FLOOR_H), 0.0, 1.0)
+	var t: float = t_local
+	if span < _TERRAIN_FLAT_SPAN:
+		t = maxf(t_global, t_absolute * 0.5)
+	else:
+		t = maxf(t_local, t_global * 0.25)
+	return maxf(t, t_absolute)
 
 func _build_terrain() -> void:
 	var w: float = MapConfig.width
@@ -303,7 +561,7 @@ func _build_terrain() -> void:
 			var z := float(j) * step
 			var y := heights[j * cols + i]
 			verts[j * cols + i] = Vector3(x, y, z)
-			uvs[j * cols + i] = Vector2(x / w, z / h)
+			uvs[j * cols + i] = Vector2(float(i) / float(maxi(cols - 1, 1)), float(j) / float(maxi(rows - 1, 1)))
 			# Finite-difference normal (cheap; forward/backward at edges).
 			var i0: int = max(i - 1, 0)
 			var i1: int = min(i + 1, cols - 1)
@@ -312,6 +570,19 @@ func _build_terrain() -> void:
 			var dhdx: float = (heights[j * cols + i1] - heights[j * cols + i0]) / max(float(i1 - i0) * step, 1.0)
 			var dhdz: float = (heights[j1 * cols + i] - heights[j0 * cols + i]) / max(float(j1 - j0) * step, 1.0)
 			norms[j * cols + i] = Vector3(-dhdx, 1.0, -dhdz).normalized()
+	var height_stats: Dictionary = _terrain_height_stats(heights)
+	var max_h: float = height_stats.max_h
+	var p50: float = height_stats.p50
+	var p90: float = height_stats.p90
+	var colors := PackedColorArray()
+	colors.resize(cols * rows)
+	for j in range(rows):
+		for i in range(cols):
+			var y: float = heights[j * cols + i]
+			var t: float = _terrain_vertex_tint_t(
+				y, heights, cols, rows, i, j, max_h, p50, p90
+			)
+			colors[j * cols + i] = _TERRAIN_VALLEY_TINT.lerp(_TERRAIN_PEAK_TINT, t)
 	for j in range(rows - 1):
 		for i in range(cols - 1):
 			var a: int = j * cols + i
@@ -329,6 +600,7 @@ func _build_terrain() -> void:
 	arrays[Mesh.ARRAY_VERTEX] = verts
 	arrays[Mesh.ARRAY_NORMAL] = norms
 	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = colors
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var array_mesh := ArrayMesh.new()
 	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -336,9 +608,11 @@ func _build_terrain() -> void:
 	var ground_tex := _load_ground_texture()
 	if ground_tex != null:
 		grass_mat.albedo_texture = ground_tex
-		grass_mat.albedo_color = Color(1.15, 1.15, 1.10)
+		grass_mat.albedo_color = Color(1.0, 1.0, 1.0)
 	else:
 		grass_mat.albedo_color = Color(0.46, 0.71, 0.32)
+	grass_mat.vertex_color_use_as_albedo = true
+	grass_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	grass_mat.roughness = 0.85
 	grass_mat.metallic = 0.0
 	grass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
@@ -365,10 +639,62 @@ func _build_terrain() -> void:
 			shape_node.shape = terrain_shape
 			shape_node.transform = Transform3D.IDENTITY
 	_recompute_max_terrain_height()
-	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges" % [cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size()])
+	_configure_map_lighting()
+	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons" % [
+		cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size(),
+		MapConfig._spline_ridges.size(), MapConfig._plateaus.size(), MapConfig._plateau_polygons.size(),
+		MapConfig._valleys.size(), MapConfig._valley_polygons.size()
+	])
 
 func _load_ground_texture() -> Texture2D:
 	return _load_image_texture(GROUND_TEXTURE_PATH)
+
+func add_water() -> void:
+	var water_root := get_node_or_null("Water")
+	if water_root == null:
+		water_root = Node3D.new()
+		water_root.name = "Water"
+		add_child(water_root)
+	for child in water_root.get_children():
+		child.queue_free()
+	if _terrain_heights.is_empty():
+		print("TEST_WATER_BUILT: lakes=0 cells=0")
+		return
+	var params: Dictionary = _WaterBuilder.default_params()
+	var basins: Array = []
+	if MapConfig.map_size == "XL":
+		params.min_cells = 12
+		params.water_depth = 10.0
+		basins = _WaterBuilder.detect_valley_polygon_lakes(
+			_terrain_heights,
+			_terrain_cols,
+			_terrain_rows,
+			_terrain_step,
+			MapConfig.width,
+			MapConfig.height,
+			MapConfig.get_valley_polygons(),
+			params
+		)
+	else:
+		basins = _WaterBuilder.detect_lake_basins(
+			_terrain_heights,
+			_terrain_cols,
+			_terrain_rows,
+			_terrain_step,
+			MapConfig.width,
+			MapConfig.height,
+			params
+		)
+	var water_tex := _load_image_texture(LAKES_WATER_TEXTURE_PATH)
+	var total_cells := 0
+	for basin in basins:
+		var mat: StandardMaterial3D = _WaterBuilder.make_water_material(water_tex)
+		var lake_mesh: MeshInstance3D = _WaterBuilder.make_lake_mesh(basin, mat)
+		if lake_mesh.mesh == null:
+			continue
+		water_root.add_child(lake_mesh)
+		total_cells += basin.cell_count
+	print("TEST_WATER_BUILT: lakes=%d cells=%d" % [basins.size(), total_cells])
 
 func _build_background() -> void:
 	# Painted horizon backdrop along the z=0 map edge (the side furthest from

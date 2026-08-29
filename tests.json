@@ -108,6 +108,10 @@
       "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
     },
     {
+      "description_of_test": "Terrain feature types: hill, ridge, spline_ridge, plateau raise height; valley carves; heights stay >= 0",
+      "implementation": "godot --headless --path . -s test_terrain_feature_types.gd 2>&1 | grep -q 'TEST_TERRAIN_FEATURES_OK'"
+    },
+    {
       "description_of_test": "Terrain raycast matches MapConfig.sample_height on hill sample points (delta < 0.5)",
       "implementation": "godot --headless --path . -s test_terrain_height_consistency.gd 2>&1 | grep -q 'TEST_TERRAIN_HEIGHT_OK'"
     },
@@ -122,6 +126,22 @@
     {
       "description_of_test": "XL max zoom: hold W until north map edge reaches viewport (visible ground min_z <= 40)",
       "implementation": "godot --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd 2>&1 | grep -q 'TEST_CAMERA_W_PAN_OK'"
+    },
+    {
+      "description_of_test": "XL auto-detected lakes: terrain basins spawn water planes with lakes_water.png",
+      "implementation": "godot --headless --path . --map=XL -s test_water_lakes.gd 2>&1 | grep -q 'TEST_WATER_OK'"
+    },
+    {
+      "description_of_test": "Lake polygon mesh: L-shaped mask boundary traces, expands, and triangulates",
+      "implementation": "godot --headless --path . -s test_water_polygon.gd 2>&1 | grep -q 'TEST_WATER_POLYGON_OK'"
+    },
+    {
+      "description_of_test": "Lake basin filter: reject interior high ground (donut); clip cells above water surface",
+      "implementation": "godot --headless --path . -s test_water_basin_filter.gd 2>&1 | grep -q 'TEST_WATER_BASIN_FILTER_OK'"
+    },
+    {
+      "description_of_test": "XL per-map lighting: directional shadow distance scales with terrain; ground uses PER_PIXEL shading",
+      "implementation": "godot --headless --path . --map=XL -s test_map_lighting.gd 2>&1 | grep -q 'TEST_LIGHTING_OK'"
     }
   ],
   "ad_hoc_tests": [

@@ -9,6 +9,13 @@
       {"type": "hill", "x": 900.0, "y": 200.0, "base_width": 240.0, "height": 22.0}
     ]
   },
+  "lighting": {
+    "sun_azimuth_deg": 275.0,
+    "sun_elevation_deg": 0.0,
+    "energy": 0.12,
+    "color": [1.0, 0.98, 0.95],
+    "shadow_max_distance": null
+  },
   "neutral_dragon": {"x": 640.0, "y": 360.0, "color": "red"},
   "capture_points": [
     {"id": "Stables",    "type": "Stables",    "x": 499.2, "y": 201.6},

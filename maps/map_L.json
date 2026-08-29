@@ -9,6 +9,13 @@
       {"type": "hill", "x": 1800.0, "y": 400.0, "base_width": 480.0, "height": 22.0}
     ]
   },
+  "lighting": {
+    "sun_azimuth_deg": 275.0,
+    "sun_elevation_deg": 0.0,
+    "energy": 0.12,
+    "color": [1.0, 0.98, 0.95],
+    "shadow_max_distance": null
+  },
   "capture_points": [
     {"id": "Stables",     "type": "Stables",    "x": 998.4,  "y": 403.2},
     {"id": "Blacksmith",  "type": "Blacksmith", "x": 1561.6, "y": 403.2},

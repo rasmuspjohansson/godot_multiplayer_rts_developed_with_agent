@@ -18,11 +18,26 @@ echo "=== Headless: test_world3d_spawn.gd ==="
 echo "=== Headless: test_world3d_goal_arrival.gd ==="
 "$GODOT_BIN" --headless --path . -s test_world3d_goal_arrival.gd
 
+echo "=== Headless: test_terrain_feature_types.gd ==="
+"$GODOT_BIN" --headless --path . -s test_terrain_feature_types.gd
+
 echo "=== Headless: test_xl_map_bounds.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_xl_map_bounds.gd
 
 echo "=== Headless: test_camera_w_pan_zoom_out.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd
+
+echo "=== Headless: test_water_lakes.gd (--map=XL) ==="
+"$GODOT_BIN" --headless --path . --map=XL -s test_water_lakes.gd
+
+echo "=== Headless: test_water_polygon.gd ==="
+"$GODOT_BIN" --headless --path . -s test_water_polygon.gd
+
+echo "=== Headless: test_water_basin_filter.gd ==="
+"$GODOT_BIN" --headless --path . -s test_water_basin_filter.gd
+
+echo "=== Headless: test_map_lighting.gd (--map=XL) ==="
+"$GODOT_BIN" --headless --path . --map=XL -s test_map_lighting.gd
 
 if [[ "${1:-}" == "--with-logs" ]]; then
 	echo "=== verify_test_logs.sh ==="
