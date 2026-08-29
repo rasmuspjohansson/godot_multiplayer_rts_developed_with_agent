@@ -4,6 +4,7 @@ extends CharacterBody3D
 const SPRITESHEET_ANIM := preload("res://SpritesheetAnim.gd")
 const UNIT_SPRITE_PATHS := preload("res://UnitSpritePaths.gd")
 const UNIT_BEHAVIOUR := preload("res://UnitBehaviour.gd")
+const _ArrowTrajectory := preload("res://ArrowTrajectory.gd")
 
 signal unit_died(peer_id: int)
 
@@ -79,6 +80,8 @@ func world_sprite_height() -> float:
 
 ## Server: move goal in map XZ (same as legacy Unit move_target Vector2).
 var move_target: Vector2 = Vector2.ZERO
+var _path_waypoints: PackedVector2Array = PackedVector2Array()
+var _path_index: int = 0
 var is_moving := false
 var attack_timer: float = 0.0
 var attack_cooldown: float = 1.0
@@ -179,16 +182,40 @@ func _ground_y() -> float:
 		return w.get_ground_height_at(global_position.x, global_position.z)
 	return 0.0
 
-func set_move_target(xz: Vector2):
+func set_move_target(xz: Vector2) -> void:
 	xz = _clamp_map_xz(xz)
-	move_target = xz
+	if multiplayer.is_server():
+		_assign_path_to_goal(Vector2(global_position.x, global_position.z), xz)
+
+func _assign_path_to_goal(from_xz: Vector2, to_xz: Vector2) -> bool:
+	var w = get_parent()
+	if w != null and w.has_method("prepare_unit_move_target"):
+		var path: PackedVector2Array = w.prepare_unit_move_target(from_xz, to_xz)
+		if path.is_empty():
+			return false
+		_set_path_waypoints(path)
+		return true
+	_set_path_waypoints(PackedVector2Array([to_xz]))
+	return true
+
+func _set_path_waypoints(path: PackedVector2Array) -> void:
+	if path.is_empty():
+		return
+	_path_waypoints = path
+	_path_index = 0
+	move_target = path[path.size() - 1]
 	is_moving = true
 	_goal_settled = false
 	_settled_goal = Vector3.ZERO
 	if not multiplayer.is_server():
-		var gy = _ground_y_at(xz.x, xz.y)
-		sync_target_position = Vector3(xz.x, gy + half_height, xz.y)
+		var gy = _ground_y_at(move_target.x, move_target.y)
+		sync_target_position = Vector3(move_target.x, gy + half_height, move_target.y)
 		has_move_goal = true
+
+func _current_steer_target_xz() -> Vector2:
+	if _path_waypoints.is_empty():
+		return move_target
+	return _path_waypoints[mini(_path_index, _path_waypoints.size() - 1)]
 
 ## Map XZ goal for anchor moves: server uses move_target while moving, else current position.
 ## Client uses sync_target while has_move_goal, else current position.
@@ -206,6 +233,8 @@ func initialize_goal_at_current():
 	if not multiplayer.is_server():
 		return
 	move_target = Vector2(global_position.x, global_position.z)
+	_path_waypoints.clear()
+	_path_index = 0
 	is_moving = false
 
 func _ground_y_at(x: float, z: float) -> float:
@@ -493,16 +522,26 @@ func _process(delta: float) -> void:
 	_apply_anim_state(state, delta)
 	_update_facing()
 
-func _distance_to_sync_goal_xz() -> float:
+func _distance_to_final_goal_xz() -> float:
 	return Vector2(
-		sync_target_position.x - global_position.x,
-		sync_target_position.z - global_position.z
+		global_position.x - move_target.x,
+		global_position.z - move_target.y
 	).length()
 
+func _distance_to_steer_target_xz() -> float:
+	var steer := _current_steer_target_xz()
+	return Vector2(
+		global_position.x - steer.x,
+		global_position.z - steer.y
+	).length()
+
+func _distance_to_sync_goal_xz() -> float:
+	return _distance_to_final_goal_xz()
+
 func _refresh_move_goal_state() -> void:
-	var dist := _distance_to_sync_goal_xz()
+	var dist := _distance_to_final_goal_xz()
 	if _goal_settled:
-		if sync_target_position.distance_to(_settled_goal) > GOAL_CHANGE_DIST:
+		if Vector2(move_target.x, move_target.y).distance_to(Vector2(_settled_goal.x, _settled_goal.z)) > GOAL_CHANGE_DIST:
 			_goal_settled = false
 			_settled_goal = Vector3.ZERO
 		elif dist > GOAL_RELEASE_DIST:
@@ -510,9 +549,26 @@ func _refresh_move_goal_state() -> void:
 			_settled_goal = Vector3.ZERO
 	elif dist <= GOAL_ARRIVAL_DIST:
 		_goal_settled = true
-		_settled_goal = sync_target_position
+		var gy := _ground_y_at(move_target.x, move_target.y)
+		_settled_goal = Vector3(move_target.x, gy + half_height, move_target.y)
 		velocity = Vector3.ZERO
+		is_moving = false
+		_path_waypoints.clear()
+		_path_index = 0
 	has_move_goal = not _goal_settled
+
+func _sync_path_index_to_steer_hint(steer_xz: Vector2) -> void:
+	if _path_waypoints.is_empty():
+		return
+	var best_i := _path_index
+	var best_d := INF
+	for i in range(_path_index, _path_waypoints.size()):
+		var d: float = steer_xz.distance_to(_path_waypoints[i])
+		if d < best_d:
+			best_d = d
+			best_i = i
+	if best_i > _path_index:
+		_path_index = best_i
 
 func apply_network_sync(
 	here: Vector3,
@@ -520,14 +576,22 @@ func apply_network_sync(
 	_hp_val: float,
 	in_combat_val: bool,
 	correction_threshold: float,
+	final_goal_xz: Vector2 = Vector2(-1.0, -1.0),
 ) -> void:
 	if global_position.distance_to(here) > correction_threshold:
 		global_position = here
-	var goal_changed := there.distance_to(sync_target_position) > GOAL_CHANGE_DIST
-	sync_target_position = there
+	var final_xz := final_goal_xz
+	if final_xz.x < 0.0:
+		final_xz = Vector2(there.x, there.z)
+	var goal_changed := final_xz.distance_to(move_target) > GOAL_CHANGE_DIST
 	if goal_changed:
 		_goal_settled = false
 		_settled_goal = Vector3.ZERO
+		_assign_path_to_goal(Vector2(global_position.x, global_position.z), final_xz)
+	else:
+		_sync_path_index_to_steer_hint(Vector2(there.x, there.z))
+	var gy := _ground_y_at(final_xz.x, final_xz.y)
+	sync_target_position = Vector3(final_xz.x, gy + half_height, final_xz.y)
 	sync_target_hp = _hp_val
 	hp = _hp_val
 	sync_in_combat = in_combat_val
@@ -550,7 +614,7 @@ func _fight_advance(delta: float):
 func _is_moving() -> bool:
 	if _goal_settled or not has_move_goal:
 		return false
-	return _distance_to_sync_goal_xz() > GOAL_ARRIVAL_DIST
+	return _distance_to_steer_target_xz() > GOAL_ARRIVAL_DIST or _distance_to_final_goal_xz() > GOAL_ARRIVAL_DIST
 
 func _apply_anim_state(state: AnimState, delta: float) -> void:
 	if state != _anim_state:
@@ -666,17 +730,31 @@ func _physics_process(delta: float):
 
 func _server_process(delta: float):
 	if is_moving:
+		var prev_x := global_position.x
+		var prev_z := global_position.z
 		var cur := Vector2(global_position.x, global_position.z)
-		var dist := cur.distance_to(move_target)
+		var steer_target := _current_steer_target_xz()
+		var dist := cur.distance_to(steer_target)
 		if dist <= GOAL_ARRIVAL_DIST:
-			global_position.x = move_target.x
-			global_position.z = move_target.y
-			velocity = Vector3.ZERO
-			is_moving = false
+			if _path_waypoints.size() > 0 and _path_index < _path_waypoints.size() - 1:
+				_path_index += 1
+			else:
+				global_position.x = move_target.x
+				global_position.z = move_target.y
+				velocity = Vector3.ZERO
+				is_moving = false
+				_path_waypoints.clear()
+				_path_index = 0
 		else:
-			var dir_xz := (move_target - cur).normalized()
+			var dir_xz := (steer_target - cur).normalized()
 			velocity = Vector3(dir_xz.x * speed, 0.0, dir_xz.y * speed)
 			move_and_slide()
+			var w = get_parent()
+			if w != null and w.has_method("is_walkable_at") \
+					and not w.is_walkable_at(global_position.x, global_position.z):
+				global_position.x = prev_x
+				global_position.z = prev_z
+				velocity = Vector3.ZERO
 	_apply_ground_height()
 
 	if global_position.x < -MAP_MARGIN or global_position.x > MapConfig.width + MAP_MARGIN \
@@ -772,7 +850,20 @@ func _try_attack():
 	print("TEST_010_COMBAT: %s(%s) attacking %s(%s) dist=%.1f dmg=%.1f" % [
 		owner_name, army_id, child.get("owner_name"), child.get("army_id"), dist, dmg
 	])
-	if child.has_method("take_damage"):
+	if has_bow:
+		var world = get_parent()
+		if world != null:
+			var endpoints: Dictionary = _ArrowTrajectory.arrow_endpoints(global_position, oth.global_position)
+			if world.has_method("spawn_arrow"):
+				world.spawn_arrow(
+					endpoints["from"],
+					endpoints["to"],
+					endpoints["duration"],
+					endpoints["peak"],
+				)
+			if world.has_method("schedule_arrow_damage"):
+				world.schedule_arrow_damage(str(child.name), dmg, owner_peer_id, endpoints["duration"])
+	elif child.has_method("take_damage"):
 		child.take_damage(dmg, owner_peer_id)
 	attack_timer = attack_cooldown
 
@@ -783,19 +874,29 @@ func _client_physics(delta: float):
 		_update_visual_tint()
 		_update_facing()
 		return
-	if has_move_goal:
-		var dist := _distance_to_sync_goal_xz()
-		if dist > GOAL_ARRIVAL_DIST:
+	if has_move_goal and is_moving:
+		var cur := Vector2(global_position.x, global_position.z)
+		var steer_target := _current_steer_target_xz()
+		var dist := cur.distance_to(steer_target)
+		if dist <= GOAL_ARRIVAL_DIST:
+			if _path_waypoints.size() > 0 and _path_index < _path_waypoints.size() - 1:
+				_path_index += 1
+			elif _distance_to_final_goal_xz() <= GOAL_ARRIVAL_DIST:
+				velocity = Vector3.ZERO
+				global_position.x = move_target.x
+				global_position.z = move_target.y
+				is_moving = false
+				_path_waypoints.clear()
+				_path_index = 0
+			else:
+				velocity = Vector3.ZERO
+		else:
 			var dir := Vector3(
-				sync_target_position.x - global_position.x,
+				steer_target.x - global_position.x,
 				0.0,
-				sync_target_position.z - global_position.z
+				steer_target.y - global_position.z
 			) / dist
 			velocity = dir * speed
-		else:
-			velocity = Vector3.ZERO
-			global_position.x = sync_target_position.x
-			global_position.z = sync_target_position.z
 		_refresh_move_goal_state()
 		move_and_slide()
 		hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
@@ -828,9 +929,10 @@ func _update_facing():
 			return
 		var dir_xz := Vector2(velocity.x, velocity.z)
 		if dir_xz.length() < 0.01:
+			var steer := _current_steer_target_xz()
 			var to_goal := Vector2(
-				sync_target_position.x - global_position.x,
-				sync_target_position.z - global_position.z
+				steer.x - global_position.x,
+				steer.y - global_position.z
 			)
 			if to_goal.length() > GOAL_FACING_MIN_DIST:
 				dir_xz = to_goal
@@ -852,9 +954,10 @@ func _update_facing():
 		return
 	var dir_xz := Vector2(velocity.x, velocity.z)
 	if dir_xz.length() < 0.01 and has_move_goal:
+		var steer := _current_steer_target_xz()
 		dir_xz = Vector2(
-			sync_target_position.x - global_position.x,
-			sync_target_position.z - global_position.z
+			steer.x - global_position.x,
+			steer.y - global_position.z
 		)
 	# Update the persistent facing only when horizontal motion is meaningful;
 	# idle soldiers keep whichever direction they last faced.

@@ -52,13 +52,8 @@ func _begin():
 		return
 
 	var mat: Material = mesh.surface_get_material(0)
-	if mat == null or not mat is StandardMaterial3D:
-		print("TEST_TERRAIN_TINT_FAIL: missing StandardMaterial3D")
-		quit(1)
-		return
-	var std: StandardMaterial3D = mat
-	if not std.vertex_color_use_as_albedo:
-		print("TEST_TERRAIN_TINT_FAIL: vertex_color_use_as_albedo not enabled")
+	if mat == null or not (mat is StandardMaterial3D or mat is ShaderMaterial):
+		print("TEST_TERRAIN_TINT_FAIL: missing ground material")
 		quit(1)
 		return
 
@@ -68,6 +63,8 @@ func _begin():
 	var summit_brightness := 0.0
 	var max_brightness := 0.0
 	for i in range(verts.size()):
+		if colors[i].a < 0.5:
+			continue
 		var v: Vector3 = verts[i]
 		var bright: float = _brightness(colors[i])
 		max_brightness = maxf(max_brightness, bright)
@@ -103,6 +100,8 @@ func _begin():
 	var hill_base_brightness: float = INF
 	for i in range(verts.size()):
 		var v: Vector3 = verts[i]
+		if colors[i].a < 0.5:
+			continue
 		var bright: float = _brightness(colors[i])
 		if v.x >= 600.0 and v.x <= 900.0 and v.z >= 820.0 and v.z <= 980.0:
 			hill_top_brightness = maxf(hill_top_brightness, bright)

@@ -62,19 +62,8 @@ func _begin():
 		return
 
 	var mat: Material = mesh.surface_get_material(0)
-	if mat == null or not mat is StandardMaterial3D:
-		print("TEST_LIGHTING_FAIL: missing StandardMaterial3D")
-		quit(1)
-		return
-
-	var std: StandardMaterial3D = mat
-	if std.shading_mode != BaseMaterial3D.SHADING_MODE_PER_PIXEL:
-		print("TEST_LIGHTING_FAIL: ground shading_mode=%d (expected PER_PIXEL)" % std.shading_mode)
-		quit(1)
-		return
-
-	if not std.vertex_color_use_as_albedo:
-		print("TEST_LIGHTING_FAIL: vertex_color_use_as_albedo not enabled")
+	if mat == null or not (mat is StandardMaterial3D or mat is ShaderMaterial):
+		print("TEST_LIGHTING_FAIL: missing ground material")
 		quit(1)
 		return
 

@@ -39,6 +39,9 @@ echo "=== Headless: test_water_basin_filter.gd ==="
 echo "=== Headless: test_map_lighting.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_map_lighting.gd
 
+echo "=== Headless: test_walkability.gd (--map=XL) ==="
+"$GODOT_BIN" --headless --path . --map=XL -s test_walkability.gd
+
 if [[ "${1:-}" == "--with-logs" ]]; then
 	echo "=== verify_test_logs.sh ==="
 	./verify_test_logs.sh

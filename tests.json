@@ -142,6 +142,10 @@
     {
       "description_of_test": "XL per-map lighting: directional shadow distance scales with terrain; ground uses PER_PIXEL shading",
       "implementation": "godot --headless --path . --map=XL -s test_map_lighting.gd 2>&1 | grep -q 'TEST_LIGHTING_OK'"
+    },
+    {
+      "description_of_test": "XL walkability: water and steep slopes blocked; A* paths avoid lakes; steep_hills ground shader",
+      "implementation": "godot --headless --path . --map=XL -s test_walkability.gd 2>&1 | grep -q 'TEST_WALKABILITY_OK'"
     }
   ],
   "ad_hoc_tests": [

@@ -98,6 +98,8 @@ The arena is described entirely by the chosen map JSON. This is the single place
   - `energy` — directional light strength (vertex height tint remains the primary summit signal). Default **0.12**.
   - `color` — RGB array, e.g. `[1.0, 0.98, 0.95]`.
   - `shadow_max_distance` — `null` = auto (`max(800, map_diagonal × 0.35 + max_terrain_height × 1.5)`); or a fixed number.
+- `walkability` (optional) — which terrain cells units may enter; built after terrain and lakes at startup.
+  - `max_slope_deg` — steeper slopes are blocked (default **45**). Blocked cells use `steep_hills.png` on the ground shader; lakes are always blocked.
 - `neutral_dragon` (S) or `neutral_dragons[]` (optional on other maps) — optional map guardians.
 
 `MockPlayer` never opens map JSON; it asks the live game state (armies and capture-point nodes received from the server) for anything it needs. That way a single JSON edit drives server, client rendering, and the bot simultaneously.

@@ -1,5 +1,6 @@
 
 ad water to the map (with a bit of reflections? OBS only fast solutions ok here .. )
+  - auto lakes on XL via add_water() + lakes_water.png (visual only; units still walk through)
 
 
 

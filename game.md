@@ -8,7 +8,7 @@
 
 ## Game View & Controls
 - **Perspective**: Top-down 2D.
-- **Navigation**: `NavigationRegion2D` for pathfinding.
+- **Navigation**: grid `AStarGrid2D` walkability (water + steep slopes) in [`WalkabilityGrid.gd`](WalkabilityGrid.gd); server pathfinds per soldier on move orders.
 - **Player Controls**:
   - Left-click: Select own army.
   - Right-click: Move selected army to clicked position.

@@ -61,6 +61,10 @@ const CORRECTION_THRESHOLD := 120.0
 const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
+const STEEP_HILLS_TEXTURE_PATH := "res://images/background/steep_hills.png"
+const GROUND_WALKABLE_SHADER := preload("res://shaders/ground_walkable.gdshader")
+const WalkabilityGrid = preload("res://WalkabilityGrid.gd")
+const _ArrowProjectile = preload("res://ArrowProjectile.gd")
 const LAKES_WATER_TEXTURE_PATH := "res://images/background/lakes_water.png"
 const _WaterBuilder = preload("res://WaterBuilder.gd")
 const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
@@ -89,6 +93,7 @@ var player_slot := {}  # pid -> int (index into MapConfig.player_starts)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
 var _server_captures: Array = []
+var _pending_arrow_damage: Array = []
 
 var _camera: Camera3D
 var _camera_pivot: Node3D
@@ -125,6 +130,7 @@ var _rmb_press_ground: Vector2 = Vector2.ZERO
 var _rmb_drag_active: bool = false
 var _ghost_root_3d: Node3D
 var _ghost_marker_mat: StandardMaterial3D
+var _ghost_marker_invalid_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
 var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 var _show_unit_range: bool = false
@@ -147,6 +153,8 @@ var _terrain_cols: int = 0
 var _terrain_rows: int = 0
 var _terrain_step: float = _TERRAIN_STEP
 var _max_terrain_height: float = 0.0
+var _water_basins: Array = []
+var _walkability: WalkabilityGrid = null
 
 func _map_diagonal() -> float:
 	return sqrt(MapConfig.width * MapConfig.width + MapConfig.height * MapConfig.height)
@@ -425,6 +433,7 @@ func _ready():
 		ground_collision.collision_mask = 0
 	_build_terrain()
 	add_water()
+	_build_walkability()
 	_build_background()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
@@ -583,6 +592,7 @@ func _build_terrain() -> void:
 				y, heights, cols, rows, i, j, max_h, p50, p90
 			)
 			colors[j * cols + i] = _TERRAIN_VALLEY_TINT.lerp(_TERRAIN_PEAK_TINT, t)
+			colors[j * cols + i].a = 1.0
 	for j in range(rows - 1):
 		for i in range(cols - 1):
 			var a: int = j * cols + i
@@ -604,20 +614,6 @@ func _build_terrain() -> void:
 	arrays[Mesh.ARRAY_INDEX] = indices
 	var array_mesh := ArrayMesh.new()
 	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var grass_mat := StandardMaterial3D.new()
-	var ground_tex := _load_ground_texture()
-	if ground_tex != null:
-		grass_mat.albedo_texture = ground_tex
-		grass_mat.albedo_color = Color(1.0, 1.0, 1.0)
-	else:
-		grass_mat.albedo_color = Color(0.46, 0.71, 0.32)
-	grass_mat.vertex_color_use_as_albedo = true
-	grass_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	grass_mat.roughness = 0.85
-	grass_mat.metallic = 0.0
-	grass_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	grass_mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	array_mesh.surface_set_material(0, grass_mat)
 	var ground := get_node_or_null("Ground")
 	if ground is MeshInstance3D:
 		# ArrayMesh vertices are in world-space, so drop the translation the
@@ -649,6 +645,90 @@ func _build_terrain() -> void:
 func _load_ground_texture() -> Texture2D:
 	return _load_image_texture(GROUND_TEXTURE_PATH)
 
+func _load_steep_hills_texture() -> Texture2D:
+	return _load_image_texture(STEEP_HILLS_TEXTURE_PATH)
+
+func _build_walkability() -> void:
+	if _terrain_heights.is_empty():
+		return
+	var cfg := MapConfig.get_walkability()
+	_walkability = WalkabilityGrid.new()
+	_walkability.build(
+		_terrain_heights,
+		_terrain_cols,
+		_terrain_rows,
+		_terrain_step,
+		_water_basins,
+		cfg.max_slope_deg
+	)
+	_apply_ground_walkability_visual()
+	print(
+		"TEST_WALKABILITY_BUILT: walkable=%d/%d slope_max=%.0f lakes=%d"
+		% [
+			_walkability.walkable_count(),
+			_terrain_cols * _terrain_rows,
+			cfg.max_slope_deg,
+			_water_basins.size(),
+		]
+	)
+
+func _apply_ground_walkability_visual() -> void:
+	var ground := get_node_or_null("Ground")
+	if ground == null or not ground is MeshInstance3D or _walkability == null:
+		return
+	var mesh: Mesh = ground.mesh
+	if mesh == null or mesh.get_surface_count() == 0:
+		return
+	var arrays: Array = mesh.surface_get_arrays(0)
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	for j in range(_terrain_rows):
+		for i in range(_terrain_cols):
+			var idx: int = j * _terrain_cols + i
+			if idx >= colors.size():
+				continue
+			colors[idx].a = 1.0 if _walkability.is_walkable_cell(i, j) else 0.0
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var array_mesh := ArrayMesh.new()
+	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := ShaderMaterial.new()
+	mat.shader = GROUND_WALKABLE_SHADER
+	var grass_tex := _load_ground_texture()
+	var steep_tex := _load_steep_hills_texture()
+	if grass_tex != null:
+		mat.set_shader_parameter("grass_tex", grass_tex)
+	if steep_tex != null:
+		mat.set_shader_parameter("steep_tex", steep_tex)
+	array_mesh.surface_set_material(0, mat)
+	ground.mesh = array_mesh
+	ground.set_surface_override_material(0, null)
+
+func is_walkable_at(x: float, z: float) -> bool:
+	if _walkability == null:
+		return true
+	return _walkability.is_walkable_world(x, z)
+
+func snap_move_goal_xz(xz: Vector2) -> Vector2:
+	xz = _clamp_map_v2(xz)
+	if _walkability == null:
+		return xz
+	return _walkability.nearest_walkable(xz.x, xz.y)
+
+func find_unit_path(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
+	if _walkability == null:
+		return PackedVector2Array([to_xz])
+	return _walkability.find_path(from_xz, to_xz)
+
+func prepare_unit_move_target(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
+	to_xz = snap_move_goal_xz(to_xz)
+	if _walkability == null:
+		return PackedVector2Array([to_xz])
+	if not _walkability.is_walkable_world(to_xz.x, to_xz.y):
+		return PackedVector2Array()
+	var found := _walkability.find_path(from_xz, to_xz)
+	if found.is_empty():
+		return PackedVector2Array()
+	return found
+
 func add_water() -> void:
 	var water_root := get_node_or_null("Water")
 	if water_root == null:
@@ -659,6 +739,7 @@ func add_water() -> void:
 		child.queue_free()
 	if _terrain_heights.is_empty():
 		print("TEST_WATER_BUILT: lakes=0 cells=0")
+		_water_basins = []
 		return
 	var params: Dictionary = _WaterBuilder.default_params()
 	var basins: Array = []
@@ -685,6 +766,7 @@ func add_water() -> void:
 			MapConfig.height,
 			params
 		)
+	_water_basins = basins
 	var water_tex := _load_image_texture(LAKES_WATER_TEXTURE_PATH)
 	var total_cells := 0
 	for basin in basins:
@@ -1650,6 +1732,7 @@ func _server_move_group_formation(unit_targets: Array, attack_move: bool = false
 		var uname := str(entry.get("n", ""))
 		var tx := float(entry.get("x", 0.0))
 		var ty := float(entry.get("y", 0.0))
+		var goal := snap_move_goal_xz(Vector2(tx, ty))
 		var u = get_node_or_null(NodePath(uname))
 		if u == null or not (u is CharacterBody3D):
 			continue
@@ -1658,7 +1741,7 @@ func _server_move_group_formation(unit_targets: Array, attack_move: bool = false
 		if u.owner_peer_id != sender:
 			continue
 		if u.has_method("set_move_target"):
-			u.set_move_target(Vector2(tx, ty))
+			u.set_move_target(goal)
 		affected[u.army_id] = true
 		assigned += 1
 	if assigned > 0:
@@ -2249,18 +2332,13 @@ func _apply_army_combat_directives(army) -> void:
 	army.apply_combat_directives_to_soldiers(cmd_name)
 
 func _apply_formation_goals_server(army, center: Vector2) -> void:
-	center = Vector2(
-		clampf(center.x, 0.0, float(MapConfig.width)),
-		clampf(center.y, 0.0, float(MapConfig.height))
-	)
+	center = snap_move_goal_xz(_clamp_map_v2(center))
 	var gy := get_ground_height_at(center.x, center.y)
 	army.global_position = Vector3(center.x, gy, center.y)
 	var alive: Array = army.get_alive_soldiers()
 	var positions: Array = army.calculate_formation_positions(center, army.direction, alive.size())
 	for i in range(alive.size()):
-		var p: Vector2 = positions[i]
-		p.x = clampf(p.x, 0.0, float(MapConfig.width))
-		p.y = clampf(p.y, 0.0, float(MapConfig.height))
+		var p: Vector2 = snap_move_goal_xz(_clamp_map_v2(positions[i]))
 		var uy := get_ground_height_at(p.x, p.y) + _unit_half_height(alive[i])
 		alive[i].sync_target_position = Vector3(p.x, uy, p.y)
 		if alive[i].has_method("set_move_target"):
@@ -2323,6 +2401,7 @@ const GOAL_ARRIVAL_DIST := 0.2
 
 func _physics_process(delta: float):
 	if multiplayer.is_server() and not game_over:
+		_process_pending_arrow_damage(delta)
 		_check_match_timeout(delta)
 		if game_over:
 			return
@@ -2384,20 +2463,63 @@ func _sync_unit_positions():
 		if u and is_instance_valid(u):
 			if not u.is_dead:
 				var here = u.global_position
-				var mt: Vector2
+				var final_mt: Vector2
 				if u.is_moving:
-					mt = u.move_target
+					final_mt = u.move_target
 				else:
-					mt = Vector2(here.x, here.z)
+					final_mt = Vector2(here.x, here.z)
+				var steer_mt := final_mt
+				if u.is_moving and u.has_method("_current_steer_target_xz"):
+					steer_mt = u._current_steer_target_xz()
 				pos_data.append({
 					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
-					"tx": mt.x, "ty": mt.y,
+					"tx": steer_mt.x, "ty": steer_mt.y,
+					"fx": final_mt.x, "fy": final_mt.y,
 					"ic": u.in_combat,
 					"moving": u.is_moving,
 				})
 			else:
 				dead_names.append(u.name)
 	rpc("_receive_positions", pos_data, dead_names)
+
+func spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
+	if multiplayer.is_server():
+		rpc("_client_spawn_arrow", from, to, duration, peak)
+
+@rpc("authority", "call_local", "reliable")
+func _client_spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
+	var arrow := Node3D.new()
+	arrow.set_script(_ArrowProjectile)
+	add_child(arrow)
+	arrow.setup(from, to, duration, peak)
+
+func schedule_arrow_damage(target_name: String, dmg: float, attacker_id: int, delay: float) -> void:
+	if not multiplayer.is_server():
+		return
+	_pending_arrow_damage.append({
+		"target_name": target_name,
+		"dmg": dmg,
+		"attacker_id": attacker_id,
+		"time_left": delay,
+	})
+
+func _process_pending_arrow_damage(delta: float) -> void:
+	var i := 0
+	while i < _pending_arrow_damage.size():
+		var entry: Dictionary = _pending_arrow_damage[i]
+		entry["time_left"] = float(entry["time_left"]) - delta
+		if float(entry["time_left"]) > 0.0:
+			_pending_arrow_damage[i] = entry
+			i += 1
+			continue
+		_pending_arrow_damage.remove_at(i)
+		var node = get_node_or_null(NodePath(str(entry["target_name"])))
+		if node == null or not is_instance_valid(node):
+			continue
+		if node.get("is_dead"):
+			continue
+		if node.has_method("take_damage"):
+			node.take_damage(float(entry["dmg"]), int(entry["attacker_id"]))
 
 func _on_army_routed(army):
 	if game_over:
@@ -2565,7 +2687,7 @@ func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	if s0 == null or not s0.has_method("get_goal_xz"):
 		return
 	var g0: Vector2 = s0.get_goal_xz()
-	var click_c := _clamp_map_v2(click_xz)
+	var click_c := snap_move_goal_xz(_clamp_map_v2(click_xz))
 	var delta := click_c - g0
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
 	var payload: Array = []
@@ -2577,7 +2699,7 @@ func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 			if not s.has_method("get_goal_xz"):
 				continue
 			var og: Vector2 = s.get_goal_xz()
-			var nw := _clamp_map_v2(og + delta)
+			var nw := snap_move_goal_xz(_clamp_map_v2(og + delta))
 			payload.append({"n": str(s.name), "x": nw.x, "y": nw.y})
 			n_units += 1
 	if payload.is_empty():
@@ -2585,14 +2707,22 @@ func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
 	print("%s: Anchor goal move %d units to click (%d,%d)" % [marker, n_units, int(click_c.x), int(click_c.y)])
 	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
 
-func _ensure_ghost_marker_material() -> StandardMaterial3D:
-	if _ghost_marker_mat == null:
-		_ghost_marker_mat = StandardMaterial3D.new()
-		_ghost_marker_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.35)
-		_ghost_marker_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_ghost_marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_ghost_marker_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	return _ghost_marker_mat
+func _ensure_ghost_marker_material(valid: bool = true) -> StandardMaterial3D:
+	if valid:
+		if _ghost_marker_mat == null:
+			_ghost_marker_mat = StandardMaterial3D.new()
+			_ghost_marker_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.35)
+			_ghost_marker_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_ghost_marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			_ghost_marker_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		return _ghost_marker_mat
+	if _ghost_marker_invalid_mat == null:
+		_ghost_marker_invalid_mat = StandardMaterial3D.new()
+		_ghost_marker_invalid_mat.albedo_color = Color(0.85, 0.25, 0.25, 0.45)
+		_ghost_marker_invalid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_ghost_marker_invalid_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_ghost_marker_invalid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return _ghost_marker_invalid_mat
 
 func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
@@ -2606,7 +2736,8 @@ func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 		_ghost_root_3d = Node3D.new()
 		_ghost_root_3d.name = "FormationGhosts3D"
 		add_child(_ghost_root_3d)
-	var mat := _ensure_ghost_marker_material()
+	var mat := _ensure_ghost_marker_material(true)
+	var invalid_mat := _ensure_ghost_marker_material(false)
 	var ghosts: Array = _ghost_root_3d.get_children()
 	while ghosts.size() < positions.size():
 		var box := MeshInstance3D.new()
@@ -2625,6 +2756,7 @@ func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 		var gy := get_ground_height_at(p.x, p.y)
 		var box: MeshInstance3D = ghosts[i]
 		box.position = Vector3(p.x, gy + 2.0, p.y)
+		box.material_override = mat if is_walkable_at(p.x, p.y) else invalid_mat
 
 func _clear_formation_ghosts_3d():
 	if _ghost_root_3d:
@@ -2644,7 +2776,7 @@ func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	for i in range(units.size()):
 		var u = units[i]
 		var p: Vector2 = positions[i]
-		p = _clamp_map_v2(p)
+		p = snap_move_goal_xz(_clamp_map_v2(p))
 		payload.append({"n": str(u.name), "x": p.x, "y": p.y})
 	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
 
@@ -3244,6 +3376,9 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 			var here_y = get_ground_height_at(pd["x"], pd["y"]) + hh
 			var tx = pd.get("tx", pd["x"])
 			var ty = pd.get("ty", pd["y"])
+			var fx = pd.get("fx", tx)
+			var fy = pd.get("fy", ty)
+			var final_goal_xz := Vector2(float(fx), float(fy))
 			var there_y = get_ground_height_at(tx, ty) + hh
 			var here = Vector3(pd["x"], here_y, pd["y"])
 			var there = Vector3(tx, there_y, ty)
@@ -3255,6 +3390,7 @@ func _receive_positions(pos_data: Array, dead_names: Array = []):
 					float(pd.get("hp", node.get("hp"))),
 					bool(pd.get("ic", false)),
 					CORRECTION_THRESHOLD,
+					final_goal_xz,
 				)
 			else:
 				if err > CORRECTION_THRESHOLD:
