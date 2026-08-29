@@ -26,6 +26,7 @@ var neutral_dragon: Dictionary = {}
 var neutral_dragons: Array = []
 var lighting: Dictionary = {}
 var walkability: Dictionary = {}
+var vegetation: Dictionary = {}
 ## Precomputed hill parameters used ONLY by World._build_terrain() at startup
 ## to generate the ground mesh and collision heightmap. Runtime height queries
 ## must go through World.get_ground_height_at() (physics raycast) so that
@@ -110,6 +111,11 @@ func _load() -> void:
 		walkability = walkability_raw
 	else:
 		walkability = {}
+	var vegetation_raw = parsed.get("vegetation", {})
+	if vegetation_raw is Dictionary:
+		vegetation = vegetation_raw
+	else:
+		vegetation = {}
 	_precompute_terrain_features()
 	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons, %d dragons)" % [
 		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
@@ -149,6 +155,12 @@ func get_lighting() -> Dictionary:
 func get_walkability() -> Dictionary:
 	return {
 		"max_slope_deg": float(walkability.get("max_slope_deg", 45.0)),
+	}
+
+func get_vegetation() -> Dictionary:
+	return {
+		"count": int(vegetation.get("count", 30)),
+		"forest_clusters": int(vegetation.get("forest_clusters", 5)),
 	}
 
 func max_armies_per_player() -> int:

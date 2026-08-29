@@ -64,6 +64,7 @@ const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
 const STEEP_HILLS_TEXTURE_PATH := "res://images/background/steep_hills.png"
 const GROUND_WALKABLE_SHADER := preload("res://shaders/ground_walkable.gdshader")
 const WalkabilityGrid = preload("res://WalkabilityGrid.gd")
+const _VegetationBuilder = preload("res://VegetationBuilder.gd")
 const _ArrowProjectile = preload("res://ArrowProjectile.gd")
 const LAKES_WATER_TEXTURE_PATH := "res://images/background/lakes_water.png"
 const _WaterBuilder = preload("res://WaterBuilder.gd")
@@ -434,6 +435,7 @@ func _ready():
 	_build_terrain()
 	add_water()
 	_build_walkability()
+	_build_vegetation()
 	_build_background()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
@@ -671,6 +673,23 @@ func _build_walkability() -> void:
 			_water_basins.size(),
 		]
 	)
+
+func _build_vegetation() -> void:
+	if _walkability == null:
+		return
+	var foliage := get_node_or_null("Foliage")
+	if foliage == null:
+		foliage = Node3D.new()
+		foliage.name = "Foliage"
+		add_child(foliage)
+	else:
+		for child in foliage.get_children():
+			child.queue_free()
+	var builder := _VegetationBuilder.new()
+	var anchors: Array = builder.build(self, MapConfig)
+	for anchor in anchors:
+		foliage.add_child(anchor)
+	print("TEST_VEGETATION_BUILT: count=%d map=%s" % [anchors.size(), MapConfig.name_])
 
 func _apply_ground_walkability_visual() -> void:
 	var ground := get_node_or_null("Ground")

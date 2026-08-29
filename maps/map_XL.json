@@ -78,6 +78,7 @@
     "color": [1.0, 0.98, 0.95],
     "shadow_max_distance": null
   },
+  "vegetation": {"count": 30, "forest_clusters": 5},
   "capture_points": [
     {"id": "Stables",      "type": "Stables",    "x": 1497.6, "y": 604.8},
     {"id": "Blacksmith",   "type": "Blacksmith", "x": 2342.4, "y": 1490.4},
