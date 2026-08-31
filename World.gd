@@ -458,6 +458,27 @@ func _ready():
 		_setup_army_command_bar()
 	_add_play_boundary_line()
 	call_deferred("_agent_debug_log_world_ready")
+	if not multiplayer.is_server():
+		call_deferred("_notify_client_world_ready")
+
+func _notify_client_world_ready() -> void:
+	if multiplayer.is_server():
+		return
+	rpc_id(1, "_receive_client_world_ready")
+
+@rpc("any_peer", "reliable")
+func _receive_client_world_ready() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	_clients_world_ready[peer_id] = true
+	print("TEST_CLIENT_WORLD_READY: peer %d finished loading World" % peer_id)
+
+func _all_clients_world_ready() -> bool:
+	for peer_id in multiplayer.get_peers():
+		if not _clients_world_ready.get(peer_id, false):
+			return false
+	return true
 
 func _init_offmap_lanes() -> void:
 	var w: float = MapConfig.width
@@ -2281,6 +2302,7 @@ const AGGRESSIVE_TICK_INTERVAL := 1.0
 const MATCH_TIMEOUT_SECONDS := 120.0
 var _match_elapsed: float = 0.0
 var _match_started: bool = false
+var _clients_world_ready: Dictionary = {}
 
 ## Server: aggressive stance with no explicit order — chase closest enemy periodically.
 func _update_aggressive_armies(delta: float):
@@ -2449,6 +2471,8 @@ func _physics_process(delta: float):
 		sync_timer += delta
 		if sync_timer >= 0.05:
 			sync_timer = 0.0
+			if not _all_clients_world_ready():
+				return
 			_sync_unit_positions()
 			_sync_capture_state()
 
