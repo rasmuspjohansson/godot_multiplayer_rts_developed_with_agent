@@ -79,21 +79,12 @@ func _start_client():
 func _on_connected_to_server():
 	var marker = "TEST_CLIENT_A_START" if player_name == "A" else "TEST_CLIENT_B_START"
 	print("%s: Connected to server (peer_id=%d, name=%s)" % [marker, multiplayer.get_unique_id(), player_name])
-	rpc_id(1, "register_player", player_name)
+	rpc_id(1, "register_player", player_name, preferred_color)
 	_load_lobby()
-	if preferred_color >= 0:
-		call_deferred("_apply_preferred_color")
 	if auto_test:
 		var mock = preload("res://MockPlayer.gd").new()
 		mock.name = "MockPlayer"
 		add_child(mock)
-
-func _apply_preferred_color() -> void:
-	if preferred_color < 0 or preferred_color >= GameState.PLAYER_COLORS.size():
-		return
-	get_tree().create_timer(0.3).timeout.connect(func():
-		rpc_id(1, "set_my_color", preferred_color)
-	)
 
 func _on_connection_failed():
 	print("ERROR: Connection to server failed")
@@ -136,6 +127,23 @@ func _return_to_lobby_if_empty() -> void:
 	_load_lobby()
 	print("TEST_LOBBY_RESET: All clients disconnected, returned to lobby")
 
+const LOBBY_RETURN_DELAY_SEC := 5.0
+
+func return_to_lobby_after_match() -> void:
+	if not is_server:
+		return
+	GameState.reset_match_state()
+	for pid in GameState.players:
+		GameState.players[pid]["ready"] = false
+	rpc("_client_return_to_lobby", GameState.players)
+
+@rpc("authority", "call_local", "reliable")
+func _client_return_to_lobby(players: Dictionary) -> void:
+	GameState.players = players
+	_clear_scenes()
+	_load_lobby()
+	print("TEST_LOBBY_RETURN: Returned to lobby after match")
+
 func _get_first_available_color() -> int:
 	var used := []
 	for pid in GameState.players:
@@ -147,10 +155,20 @@ func _get_first_available_color() -> int:
 			return i
 	return 0
 
+func _is_color_available(color_index: int, except_peer_id: int = 0) -> bool:
+	if color_index < 0 or color_index >= GameState.PLAYER_COLORS.size():
+		return false
+	for pid in GameState.players:
+		if pid != except_peer_id and GameState.players[pid].get("color_index", 0) == color_index:
+			return false
+	return true
+
 @rpc("any_peer", "reliable")
-func register_player(p_name: String):
+func register_player(p_name: String, requested_color: int = -1):
 	var sender_id = multiplayer.get_remote_sender_id()
 	var color_index = _get_first_available_color()
+	if _is_color_available(requested_color, sender_id):
+		color_index = requested_color
 	GameState.players[sender_id] = {"name": p_name, "ready": false, "color_index": color_index}
 	print("Server: Player '%s' registered (id=%d) color=%d" % [p_name, sender_id, color_index])
 	rpc("_sync_players_from_main", GameState.players)

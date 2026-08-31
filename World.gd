@@ -1192,7 +1192,13 @@ func _unhandled_input(event: InputEvent):
 	elif event is InputEventKey and event.pressed:
 		_handle_key(event)
 
+func _multiplayer_active() -> bool:
+	var peer = multiplayer.multiplayer_peer
+	return peer != null and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
 func _process(delta: float):
+	if not _multiplayer_active():
+		return
 	if not multiplayer.is_server():
 		_update_move_goal_markers_3d()
 		_update_unit_range_markers_3d()
