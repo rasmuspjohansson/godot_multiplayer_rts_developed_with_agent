@@ -80,6 +80,8 @@ const CP_RESOURCE_BY_TYPE := {
 }
 ## Capture point billboard height in world units.
 const CP_SPRITE_WORLD_HEIGHT := 80.0
+## Units per _receive_positions RPC tick (keeps unreliable packets under ENet MTU).
+const POSITION_SYNC_BATCH_SIZE := 4
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -2499,7 +2501,16 @@ func _sync_unit_positions():
 				})
 			else:
 				dead_names.append(u.name)
-	rpc("_receive_positions", pos_data, dead_names)
+	if pos_data.is_empty() and dead_names.is_empty():
+		return
+	var batch_count := int(ceil(float(pos_data.size()) / float(POSITION_SYNC_BATCH_SIZE)))
+	if batch_count == 0:
+		batch_count = 1
+	for b in range(batch_count):
+		var start := b * POSITION_SYNC_BATCH_SIZE
+		var batch = pos_data.slice(start, start + POSITION_SYNC_BATCH_SIZE)
+		var dead_batch := dead_names if b == batch_count - 1 else []
+		rpc("_receive_positions", batch, dead_batch)
 
 func spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
 	if multiplayer.is_server():
