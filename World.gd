@@ -78,8 +78,8 @@ const CP_RESOURCE_BY_TYPE := {
 	"Village": "villagers",
 	"Archery": "bows",
 }
-## Capture point billboard height in world units (1/4 of initial 80-unit sprite scale).
-const CP_SPRITE_WORLD_HEIGHT := 20.0
+## Capture point billboard height in world units.
+const CP_SPRITE_WORLD_HEIGHT := 80.0
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -1895,9 +1895,9 @@ func _spawn_map_dragons() -> void:
 		unit.apply_dragon(color)
 		var uy: float = get_ground_height_at(pos.x, pos.y) + UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
 		unit.position = Vector3(pos.x, uy, pos.y)
+		add_child(unit)
 		if unit.has_method("initialize_goal_at_current"):
 			unit.initialize_goal_at_current()
-		add_child(unit)
 		all_units.append(unit)
 		_map_dragons.append(unit)
 		print("TEST_MAP_DRAGON_SPAWN: dragon %d at (%d,%d) aggro=%.0f attack=%.0f" % [
@@ -3194,7 +3194,7 @@ func _capture_point_modulate(owner_pid: int) -> Color:
 		var ci = GameState.players[owner_pid].get("color_index", 0)
 		if ci >= 0 and ci < GameState.PLAYER_COLORS.size():
 			return GameState.PLAYER_COLORS[ci]
-	return Color(0.5, 0.5, 0.5, 0.8)
+	return Color(1.0, 1.0, 1.0, 1.0)
 
 func _create_capture_point_sprite(d: Dictionary) -> Node3D:
 	var anchor := Node3D.new()
@@ -3210,6 +3210,7 @@ func _create_capture_point_sprite(d: Dictionary) -> Node3D:
 	sprite.name = "Sprite"
 	sprite.texture = tex
 	sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sprite.shaded = false
 	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 	var tex_h := float(tex.get_height())
 	var pixel_size := CP_SPRITE_WORLD_HEIGHT / tex_h

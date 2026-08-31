@@ -116,6 +116,25 @@ func _on_peer_disconnected(id: int):
 	print("TEST_PEER_DISCONNECT: Peer disconnected: %d" % id)
 	if is_server:
 		GameState.players.erase(id)
+		rpc("_sync_players_from_main", GameState.players)
+		_return_to_lobby_if_empty()
+
+func _return_to_lobby_if_empty() -> void:
+	if not is_server:
+		return
+	if not multiplayer.get_peers().is_empty():
+		return
+	var in_match := get_node_or_null("Level/World") != null
+	var in_game_over := get_node_or_null("UI/GameOver") != null
+	if not in_match and not in_game_over:
+		print("TEST_LOBBY_RESET: All clients disconnected (already in lobby)")
+		return
+	GameState.reset_match_state()
+	GameState.players.clear()
+	_peer_connect_count = 0
+	_clear_scenes()
+	_load_lobby()
+	print("TEST_LOBBY_RESET: All clients disconnected, returned to lobby")
 
 func _get_first_available_color() -> int:
 	var used := []
