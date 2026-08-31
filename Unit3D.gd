@@ -516,6 +516,9 @@ func begin_death() -> void:
 		)
 
 func _process(delta: float) -> void:
+	var peer = multiplayer.multiplayer_peer
+	if peer == null or peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
 	if multiplayer.is_server() or not _uses_spritesheets or _sprite == null:
 		return
 	var state := _pick_anim_state()

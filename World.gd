@@ -82,6 +82,8 @@ const CP_RESOURCE_BY_TYPE := {
 const CP_SPRITE_WORLD_HEIGHT := 80.0
 ## Units per _receive_positions RPC tick (keeps unreliable packets under ENet MTU).
 const POSITION_SYNC_BATCH_SIZE := 4
+## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
+const CAPTURE_SYNC_BATCH_SIZE := 6
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
@@ -2090,7 +2092,14 @@ func _sync_capture_state():
 	var res_data := {}
 	for pid in GameState.resources.keys():
 		res_data[pid] = GameState.resources[pid]
-	rpc("_client_update_capture", cp_data, res_data)
+	var batch_count := int(ceil(float(cp_data.size()) / float(CAPTURE_SYNC_BATCH_SIZE)))
+	if batch_count == 0:
+		batch_count = 1
+	for b in range(batch_count):
+		var start := b * CAPTURE_SYNC_BATCH_SIZE
+		var batch = cp_data.slice(start, start + CAPTURE_SYNC_BATCH_SIZE)
+		var res_batch := res_data if b == batch_count - 1 else {}
+		rpc("_client_update_capture", batch, res_batch)
 	_update_topbar_local(cp_data, res_data)
 
 func _serialize_one_army(army) -> Dictionary:
@@ -3246,7 +3255,13 @@ func _client_spawn_capture_points(data: Array):
 		if anchor == null:
 			continue
 		add_child(anchor)
-		capture_points.append({"id": d["id"], "node": anchor, "sprite": anchor.get_node("Sprite")})
+		capture_points.append({
+			"id": d["id"],
+			"type": d.get("type", d["id"]),
+			"owner_pid": int(d.get("owner_pid", 0)),
+			"node": anchor,
+			"sprite": anchor.get_node("Sprite"),
+		})
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
 	#region agent log
 	GameState.agent_debug_log("H3", "World.gd:_client_spawn_capture_points", "after_cp_spawn", {
@@ -3262,12 +3277,25 @@ func _client_update_capture(cp_data: Array, res_data: Dictionary):
 		var pid = d.get("owner_pid", 0)
 		for cp in capture_points:
 			if cp.get("id") == d["id"]:
+				cp["owner_pid"] = pid
 				var sprite: Sprite3D = cp.get("sprite", null)
 				if sprite != null:
 					sprite.modulate = _capture_point_modulate(pid)
+	if res_data.is_empty():
+		return
 	for pid_str in res_data.keys():
 		GameState.resources[int(pid_str)] = res_data[pid_str]
-	_update_topbar_local(cp_data, res_data)
+	_update_topbar_local(_capture_points_data_for_topbar(), res_data)
+
+func _capture_points_data_for_topbar() -> Array:
+	var out: Array = []
+	for cp in capture_points:
+		out.append({
+			"id": cp["id"],
+			"type": cp.get("type", cp["id"]),
+			"owner_pid": cp.get("owner_pid", 0),
+		})
+	return out
 
 func _count_owned_cps_by_type(cp_data: Array, owner_pid: int) -> Dictionary:
 	var counts := {"Stables": 0, "Blacksmith": 0, "Village": 0, "Archery": 0}
