@@ -92,6 +92,7 @@ var fight_anim_speed: float = SPRITE_ANIM_SPEED
 var sync_target_position: Vector3 = Vector3.ZERO
 var has_move_goal: bool = false
 var sync_target_hp: float = 100.0
+var _net_correct_xz := Vector2.ZERO
 var hp: float = 100.0
 var is_dead := false
 ## Server combat: preferred target node name from army ATTACK order.
@@ -581,8 +582,12 @@ func apply_network_sync(
 	correction_threshold: float,
 	final_goal_xz: Vector2 = Vector2(-1.0, -1.0),
 ) -> void:
-	if global_position.distance_to(here) > correction_threshold:
+	var err := global_position.distance_to(here)
+	if err > correction_threshold:
 		global_position = here
+		_net_correct_xz = Vector2.ZERO
+	else:
+		_net_correct_xz = Vector2(here.x - global_position.x, here.z - global_position.z)
 	var final_xz := final_goal_xz
 	if final_xz.x < 0.0:
 		final_xz = Vector2(there.x, there.z)
@@ -596,9 +601,21 @@ func apply_network_sync(
 	var gy := _ground_y_at(final_xz.x, final_xz.y)
 	sync_target_position = Vector3(final_xz.x, gy + half_height, final_xz.y)
 	sync_target_hp = _hp_val
-	hp = _hp_val
 	sync_in_combat = in_combat_val
 	_refresh_move_goal_state()
+
+func _apply_net_correction(delta: float) -> void:
+	var remaining := _net_correct_xz.length()
+	if remaining < 0.05:
+		_net_correct_xz = Vector2.ZERO
+		return
+	var max_step := speed * delta
+	var step := _net_correct_xz
+	if remaining > max_step:
+		step = _net_correct_xz * (max_step / remaining)
+	global_position.x += step.x
+	global_position.z += step.y
+	_net_correct_xz -= step
 
 func _pick_anim_state() -> AnimState:
 	if _dying or is_dead:
@@ -877,6 +894,7 @@ func _client_physics(delta: float):
 		_update_visual_tint()
 		_update_facing()
 		return
+	_apply_net_correction(delta)
 	if has_move_goal and is_moving:
 		var cur := Vector2(global_position.x, global_position.z)
 		var steer_target := _current_steer_target_xz()
@@ -902,10 +920,10 @@ func _client_physics(delta: float):
 			velocity = dir * speed
 		_refresh_move_goal_state()
 		move_and_slide()
-		hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
 	else:
 		velocity = Vector3.ZERO
 		move_and_slide()
+	hp = lerpf(hp, sync_target_hp, clampf(delta * 8.0, 0.0, 1.0))
 	_apply_ground_height()
 	_update_visual_tint()
 	if not _uses_spritesheets:

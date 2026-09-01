@@ -80,13 +80,17 @@ const CP_RESOURCE_BY_TYPE := {
 }
 ## Capture point billboard height in world units.
 const CP_SPRITE_WORLD_HEIGHT := 80.0
-## Units per _receive_positions RPC tick (keeps unreliable packets under ENet MTU).
+## Living units per unreliable _receive_positions RPC (round-robin; also MTU cap).
 const POSITION_SYNC_BATCH_SIZE := 4
 ## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
 const CAPTURE_SYNC_BATCH_SIZE := 6
 
 var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
+var _sync_cursor := 0
+var _last_sent_cp_owner: Dictionary = {}
+var _last_sent_resources: Dictionary = {}
+var _capture_hud_sent := false
 var army_time_at_cp := {}
 var army_follow_target := {}
 ## Server: mock idle detection — only for armies that received `_server_mock_chase_tick` (not human players)
@@ -2098,30 +2102,61 @@ func _serialize_capture_points() -> Array:
 		})
 	return data
 
+func _resource_dicts_equal(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for pid in a.keys():
+		if not b.has(pid):
+			return false
+		var ra = a[pid]
+		var rb = b[pid]
+		if not (ra is Dictionary) or not (rb is Dictionary):
+			return false
+		if int(ra.get("horses", 0)) != int(rb.get("horses", 0)) \
+				or int(ra.get("spears", 0)) != int(rb.get("spears", 0)) \
+				or int(ra.get("bows", 0)) != int(rb.get("bows", 0)) \
+				or int(ra.get("villagers", 0)) != int(rb.get("villagers", 0)):
+			return false
+	return true
+
 func _sync_capture_state():
 	var cp_data := []
+	var dirty_cps := []
 	for c in _server_captures:
 		var owner_name := "---"
 		if c["owner_pid"] != 0 and GameState.players.has(c["owner_pid"]):
 			owner_name = GameState.players[c["owner_pid"]]["name"]
-		cp_data.append({
+		var entry := {
 			"id": c["id"],
 			"type": c["type"],
 			"owner_pid": c["owner_pid"],
 			"owner_name": owner_name,
-		})
+		}
+		cp_data.append(entry)
+		var prev_owner = _last_sent_cp_owner.get(c["id"], null)
+		if prev_owner == null or int(prev_owner) != int(c["owner_pid"]):
+			dirty_cps.append(entry)
 	var res_data := {}
 	for pid in GameState.resources.keys():
 		res_data[pid] = GameState.resources[pid]
-	var batch_count := int(ceil(float(cp_data.size()) / float(CAPTURE_SYNC_BATCH_SIZE)))
+	var res_changed := not _resource_dicts_equal(res_data, _last_sent_resources)
+	if _capture_hud_sent and dirty_cps.is_empty() and not res_changed:
+		return
+	var to_send: Array = cp_data if not _capture_hud_sent else dirty_cps
+	var batch_count := int(ceil(float(to_send.size()) / float(CAPTURE_SYNC_BATCH_SIZE)))
 	if batch_count == 0:
 		batch_count = 1
 	for b in range(batch_count):
 		var start := b * CAPTURE_SYNC_BATCH_SIZE
-		var batch = cp_data.slice(start, start + CAPTURE_SYNC_BATCH_SIZE)
+		var batch = to_send.slice(start, start + CAPTURE_SYNC_BATCH_SIZE)
 		var res_batch := res_data if b == batch_count - 1 else {}
 		rpc("_client_update_capture", batch, res_batch)
 	_update_topbar_local(cp_data, res_data)
+	_last_sent_cp_owner.clear()
+	for d in cp_data:
+		_last_sent_cp_owner[d["id"]] = d["owner_pid"]
+	_last_sent_resources = res_data.duplicate(true)
+	_capture_hud_sent = true
 
 func _serialize_one_army(army) -> Dictionary:
 	var soldier_data := []
@@ -2516,40 +2551,53 @@ func _check_match_timeout(delta: float) -> void:
 func _notify_unit_death(unit_name: String):
 	rpc("_client_unit_died", unit_name)
 
+func _unit_position_payload(u) -> Dictionary:
+	var here = u.global_position
+	var final_mt: Vector2
+	if u.is_moving:
+		final_mt = u.move_target
+	else:
+		final_mt = Vector2(here.x, here.z)
+	var steer_mt := final_mt
+	if u.is_moving and u.has_method("_current_steer_target_xz"):
+		steer_mt = u._current_steer_target_xz()
+	return {
+		"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
+		"tx": steer_mt.x, "ty": steer_mt.y,
+		"fx": final_mt.x, "fy": final_mt.y,
+		"ic": u.in_combat,
+		"moving": u.is_moving,
+	}
+
 func _sync_unit_positions():
-	var pos_data := []
+	var living := []
 	var dead_names := []
 	for u in all_units:
-		if u and is_instance_valid(u):
-			if not u.is_dead:
-				var here = u.global_position
-				var final_mt: Vector2
-				if u.is_moving:
-					final_mt = u.move_target
-				else:
-					final_mt = Vector2(here.x, here.z)
-				var steer_mt := final_mt
-				if u.is_moving and u.has_method("_current_steer_target_xz"):
-					steer_mt = u._current_steer_target_xz()
-				pos_data.append({
-					"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
-					"tx": steer_mt.x, "ty": steer_mt.y,
-					"fx": final_mt.x, "fy": final_mt.y,
-					"ic": u.in_combat,
-					"moving": u.is_moving,
-				})
-			else:
-				dead_names.append(u.name)
-	if pos_data.is_empty() and dead_names.is_empty():
+		if u == null or not is_instance_valid(u):
+			continue
+		if u.get("is_dead"):
+			dead_names.append(u.name)
+		else:
+			living.append(u)
+	if living.is_empty():
+		if not dead_names.is_empty():
+			rpc("_receive_positions", [], dead_names)
 		return
-	var batch_count := int(ceil(float(pos_data.size()) / float(POSITION_SYNC_BATCH_SIZE)))
-	if batch_count == 0:
-		batch_count = 1
-	for b in range(batch_count):
-		var start := b * POSITION_SYNC_BATCH_SIZE
-		var batch = pos_data.slice(start, start + POSITION_SYNC_BATCH_SIZE)
-		var dead_batch := dead_names if b == batch_count - 1 else []
-		rpc("_receive_positions", batch, dead_batch)
+	if _sync_cursor < 0 or _sync_cursor >= living.size():
+		_sync_cursor = 0
+	var n := mini(POSITION_SYNC_BATCH_SIZE, living.size())
+	var pos_data := []
+	var wrapped := false
+	for i in range(n):
+		var idx := (_sync_cursor + i) % living.size()
+		if i > 0 and idx < _sync_cursor:
+			wrapped = true
+		pos_data.append(_unit_position_payload(living[idx]))
+	_sync_cursor = (_sync_cursor + n) % living.size()
+	if _sync_cursor == 0:
+		wrapped = true
+	var dead_batch := dead_names if wrapped else []
+	rpc("_receive_positions", pos_data, dead_batch)
 
 func spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
 	if multiplayer.is_server():
