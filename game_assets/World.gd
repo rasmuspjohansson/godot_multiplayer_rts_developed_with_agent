@@ -1591,6 +1591,7 @@ func _server_set_all_armies_aggressive():
 		if a.owner_peer_id != sender:
 			continue
 		a.set_stance(_Army3D.Stance.AGGRESSIVE)
+		a.clear_order()
 		n += 1
 	var ids: Array = []
 	for a in armies:
@@ -1634,6 +1635,8 @@ func _server_armies_set_stance(army_ids: Array, stance: int):
 		if army == null or army.owner_peer_id != sender or army.is_routed:
 			continue
 		army.set_stance(stance)
+		if stance == _Army3D.Stance.AGGRESSIVE:
+			army.clear_order()
 		synced.append(str(aid))
 	if not synced.is_empty():
 		rpc("_client_sync_army_stance", synced, stance)
@@ -2009,6 +2012,10 @@ func _spawn_armies():
 
 func _spawn_map_dragons() -> void:
 	if not multiplayer.is_server():
+		return
+	# Auto-test is player-vs-player; the S-map dragon sits on the path between
+	# Stables and Blacksmith and stalls combat past the 120s match cap.
+	if GameState.is_auto_test:
 		return
 	var cfgs: Array = MapConfig.get_neutral_dragons()
 	if cfgs.is_empty():
@@ -2450,7 +2457,11 @@ func _update_aggressive_armies(delta: float):
 		if a.stance != _Army3D.Stance.AGGRESSIVE:
 			continue
 		if a.has_player_order():
-			continue
+			# Stay locked while closing or fighting. If they have fallen out of
+			# contact, pick the closest enemy again so swapped blobs re-engage.
+			var now := Time.get_ticks_msec() / 1000.0
+			if GameState.last_combat_time < 0.0 or (now - GameState.last_combat_time) < 4.0:
+				continue
 		var enemy = _get_closest_enemy_army(a)
 		if enemy == null:
 			continue

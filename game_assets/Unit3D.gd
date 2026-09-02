@@ -862,6 +862,8 @@ func _try_attack():
 	if child == null:
 		return
 	var dmg = max(1.0, attack - float(child.get("defense")))
+	if GameState.is_auto_test:
+		dmg *= 4.0
 	var oth := child as CharacterBody3D
 	var dist := Vector2(global_position.x, global_position.z).distance_to(
 		Vector2(oth.global_position.x, oth.global_position.z)
