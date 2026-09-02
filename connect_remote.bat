@@ -56,5 +56,5 @@ echo Connecting as '%PLAYER_NAME%' to %SERVER_IP%:8910 ...
 echo In the lobby: press Ready when you are set.
 echo.
 
-"%GODOT%" --path "%REPO%." -- --client --name=%PLAYER_NAME% --color=1 --host=%SERVER_IP%
+"%GODOT%" --path "%REPO%game_assets" -- --client --name=%PLAYER_NAME% --color=1 --host=%SERVER_IP%
 exit /b %ERRORLEVEL%

@@ -300,6 +300,101 @@ static func detect_valley_polygon_lakes(
 		lakes.append(lake_basin)
 	return lakes
 
+## Flood from explicit editor seeds. Each seed: {x, y, rise} where rise is how
+## high the water surface sits above terrain at the seed cell.
+static func detect_lakes_from_seeds(
+	heights: PackedFloat32Array,
+	cols: int,
+	rows: int,
+	step: float,
+	map_w: float,
+	map_h: float,
+	seeds: Array
+) -> Array:
+	if heights.is_empty() or cols < 3 or rows < 3 or seeds.is_empty():
+		return []
+	var lakes: Array = []
+	for seed in seeds:
+		if typeof(seed) != TYPE_DICTIONARY:
+			continue
+		var rise := float(seed.get("rise", 0.0))
+		if rise <= 0.0:
+			continue
+		var wx := float(seed.get("x", 0.0))
+		var wz := float(seed.get("y", 0.0))
+		var si := clampi(int(round(wx / step)), 0, cols - 1)
+		var sj := clampi(int(round(wz / step)), 0, rows - 1)
+		var bed: float = heights[sj * cols + si]
+		var surface_y: float = bed + rise
+		var queue: Array = [Vector2i(si, sj)]
+		var fill_visited := PackedByteArray()
+		fill_visited.resize(cols * rows)
+		fill_visited[sj * cols + si] = 1
+		var mask := PackedByteArray()
+		mask.resize(cols * rows)
+		var min_i := si
+		var max_i := si
+		var min_j := sj
+		var max_j := sj
+		var cell_count := 0
+		while not queue.is_empty():
+			var p: Vector2i = queue.pop_front()
+			var idx := p.y * cols + p.x
+			if heights[idx] >= surface_y - SURFACE_CLIP_EPSILON:
+				continue
+			mask[idx] = 1
+			cell_count += 1
+			min_i = mini(min_i, p.x)
+			max_i = maxi(max_i, p.x)
+			min_j = mini(min_j, p.y)
+			max_j = maxi(max_j, p.y)
+			for dir in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var ni: int = p.x + dir.x
+				var nj: int = p.y + dir.y
+				if ni < 0 or nj < 0 or ni >= cols or nj >= rows:
+					continue
+				var nidx := nj * cols + ni
+				if fill_visited[nidx] != 0:
+					continue
+				if heights[nidx] >= surface_y - SURFACE_CLIP_EPSILON:
+					continue
+				fill_visited[nidx] = 1
+				queue.append(Vector2i(ni, nj))
+		if cell_count < 3:
+			continue
+		var clip_min_x: float = float(min_i) * step
+		var clip_max_x: float = float(max_i + 1) * step
+		var clip_min_z: float = float(min_j) * step
+		var clip_max_z: float = float(max_j + 1) * step
+		if min_i == 0:
+			clip_min_x = 0.0
+		if max_i >= cols - 1:
+			clip_max_x = map_w
+		if min_j == 0:
+			clip_min_z = 0.0
+		if max_j >= rows - 1:
+			clip_max_z = map_h
+		var lake_basin := {
+			"min_x": clip_min_x,
+			"max_x": clip_max_x,
+			"min_z": clip_min_z,
+			"max_z": clip_max_z,
+			"surface_y": surface_y,
+			"cell_count": cell_count,
+			"min_i": min_i,
+			"max_i": max_i,
+			"min_j": min_j,
+			"max_j": max_j,
+			"mask": mask,
+			"cols": cols,
+			"rows": rows,
+			"step": step,
+		}
+		if build_polygon_from_basin(lake_basin).size() < 3:
+			continue
+		lakes.append(lake_basin)
+	return lakes
+
 static func build_polygon_from_basin(basin: Dictionary) -> PackedVector2Array:
 	var step: float = basin.get("step", 20.0)
 	var margin: float = step * POLYGON_MARGIN_FACTOR

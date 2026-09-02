@@ -26,7 +26,12 @@ func build(world: Node, map_cfg: Node) -> Array:
 	var cfg: Dictionary = map_cfg.get_vegetation()
 	var target_count: int = int(cfg.get("count", 30))
 	var forest_clusters: int = int(cfg.get("forest_clusters", 5))
-	if target_count <= 0:
+	var explicit: Array = []
+	if map_cfg.get("props") != null:
+		explicit = map_cfg.props
+	if typeof(explicit) != TYPE_ARRAY:
+		explicit = []
+	if target_count <= 0 and explicit.is_empty():
 		return []
 
 	var rng := RandomNumberGenerator.new()
@@ -35,6 +40,18 @@ func build(world: Node, map_cfg: Node) -> Array:
 	var exclusions := _collect_exclusions(map_cfg)
 	var placed: Array = []
 	var anchors: Array = []
+
+	for p in explicit:
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		var px := float(p.get("x", 0.0))
+		var pz := float(p.get("y", 0.0))
+		var kind := str(p.get("kind", "tree"))
+		placed.append(Vector2(px, pz))
+		anchors.append(_make_anchor(world, px, pz, kind, anchors.size() + 1))
+
+	if target_count <= 0:
+		return anchors
 
 	for _cluster_i in range(forest_clusters):
 		if placed.size() >= target_count:

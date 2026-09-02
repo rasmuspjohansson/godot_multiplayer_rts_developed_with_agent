@@ -10,13 +10,14 @@
 # Open the Godot editor first, enable Debug → Keep Debug Server Open, then run this script.
 #
 # Optional: --server-window — run the dedicated server with a visible window (OpenGL).
-# Optional: --map S|L|XL — map size (default S). Passed to server and all clients.
+# Optional: --map NAME — map JSON name (default S). S/L/XL or any maps/map_NAME.json.
 #
 # Set GODOT_BIN to the full path to your Godot executable if "godot" is not in PATH.
 
 set -e
 GODOT_BIN="${GODOT_BIN:-godot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GAME_PATH="$SCRIPT_DIR/game_assets"
 cd "$SCRIPT_DIR"
 
 AUTO_TEST=true
@@ -46,14 +47,17 @@ while [ $i -lt ${#args[@]} ]; do
   esac
   i=$((i + 1))
 done
-MAP_SIZE="${MAP_SIZE^^}"
-case "$MAP_SIZE" in
-  S|L|XL) ;;
-  *)
-    echo "ERROR: Invalid --map size '$MAP_SIZE' (use S, L, or XL)"
-    exit 1
-    ;;
+case "${MAP_SIZE^^}" in
+  S|L|XL) MAP_SIZE="${MAP_SIZE^^}" ;;
 esac
+if [[ ! "$MAP_SIZE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "ERROR: Invalid --map name '$MAP_SIZE'"
+  exit 1
+fi
+if [[ ! -f "$GAME_PATH/project.godot" ]]; then
+  echo "ERROR: Godot project not found at $GAME_PATH"
+  exit 1
+fi
 
 if [ -n "${GODOT_REMOTE_DEBUG:-}" ]; then
   REMOTE_DEBUG=true
@@ -99,7 +103,7 @@ SERVER_EXTRA_ARGS=()
 if [ "$AUTO_TEST" = true ]; then
   SERVER_EXTRA_ARGS+=(--auto-test)
 fi
-nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" "${SERVER_RENDER_ARGS[@]}" --path . -- --server "${SERVER_EXTRA_ARGS[@]}" --map="$MAP_SIZE" >> logs/server.log 2>&1 &
+nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" "${SERVER_RENDER_ARGS[@]}" --path "$GAME_PATH" -- --server "${SERVER_EXTRA_ARGS[@]}" --map="$MAP_SIZE" >> logs/server.log 2>&1 &
 echo $! > logs/server.pid
 echo "Server starting (PID $(cat logs/server.pid), map=$MAP_SIZE). Waiting for server to be ready..."
 
@@ -120,19 +124,19 @@ if [ "$AUTO_TEST" = true ]; then
   echo "Starting auto-test clients A and B..."
   echo "Two game windows should open shortly."
   export DISPLAY="${DISPLAY:-:0}"
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=A --auto-test --map="$MAP_SIZE" > logs/client_A.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=A --auto-test --map="$MAP_SIZE" > logs/client_A.log 2>&1 &
   echo $! > logs/client_A.pid
   sleep 2
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=B --auto-test --color=1 --map="$MAP_SIZE" > logs/client_B.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=B --auto-test --color=1 --map="$MAP_SIZE" > logs/client_B.log 2>&1 &
   echo $! > logs/client_B.pid
   echo "Clients A and B started (auto-test). Logs: logs/client_A.log, logs/client_B.log"
 else
   echo "Starting human-play clients Player1 and Player2..."
   export DISPLAY="${DISPLAY:-:0}"
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=Player1 --map="$MAP_SIZE" > logs/client_Player1.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player1 --map="$MAP_SIZE" > logs/client_Player1.log 2>&1 &
   echo $! > logs/client_Player1.pid
   sleep 2
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path . -- --client --name=Player2 --map="$MAP_SIZE" > logs/client_Player2.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player2 --map="$MAP_SIZE" > logs/client_Player2.log 2>&1 &
   echo $! > logs/client_Player2.pid
   echo "Two game windows should open. Connect, set name/color, press Ready in both."
   echo "Logs: logs/client_Player1.log, logs/client_Player2.log"

@@ -93,7 +93,7 @@
   "other_tests": [
     {
       "description_of_test": "Match did not finish via timeout safety net (TEST_GAME_OVER_TIMEOUT must NOT appear — its presence means combat failed to resolve within 120s)",
-      "implementation": "! grep -q 'TEST_GAME_OVER_TIMEOUT' logs/server.log"
+      "implementation": "! grep -q 'TEST_GAME_OVER_TIMEOUT' ../logs/server.log"
     },
     {
       "description_of_test": "Headless texture paths: red/blue spearman PNGs load as ImageTexture (same path logic as Unit3D)",

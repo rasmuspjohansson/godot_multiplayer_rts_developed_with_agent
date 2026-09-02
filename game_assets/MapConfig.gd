@@ -3,11 +3,12 @@ extends Node
 ## (size, terrain, capture points, per-slot player starting positions).
 ## Every map-dependent constant in World.gd / Army3D.gd resolves through here.
 ##
-## Map file is selected via --map=S|L|XL (default S) → res://maps/map_{size}.json
+## Map file is selected via --map=NAME (default S) → res://maps/map_{NAME}.json
+## Custom editor maps also fall back to user://maps/map_{NAME}.json.
 
 const MAPS_DIR := "res://maps"
+const USER_MAPS_DIR := "user://maps"
 const DEFAULT_MAP_SIZE := "S"
-const VALID_MAP_SIZES := ["S", "L", "XL"]
 
 # Built-in fallback values — used only if map JSON is missing or unparseable so
 # the game (and the test harness) never hangs on a bad config.
@@ -27,6 +28,9 @@ var neutral_dragons: Array = []
 var lighting: Dictionary = {}
 var walkability: Dictionary = {}
 var vegetation: Dictionary = {}
+var lakes: Array = []
+var props: Array = []
+var _raw: Dictionary = {}
 ## Precomputed hill parameters used ONLY by World._build_terrain() at startup
 ## to generate the ground mesh and collision heightmap. Runtime height queries
 ## must go through World.get_ground_height_at() (physics raycast) so that
@@ -56,26 +60,70 @@ func _parse_map_size_from_args() -> String:
 	for i in range(args.size()):
 		var a := str(args[i])
 		if a.begins_with("--map="):
-			return a.split("=")[1].strip_edges().to_upper()
+			return _normalize_map_name(a.split("=")[1].strip_edges())
 		if a == "--map" and i + 1 < args.size():
-			return str(args[i + 1]).strip_edges().to_upper()
+			return _normalize_map_name(str(args[i + 1]).strip_edges())
 	return DEFAULT_MAP_SIZE
 
-func _map_json_path(size: String) -> String:
-	return "%s/map_%s.json" % [MAPS_DIR, size]
+func _normalize_map_name(raw: String) -> String:
+	var upper := raw.to_upper()
+	if upper == "S" or upper == "L" or upper == "XL":
+		return upper
+	return raw
 
-func _load() -> void:
-	map_size = _parse_map_size_from_args()
-	if map_size not in VALID_MAP_SIZES:
-		push_warning("MapConfig: unknown --map=%s; using %s" % [map_size, DEFAULT_MAP_SIZE])
-		map_size = DEFAULT_MAP_SIZE
-	var path := _map_json_path(map_size)
+func _map_json_path(size: String, dir: String = MAPS_DIR) -> String:
+	return "%s/map_%s.json" % [dir, size]
+
+func resolve_map_path(size: String) -> String:
+	var res_path := _map_json_path(size, MAPS_DIR)
+	if FileAccess.file_exists(res_path):
+		return res_path
+	var user_path := _map_json_path(size, USER_MAPS_DIR)
+	if FileAccess.file_exists(user_path):
+		return user_path
+	return ""
+
+func list_maps() -> PackedStringArray:
+	var found: Dictionary = {}
+	for dir_path in [MAPS_DIR, USER_MAPS_DIR]:
+		var dir := DirAccess.open(dir_path)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var fname := dir.get_next()
+		while fname != "":
+			if fname.begins_with("map_") and fname.ends_with(".json"):
+				var key := fname.substr(4, fname.length() - 9)
+				if key != "":
+					found[key] = true
+			fname = dir.get_next()
+		dir.list_dir_end()
+	var names := PackedStringArray()
+	for k in found.keys():
+		names.append(str(k))
+	names.sort()
+	if names.is_empty():
+		names.append(DEFAULT_MAP_SIZE)
+	return names
+
+func reload(size_name: String) -> bool:
+	var wanted := size_name.strip_edges()
+	if wanted == "":
+		wanted = DEFAULT_MAP_SIZE
+	var path := resolve_map_path(wanted)
+	if path == "":
+		push_warning("MapConfig: map '%s' missing; using %s" % [wanted, DEFAULT_MAP_SIZE])
+		print("TEST_MAP_LOAD_FAIL: %s missing" % wanted)
+		if wanted != DEFAULT_MAP_SIZE:
+			return reload(DEFAULT_MAP_SIZE)
+		_apply_fallback_player_starts()
+		return false
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("MapConfig: %s missing; using fallback defaults" % path)
+		push_error("MapConfig: could not open %s" % path)
 		print("TEST_MAP_LOAD_FAIL: %s missing" % path)
 		_apply_fallback_player_starts()
-		return
+		return false
 	var text := f.get_as_text()
 	f.close()
 	var parsed = JSON.parse_string(text)
@@ -83,7 +131,21 @@ func _load() -> void:
 		push_error("MapConfig: %s did not parse to a dictionary" % path)
 		print("TEST_MAP_LOAD_FAIL: %s not a dict" % path)
 		_apply_fallback_player_starts()
-		return
+		return false
+	map_size = wanted
+	load_from_dict(parsed)
+	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons, %d dragons, %d lakes, %d props)" % [
+		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
+		_ridges.size(), _spline_ridges.size(), _plateaus.size(), _plateau_polygons.size(), _valleys.size(),
+		_valley_polygons.size(), get_neutral_dragons().size(), lakes.size(), props.size()
+	])
+	return true
+
+func _load() -> void:
+	reload(_parse_map_size_from_args())
+
+func load_from_dict(parsed: Dictionary) -> void:
+	_raw = parsed.duplicate(true)
 	name_ = str(parsed.get("name", map_size))
 	var size_dict = parsed.get("size", {})
 	if size_dict is Dictionary:
@@ -93,35 +155,74 @@ func _load() -> void:
 	if terrain is Dictionary:
 		terrain_type = str(terrain.get("type", terrain_type))
 		terrain_features = terrain.get("features", [])
+	else:
+		terrain_features = []
 	capture_points = parsed.get("capture_points", [])
+	if typeof(capture_points) != TYPE_ARRAY:
+		capture_points = []
 	neutral_dragons = parsed.get("neutral_dragons", [])
+	if typeof(neutral_dragons) != TYPE_ARRAY:
+		neutral_dragons = []
 	neutral_dragon = parsed.get("neutral_dragon", {})
+	if typeof(neutral_dragon) != TYPE_DICTIONARY:
+		neutral_dragon = {}
 	if neutral_dragons.is_empty() and not neutral_dragon.is_empty():
 		neutral_dragons = [neutral_dragon.duplicate()]
 	player_starts = parsed.get("player_starts", [])
+	if typeof(player_starts) != TYPE_ARRAY:
+		player_starts = []
 	if player_starts.is_empty():
 		_apply_fallback_player_starts()
 	var lighting_raw = parsed.get("lighting", {})
-	if lighting_raw is Dictionary:
-		lighting = lighting_raw
-	else:
-		lighting = {}
+	lighting = lighting_raw if lighting_raw is Dictionary else {}
 	var walkability_raw = parsed.get("walkability", {})
-	if walkability_raw is Dictionary:
-		walkability = walkability_raw
-	else:
-		walkability = {}
+	walkability = walkability_raw if walkability_raw is Dictionary else {}
 	var vegetation_raw = parsed.get("vegetation", {})
-	if vegetation_raw is Dictionary:
-		vegetation = vegetation_raw
-	else:
-		vegetation = {}
+	vegetation = vegetation_raw if vegetation_raw is Dictionary else {}
+	var lakes_raw = parsed.get("lakes", [])
+	lakes = lakes_raw if lakes_raw is Array else []
+	var props_raw = parsed.get("props", [])
+	props = props_raw if props_raw is Array else []
 	_precompute_terrain_features()
-	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons, %d dragons)" % [
-		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
-		_ridges.size(), _spline_ridges.size(), _plateaus.size(), _plateau_polygons.size(), _valleys.size(),
-		_valley_polygons.size(), get_neutral_dragons().size()
-	])
+
+func to_dict() -> Dictionary:
+	if not _raw.is_empty():
+		var out: Dictionary = _raw.duplicate(true)
+		out["name"] = name_
+		out["size"] = {"width": width, "height": height}
+		out["terrain"] = {"type": terrain_type, "features": terrain_features}
+		out["capture_points"] = capture_points
+		out["player_starts"] = player_starts
+		out["lighting"] = lighting
+		out["walkability"] = walkability
+		out["vegetation"] = vegetation
+		out["lakes"] = lakes
+		out["props"] = props
+		if not neutral_dragons.is_empty():
+			out["neutral_dragons"] = neutral_dragons
+			out.erase("neutral_dragon")
+		elif not neutral_dragon.is_empty():
+			out["neutral_dragon"] = neutral_dragon
+		return out
+	return {
+		"name": name_,
+		"size": {"width": width, "height": height},
+		"terrain": {"type": terrain_type, "features": terrain_features},
+		"capture_points": capture_points,
+		"player_starts": player_starts,
+		"lighting": lighting,
+		"walkability": walkability,
+		"vegetation": vegetation,
+		"lakes": lakes,
+		"props": props,
+		"neutral_dragons": get_neutral_dragons(),
+	}
+
+func get_lakes() -> Array:
+	return lakes
+
+func get_props() -> Array:
+	return props
 
 func get_neutral_dragons() -> Array:
 	if not neutral_dragons.is_empty():

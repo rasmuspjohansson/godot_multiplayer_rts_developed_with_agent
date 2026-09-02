@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$GamePath = Join-Path $RepoRoot "game_assets"
 $Bundled = Join-Path $RepoRoot "tools\godot\Godot_v4.6.1-stable_win64.exe"
 
 $Godot = $null
@@ -40,5 +41,5 @@ Write-Host "Connecting as '$Name' to ${ServerIp}:8910 ..."
 Write-Host "In the lobby: press Ready when you are set."
 Write-Host ""
 
-& $Godot --path $RepoRoot -- --client "--name=$Name" --color=1 "--host=$ServerIp"
+& $Godot --path $GamePath -- --client "--name=$Name" --color=1 "--host=$ServerIp"
 exit $LASTEXITCODE

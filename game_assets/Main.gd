@@ -25,7 +25,12 @@ func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
+	if GameState.selected_map == "":
+		GameState.selected_map = MapConfig.map_size
 
+	if "--map-editor" in args:
+		_start_map_editor()
+		return
 	if "--server" in args:
 		GameState.is_auto_test = auto_test
 		_start_server()
@@ -102,6 +107,9 @@ func _on_peer_connected(id: int):
 		print("TEST_CLIENT_A_START: Peer connected (first client): %d" % id)
 	else:
 		print("TEST_CLIENT_B_START: Peer connected (client #%d): %d" % [_peer_connect_count, id])
+	var lobby = get_node_or_null("UI/Lobby")
+	if lobby and lobby.has_method("broadcast_selected_map"):
+		lobby.broadcast_selected_map()
 
 func _on_peer_disconnected(id: int):
 	print("TEST_PEER_DISCONNECT: Peer disconnected: %d" % id)
@@ -208,6 +216,11 @@ func _clear_scenes():
 		child.queue_free()
 	for child in $UI.get_children():
 		child.queue_free()
+
+func _start_map_editor() -> void:
+	var editor = load("res://MapEditor.tscn").instantiate()
+	$UI.add_child(editor)
+	print("TEST_MAP_EDITOR_START: Map editor ready")
 
 func _load_lobby():
 	var lobby = load("res://Lobby.tscn").instantiate()

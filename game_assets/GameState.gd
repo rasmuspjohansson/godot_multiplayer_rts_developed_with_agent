@@ -22,6 +22,8 @@ var is_auto_test := false
 var resources := {}
 var capture_points := {}
 var last_combat_time: float = -999.0
+## Lobby-selected map name (`S`, `XL`, custom editor maps). CLI `--map=` is the default.
+var selected_map := ""
 
 static func default_resources() -> Dictionary:
 	return STARTING_RESOURCES.duplicate()

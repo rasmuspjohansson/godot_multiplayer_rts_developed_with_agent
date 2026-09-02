@@ -8,16 +8,24 @@ extends Control
 
 var local_ready := false
 var color_boxes: Array = []
+var _map_option: OptionButton
+var _updating_map_ui := false
 
 func _ready():
 	if name_edit:
 		name_edit.text = GameState.local_player_name if GameState.local_player_name else "Unknown Player"
+	_build_map_picker()
 	_build_color_boxes()
 	ready_button.pressed.connect(_on_ready_pressed)
 	_update_ui()
 
 	if multiplayer.is_server():
+		if GameState.selected_map == "":
+			GameState.selected_map = MapConfig.map_size
 		print("Lobby: Server waiting for players...")
+		broadcast_selected_map()
+	else:
+		rpc_id(1, "request_selected_map")
 
 func _on_ready_pressed():
 	if name_edit:
@@ -121,8 +129,91 @@ func _check_all_ready():
 	rpc("_start_match")
 	_start_match()
 
+func _build_map_picker() -> void:
+	var box: VBoxContainer = $VBoxContainer
+	var map_label := Label.new()
+	map_label.text = "Map:"
+	var ready_idx := ready_button.get_index()
+	box.add_child(map_label)
+	box.move_child(map_label, ready_idx)
+	_map_option = OptionButton.new()
+	_map_option.item_selected.connect(_on_map_item_selected)
+	box.add_child(_map_option)
+	box.move_child(_map_option, ready_idx + 1)
+	_refill_map_option()
+
+func _refill_map_option() -> void:
+	if _map_option == null:
+		return
+	_updating_map_ui = true
+	_map_option.clear()
+	var names := MapConfig.list_maps()
+	var current := GameState.selected_map if GameState.selected_map != "" else MapConfig.map_size
+	var sel := 0
+	for i in range(names.size()):
+		_map_option.add_item(names[i])
+		if names[i] == current:
+			sel = i
+	if names.size() > 0:
+		_map_option.select(sel)
+	_updating_map_ui = false
+
+func _on_map_item_selected(idx: int) -> void:
+	if _updating_map_ui or _map_option == null:
+		return
+	var name_str := _map_option.get_item_text(idx)
+	if multiplayer.is_server():
+		_apply_selected_map(name_str)
+	else:
+		rpc_id(1, "set_selected_map", name_str)
+
+@rpc("any_peer", "reliable")
+func request_selected_map() -> void:
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	rpc_id(sid, "_sync_selected_map", GameState.selected_map)
+
+@rpc("any_peer", "reliable")
+func set_selected_map(name_str: String) -> void:
+	if not multiplayer.is_server():
+		return
+	_apply_selected_map(name_str)
+
+func _apply_selected_map(name_str: String) -> void:
+	var names := MapConfig.list_maps()
+	var allowed := false
+	for n in names:
+		if n == name_str:
+			allowed = true
+			break
+	if not allowed:
+		return
+	GameState.selected_map = name_str
+	for pid in GameState.players:
+		GameState.players[pid]["ready"] = false
+	print("TEST_MAP_SELECTED: %s" % name_str)
+	broadcast_selected_map()
+	rpc("_sync_players", GameState.players)
+	_update_ui()
+
+func broadcast_selected_map() -> void:
+	if not multiplayer.is_server():
+		return
+	rpc("_sync_selected_map", GameState.selected_map)
+
+@rpc("authority", "call_local", "reliable")
+func _sync_selected_map(name_str: String) -> void:
+	GameState.selected_map = name_str
+	local_ready = false
+	if ready_button:
+		ready_button.text = "Ready"
+	_refill_map_option()
+
 @rpc("authority", "reliable")
 func _start_match():
 	print("TEST_GAME_START: Match starting, loading World scene")
+	var map_name := GameState.selected_map if GameState.selected_map != "" else MapConfig.map_size
+	MapConfig.reload(map_name)
 	var main = get_tree().root.get_node("Main")
 	main.load_world()

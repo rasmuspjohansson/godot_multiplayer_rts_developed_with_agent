@@ -8,6 +8,8 @@
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOGS_DIR="$REPO_ROOT/logs"
 cd "$SCRIPT_DIR"
 
 TESTS_JSON="tests.json"
@@ -34,7 +36,7 @@ echo "=== Log-marker checks (from tests.json events[]) ==="
 for row in "${EVENT_CHECKS[@]}"; do
   marker="${row%%$'\t'*}"
   log="${row##*$'\t'}"
-  path="logs/$log"
+  path="$LOGS_DIR/$log"
   if [[ ! -f "$path" ]]; then
     echo "FAIL: log file missing: $path (need marker $marker)"
     FAIL=$((FAIL+1))

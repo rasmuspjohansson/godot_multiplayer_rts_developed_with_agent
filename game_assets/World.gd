@@ -164,6 +164,8 @@ var _terrain_step: float = _TERRAIN_STEP
 var _max_terrain_height: float = 0.0
 var _water_basins: Array = []
 var _walkability: WalkabilityGrid = null
+## When true, World is a map-editor preview: terrain only, local camera, no match/UI/RPCs.
+var preview_only := false
 
 func _map_diagonal() -> float:
 	return sqrt(MapConfig.width * MapConfig.width + MapConfig.height * MapConfig.height)
@@ -445,6 +447,10 @@ func _ready():
 	_build_walkability()
 	_build_vegetation()
 	_build_background()
+	if preview_only:
+		_setup_camera()
+		_add_play_boundary_line()
+		return
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
 		GameState.reset_match_state()
@@ -777,6 +783,27 @@ func prepare_unit_move_target(from_xz: Vector2, to_xz: Vector2) -> PackedVector2
 		return PackedVector2Array()
 	return found
 
+func rebuild_from_mapconfig() -> void:
+	_init_offmap_lanes()
+	var bg := get_node_or_null("Background")
+	if bg:
+		bg.name = "BackgroundOld"
+		bg.queue_free()
+	var bounds := get_node_or_null("PlayBoundary")
+	if bounds:
+		bounds.name = "PlayBoundaryOld"
+		bounds.queue_free()
+	_build_terrain()
+	add_water()
+	_build_walkability()
+	_build_vegetation()
+	_build_background()
+	_add_play_boundary_line()
+	if _camera != null:
+		_camera.far = _camera_far()
+		_invalidate_pan_bounds_cache()
+		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+
 func add_water() -> void:
 	var water_root := get_node_or_null("Water")
 	if water_root == null:
@@ -791,7 +818,18 @@ func add_water() -> void:
 		return
 	var params: Dictionary = _WaterBuilder.default_params()
 	var basins: Array = []
-	if MapConfig.map_size == "XL":
+	var authored: Array = MapConfig.get_lakes()
+	if not authored.is_empty():
+		basins = _WaterBuilder.detect_lakes_from_seeds(
+			_terrain_heights,
+			_terrain_cols,
+			_terrain_rows,
+			_terrain_step,
+			MapConfig.width,
+			MapConfig.height,
+			authored
+		)
+	elif MapConfig.map_size == "XL":
 		params.min_cells = 12
 		params.water_depth = 10.0
 		basins = _WaterBuilder.detect_valley_polygon_lakes(
@@ -843,6 +881,10 @@ func _build_background() -> void:
 	if tex == null:
 		push_warning("Background image not found at %s" % path)
 		return
+	var old_bg := get_node_or_null("Background")
+	if old_bg:
+		old_bg.name = "BackgroundOld"
+		old_bg.queue_free()
 	var src_w: float = float(tex.get_width())
 	var src_h: float = float(tex.get_height())
 	if src_w <= 0.0 or src_h <= 0.0:
@@ -1178,6 +1220,9 @@ func _update_camera_position(delta: float = 0.0) -> void:
 	_camera.look_at(look_target, Vector3.UP)
 
 func _unhandled_input(event: InputEvent):
+	if preview_only:
+		_preview_camera_input(event)
+		return
 	if multiplayer.is_server() or game_over:
 		return
 	if event is InputEventMouseButton:
@@ -1223,7 +1268,42 @@ func _multiplayer_active() -> bool:
 	var peer = multiplayer.multiplayer_peer
 	return peer != null and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
+func _preview_camera_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			_camera_distance = maxf(CAMERA_MIN_DISTANCE, _camera_distance - CAMERA_ZOOM_SPEED)
+			_invalidate_pan_bounds_cache()
+			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+			get_viewport().set_input_as_handled()
+			return
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			_camera_distance = minf(_camera_max_distance(), _camera_distance + CAMERA_ZOOM_SPEED)
+			_invalidate_pan_bounds_cache()
+			_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+			get_viewport().set_input_as_handled()
+			return
+		if mb.button_index == MOUSE_BUTTON_MIDDLE:
+			_pan_drag = mb.pressed
+			if mb.pressed:
+				_last_mouse = mb.position
+			get_viewport().set_input_as_handled()
+			return
+	elif event is InputEventMouseMotion and _pan_drag:
+		var mm := event as InputEventMouseMotion
+		var delta := mm.position - _last_mouse
+		_last_mouse = mm.position
+		var pan_scale := _camera_distance / 600.0
+		_look_at_xz.x -= delta.x * 0.5 * pan_scale
+		_look_at_xz.y -= delta.y * 0.5 * pan_scale
+		_invalidate_pan_bounds_cache()
+		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+		get_viewport().set_input_as_handled()
+
 func _process(delta: float):
+	if preview_only:
+		_preview_camera_process(delta)
+		return
 	if not _multiplayer_active():
 		return
 	if not multiplayer.is_server():
@@ -1232,6 +1312,25 @@ func _process(delta: float):
 	if _camera_pivot == null:
 		return
 	if multiplayer.is_server():
+		return
+	var pan_speed := _camera_pan_speed()
+	var pan := Vector2.ZERO
+	if Input.is_key_pressed(KEY_A):
+		pan.x -= pan_speed
+	if Input.is_key_pressed(KEY_D):
+		pan.x += pan_speed
+	if Input.is_key_pressed(KEY_W):
+		pan.y -= pan_speed
+	if Input.is_key_pressed(KEY_S):
+		pan.y += pan_speed
+	if pan != Vector2.ZERO:
+		_look_at_xz += pan * delta
+		_invalidate_pan_bounds_cache()
+		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+	_update_camera_position(delta)
+
+func _preview_camera_process(delta: float) -> void:
+	if _camera_pivot == null:
 		return
 	var pan_speed := _camera_pan_speed()
 	var pan := Vector2.ZERO
@@ -2493,6 +2592,8 @@ func _update_army_orders(delta: float) -> void:
 const GOAL_ARRIVAL_DIST := 0.2
 
 func _physics_process(delta: float):
+	if preview_only:
+		return
 	if multiplayer.is_server() and not game_over:
 		_process_pending_arrow_damage(delta)
 		_check_match_timeout(delta)
@@ -3110,6 +3211,12 @@ func get_ground_height_at(x: float, z: float) -> float:
 	return result["position"].y
 
 func _add_play_boundary_line():
+	var existing := get_node_or_null("PlayBoundary")
+	if existing:
+		existing.queue_free()
+	var root := Node3D.new()
+	root.name = "PlayBoundary"
+	add_child(root)
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color = Color(0.15, 0.15, 0.2, 1.0)
 	var line_height := 0.2
@@ -3121,7 +3228,7 @@ func _add_play_boundary_line():
 	left.mesh = box_left
 	left.position = Vector3(0.0, 0.1, MapConfig.height / 2.0)
 	left.material_override = mat
-	add_child(left)
+	root.add_child(left)
 	# Right edge
 	var box_right = BoxMesh.new()
 	box_right.size = Vector3(line_width, line_height, MapConfig.height)
@@ -3129,7 +3236,7 @@ func _add_play_boundary_line():
 	right.mesh = box_right
 	right.position = Vector3(MapConfig.width, 0.1, MapConfig.height / 2.0)
 	right.material_override = mat
-	add_child(right)
+	root.add_child(right)
 	# Bottom edge
 	var box_bottom = BoxMesh.new()
 	box_bottom.size = Vector3(MapConfig.width, line_height, line_width)
@@ -3137,7 +3244,7 @@ func _add_play_boundary_line():
 	bottom.mesh = box_bottom
 	bottom.position = Vector3(MapConfig.width / 2.0, 0.1, 0.0)
 	bottom.material_override = mat
-	add_child(bottom)
+	root.add_child(bottom)
 	# Top edge
 	var box_top = BoxMesh.new()
 	box_top.size = Vector3(MapConfig.width, line_height, line_width)
@@ -3145,7 +3252,7 @@ func _add_play_boundary_line():
 	top.mesh = box_top
 	top.position = Vector3(MapConfig.width / 2.0, 0.1, MapConfig.height)
 	top.material_override = mat
-	add_child(top)
+	root.add_child(top)
 
 func _make_client_unit_3d(peer_id: int) -> CharacterBody3D:
 	var unit = CharacterBody3D.new()
