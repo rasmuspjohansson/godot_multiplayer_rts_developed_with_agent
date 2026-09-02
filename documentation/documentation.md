@@ -134,7 +134,7 @@ sequenceDiagram
 
 ## Requirements
 
-- **Godot 4.6.x** (standalone binary). Examples use `godot`; if `godot` is not in PATH, set `GODOT_BIN=/path/to/Godot_v4.6.1-stable_linux.x86_64`.
+- **Godot 4.6.x**. From the repo root, `./install_godot_linux.sh` (or Windows `install_godot_windows.bat`) downloads 4.6.1 into `tools/godot/`. Launch scripts use that binary if present; otherwise `godot` on PATH or `GODOT_BIN`.
 - `python3` (used by `verify_test_logs.sh` to parse `tests.json`).
 
 ## Running the automated test

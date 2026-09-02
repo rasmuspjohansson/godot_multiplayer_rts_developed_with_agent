@@ -15,9 +15,14 @@
 # Set GODOT_BIN to the full path to your Godot executable if "godot" is not in PATH.
 
 set -e
-GODOT_BIN="${GODOT_BIN:-godot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME_PATH="$SCRIPT_DIR/game_assets"
+GODOT_BUNDLED="$SCRIPT_DIR/tools/godot/Godot_v4.6.1-stable_linux.x86_64"
+if [[ -z "${GODOT_BIN:-}" && -x "$GODOT_BUNDLED" ]]; then
+  GODOT_BIN="$GODOT_BUNDLED"
+else
+  GODOT_BIN="${GODOT_BIN:-godot}"
+fi
 cd "$SCRIPT_DIR"
 
 AUTO_TEST=true

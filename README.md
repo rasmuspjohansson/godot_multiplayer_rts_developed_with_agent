@@ -15,13 +15,11 @@ Double-click `install_godot_windows.bat`. This downloads Godot **4.6.1** into `t
 
 ### Linux
 
-Install Godot **4.6.x** so the `godot` command works, or set `GODOT_BIN` to the binary:
-
 ```bash
-godot --version    # expect 4.6.x
-# if the binary is not named godot:
-export GODOT_BIN=/path/to/Godot_v4.6.1-stable_linux.x86_64
+./install_godot_linux.sh
 ```
+
+This downloads Godot **4.6.1** into `tools/godot/` (once; needs a network connection).
 
 ---
 

@@ -6,9 +6,16 @@
 # Other game flags are passed through (e.g. --map=XL --color=2).
 
 set -e
-GODOT_BIN="${GODOT_BIN:-godot}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME_PATH="$SCRIPT_DIR/game_assets"
+GODOT_BUNDLED="$SCRIPT_DIR/tools/godot/Godot_v4.6.1-stable_linux.x86_64"
+if [[ -x "$GODOT_BUNDLED" ]]; then
+  GODOT_BIN="$GODOT_BUNDLED"
+elif [[ -n "${GODOT_BIN:-}" ]]; then
+  :
+else
+  GODOT_BIN="godot"
+fi
 
 NAME="Human"
 HOST=""
@@ -46,7 +53,8 @@ if [[ ! -f "$GAME_PATH/project.godot" ]]; then
 fi
 
 if ! command -v "$GODOT_BIN" >/dev/null 2>&1 && [[ ! -x "$GODOT_BIN" ]]; then
-  echo "ERROR: Godot not found. Install Godot 4.6.x or set GODOT_BIN."
+  echo "ERROR: Godot not found."
+  echo "Run ./install_godot_linux.sh once, or set GODOT_BIN to your Godot 4.6.x binary."
   exit 1
 fi
 
