@@ -1,195 +1,74 @@
-extends Node3D
-## 3D army: formation, movement, orders, stances (XZ map).
-
-signal army_routed(army)
+extends Node
+## Thin per-army handle around a FormationController living in UnitSim.
+## Holds identity, ownership and selection so MockPlayer, ArmyCommandBar and the World UI
+## keep a node to talk to; all movement/combat state lives in the sim (see sim/UnitSim.gd).
 
 enum Stance { AGGRESSIVE, DEFENSIVE, HOLD, PASSIVE }
-enum OrderType { NONE, MOVE, ATTACK, ATTACK_MOVE }
 
-const FOOT_SPACING := 10.0
-const MOUNTED_SPACING := 15.0
+signal selection_changed(army, selected: bool)
 
 var army_id: String = ""
-var owner_peer_id: int = 0
+var owner_id: int = 0
 var owner_name: String = ""
-var direction: float = 0.0
-var rows: int = 2
-var cols: int = 5
-var spacing: float = FOOT_SPACING
-var initial_count: int = 10
-var soldiers: Array = []
-var is_routed := false
-var is_selected := false
+var is_npc: bool = false
+var is_selected: bool = false
+var has_horse: bool = false
+var has_spear: bool = false
+var has_bow: bool = false
+var sim_index: int = -1
+## FormationController (RefCounted) owned by the sim.
+var fc = null
 
-var stance: int = Stance.DEFENSIVE
-var order_type: int = OrderType.NONE
-var order_target_army_id := ""
-var order_target_unit_name := ""
-var order_destination := Vector2.ZERO
-var hold_position := Vector2.ZERO
+var is_routed: bool:
+	get:
+		return fc != null and fc.is_routed
 
-const ROUT_THRESHOLD := 0.3
+var stance: int:
+	get:
+		return fc.stance if fc != null else Stance.DEFENSIVE
+	set(v):
+		if fc != null:
+			fc.set_stance(v)
 
-func _ground_y_at(xz: Vector2) -> float:
-	var w = get_parent()
-	if w != null and w.has_method("get_ground_height_at"):
-		return w.get_ground_height_at(xz.x, xz.y)
-	return 0.0
+var direction: float:
+	get:
+		return fc.front_angle() if fc != null else 0.0
 
-func _clamp_map_xz(v: Vector2) -> Vector2:
-	return Vector2(clampf(v.x, 0.0, MapConfig.width), clampf(v.y, 0.0, MapConfig.height))
+func setup(p_army_id: String, p_owner_id: int, p_owner_name: String, p_fc) -> void:
+	army_id = p_army_id
+	owner_id = p_owner_id
+	owner_name = p_owner_name
+	fc = p_fc
+	if fc != null:
+		sim_index = fc.index
+		has_horse = fc.has_horse
+		has_spear = fc.has_spear
+		has_bow = fc.has_bow
+	name = "Army_" + army_id
 
-func get_alive_soldiers() -> Array:
-	var alive := []
-	for s in soldiers:
-		if s and is_instance_valid(s) and not s.get("is_dead"):
-			alive.append(s)
-	return alive
+func unit_ids() -> PackedInt32Array:
+	return fc.members if fc != null else PackedInt32Array()
 
-func get_alive_count() -> int:
-	return get_alive_soldiers().size()
-
-func _uses_mounted_spacing() -> bool:
-	for s in get_alive_soldiers():
-		if s.get("has_horse"):
-			return true
-	return false
-
-func _formation_spacing() -> float:
-	return MOUNTED_SPACING if _uses_mounted_spacing() else FOOT_SPACING
-
-func calculate_formation_positions(center: Vector2, dir: float, count: int) -> Array:
-	var positions := []
-	if count == 0:
-		return positions
-	var gap := _formation_spacing()
-	var r = rows
-	var c = ceili(float(count) / float(r))
-	if c == 0:
-		c = 1
-	var idx := 0
-	for row in range(r):
-		for col in range(c):
-			if idx >= count:
-				break
-			var local_x = (col - (c - 1) / 2.0) * gap
-			var local_y = (row - (r - 1) / 2.0) * gap
-			var offset = Vector2(local_x, local_y).rotated(dir)
-			positions.append(center + offset)
-			idx += 1
-	return positions
-
-func assign_formation_at(center: Vector2) -> void:
-	if is_routed:
+func select() -> void:
+	if is_selected:
 		return
-	var alive = get_alive_soldiers()
-	var positions = calculate_formation_positions(center, direction, alive.size())
-	for i in range(min(alive.size(), positions.size())):
-		if alive[i].has_method("set_move_target"):
-			alive[i].set_move_target(positions[i])
-
-func assign_formation_targets():
-	assign_formation_at(Vector2(global_position.x, global_position.z))
-
-func issue_move(dest: Vector2) -> void:
-	order_type = OrderType.MOVE
-	order_target_army_id = ""
-	order_target_unit_name = ""
-	order_destination = _clamp_map_xz(dest)
-	move_army(order_destination)
-
-func issue_attack_move(dest: Vector2) -> void:
-	order_type = OrderType.ATTACK_MOVE
-	order_target_army_id = ""
-	order_target_unit_name = ""
-	order_destination = _clamp_map_xz(dest)
-	move_army(order_destination)
-
-func issue_attack_army(enemy_army_id: String) -> void:
-	order_type = OrderType.ATTACK
-	order_target_army_id = enemy_army_id
-	order_target_unit_name = ""
-	hold_position = Vector2(global_position.x, global_position.z)
-
-func issue_attack_unit(unit_name: String) -> void:
-	order_type = OrderType.ATTACK
-	order_target_army_id = ""
-	order_target_unit_name = unit_name
-	hold_position = Vector2(global_position.x, global_position.z)
-
-func set_stance(s: int) -> void:
-	stance = s
-	if s == Stance.HOLD:
-		hold_position = Vector2(global_position.x, global_position.z)
-
-func clear_order() -> void:
-	order_type = OrderType.NONE
-	order_target_army_id = ""
-	order_target_unit_name = ""
-
-func has_player_order() -> bool:
-	return order_type != OrderType.NONE
-
-func move_army(target: Vector2):
-	if is_routed:
-		return
-	target = _clamp_map_xz(target)
-	var gy = _ground_y_at(target)
-	var new_p := Vector3(target.x, gy, target.y)
-	var d := new_p - global_position
-	global_position = new_p
-	for s in get_alive_soldiers():
-		if s.has_method("set_move_target"):
-			var tp: Vector3 = s.global_position + d
-			tp.x = clampf(tp.x, 0.0, MapConfig.width)
-			tp.z = clampf(tp.z, 0.0, MapConfig.height)
-			var g2 = _ground_y_at(Vector2(tp.x, tp.z))
-			tp.y = g2 + 11.0
-			s.sync_target_position = tp
-			s.set_move_target(Vector2(tp.x, tp.z))
-
-func rotate_army(delta_angle: float):
-	if is_routed:
-		return
-	direction += delta_angle
-	assign_formation_targets()
-
-func select():
 	is_selected = true
-	for s in get_alive_soldiers():
-		if s.has_method("set_selected"):
-			s.set_selected(true)
+	selection_changed.emit(self, true)
 
-func deselect():
-	is_selected = false
-	for s in get_alive_soldiers():
-		if s.has_method("set_selected"):
-			s.set_selected(false)
-
-func on_soldier_died(_peer_id: int):
-	if is_routed:
+func deselect() -> void:
+	if not is_selected:
 		return
-	var alive = get_alive_count()
-	print("Army %s: soldier died, %d/%d alive" % [army_id, alive, initial_count])
-	if alive > 0 and float(alive) / float(initial_count) >= ROUT_THRESHOLD:
-		repack_formation()
-	else:
-		_do_rout()
+	is_selected = false
+	selection_changed.emit(self, false)
 
-func repack_formation():
-	assign_formation_targets()
+func soldier_count() -> int:
+	return fc.members.size() if fc != null else 0
 
-func _do_rout():
-	is_routed = true
-	clear_order()
-	var remaining = get_alive_count()
-	print("TEST_ROUT: Army '%s' routed (%d/%d alive) owner=%s" % [army_id, remaining, initial_count, owner_name])
-	for s in get_alive_soldiers():
-		s.set("is_dead", true)
-		s.queue_free()
-	army_routed.emit(self)
+func is_ranged() -> bool:
+	return has_bow
 
-func apply_combat_directives_to_soldiers(commanded_name: String) -> void:
-	for s in get_alive_soldiers():
-		if s.has_method("set_combat_directives"):
-			s.set_combat_directives(commanded_name, stance)
+func uses_mounted_spacing() -> bool:
+	return has_horse
+
+func anchor() -> Vector2:
+	return fc.anchor if fc != null else Vector2.ZERO

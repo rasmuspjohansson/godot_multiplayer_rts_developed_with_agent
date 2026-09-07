@@ -24,6 +24,8 @@ var capture_points := {}
 var last_combat_time: float = -999.0
 ## Lobby-selected map name (`S`, `XL`, custom editor maps). CLI `--map=` is the default.
 var selected_map := ""
+## CLI `--stress-units=N`: soldiers per player to spawn (0 = use map defaults).
+var stress_units_per_player: int = 0
 
 static func default_resources() -> Dictionary:
 	return STARTING_RESOURCES.duplicate()

@@ -25,6 +25,9 @@ func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
+	for a in args:
+		if str(a).begins_with("--stress-units="):
+			GameState.stress_units_per_player = maxi(0, int(str(a).split("=")[1]))
 	if GameState.selected_map == "":
 		GameState.selected_map = MapConfig.map_size
 
@@ -47,6 +50,10 @@ func _ready():
 			player_name = "Unknown Player"
 		GameState.local_player_name = player_name
 		GameState.is_auto_test = auto_test
+		if auto_test or "--no-vsync" in args:
+			# Perf markers must measure the game, not the monitor: with vsync on, a blanked
+			# display makes every swap block for ~1 s on Mesa and the client reports 1 fps.
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		_server_host = _get_server_host(args)
 		_start_client()
 	else:

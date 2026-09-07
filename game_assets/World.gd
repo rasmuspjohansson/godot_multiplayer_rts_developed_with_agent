@@ -2,29 +2,43 @@ extends Node3D
 ## Single world: server authority + 3D client; map size from MapConfig (S/L/XL).
 
 const _Army3D = preload("res://Army3D.gd")
-const _Unit3D = preload("res://Unit3D.gd")
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 const _ArmyCommandBar = preload("res://ArmyCommandBar.gd")
-const _UnitBehaviour = preload("res://UnitBehaviour.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
-## Per-player unit layers (layer 2 is reserved for ground).
-const TEAM_COLLISION_LAYERS: Array[int] = [1, 4, 8, 16]
-const NEUTRAL_DRAGON_COLLISION_LAYER := 32
-## When true, units pass through each other during movement (no physics blocking).
-## Combat still uses distance checks in Unit3D._try_attack(), not collision contact.
-## Set false to restore enemy-vs-enemy blocking via per-team collision_mask.
-## See game.md "Physics / collision" for layer layout and friendly-blocking notes.
-const UNIT_PASS_THROUGH := false
+## Data-oriented simulation core (see documentation.md "Architecture").
+const _UnitSim = preload("res://sim/UnitSim.gd")
+const _Formation = preload("res://sim/FormationController.gd")
+const _NetSync = preload("res://sim/NetSync.gd")
+const _UnitRenderer = preload("res://sim/UnitRenderer.gd")
+const _UnitAudio = preload("res://sim/UnitAudio.gd")
 
+## Army size is a per-army parameter: map JSON `soldiers`, draft UI spin box, stress flag.
+const DEFAULT_SOLDIERS_PER_ARMY := 10
+const MIN_SOLDIERS_PER_ARMY := 10
+const MAX_SOLDIERS_PER_ARMY := 200
+const STRESS_SOLDIERS_PER_ARMY := 50
 ## Default armies per player when map JSON is unavailable (see MapConfig.max_armies_per_player()).
 const ARMIES_PER_PLAYER_FALLBACK := 2
-const UNITS_PER_ARMY := 10
 ## Map width/height come from `MapConfig` (maps/map_{S|L|XL}.json). Access via
 ## `MapConfig.width` / `MapConfig.height` elsewhere in this file.
-const CP_PEACE_SECONDS := 5.0
-const CAPTURE_RADIUS_SEEK := 120.0
 const DRAFT_COST_PER_EQUIPMENT := 10
+const MAX_ARROWS_PER_TICK := 40
+const MAX_GHOST_MARKERS := 400
+
+var _sim = null            # UnitSim
+var _net = null            # NetSync
+var _unit_renderer = null  # UnitRenderer (clients only)
+var _unit_audio = null     # UnitAudio (clients only)
+var _sim_accum := 0.0
+var _order_seq := 0
+var _next_unit_id := 0
+var _snapshot_bytes_sent := 0
+var _army_by_id: Dictionary = {}
+var _click_marker: MeshInstance3D = null
+var _click_marker_t := 0.0
+## Headless tests without a multiplayer peer set this so the local sim still steps.
+var _local_sim_enabled := false
 ## Off-map spawn/stop lanes for the legacy draft-army path. Recomputed from
 ## MapConfig in `_init_offmap_lanes()` so they scale with map size.
 var WEST_SPAWN: Vector2 = Vector2.ZERO
@@ -35,7 +49,6 @@ var NORTH_SPAWN: Vector2 = Vector2.ZERO
 var SOUTH_SPAWN: Vector2 = Vector2.ZERO
 var NORTH_STOP_Y: float = 80.0
 var SOUTH_STOP_Y: float = 0.0
-const GRID_CELL_SIZE := 125.0
 const CP_CAPTURE_RADIUS := 120.0
 const CP_RESOURCE_INTERVAL := 2.0
 # Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
@@ -56,8 +69,6 @@ const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
 const CAMERA_ZOOM_SPEED := 80.0
 const ARMY_CLICK_RADIUS := 80.0
-# Client: only snap to server HERE when error exceeds this (real desync only)
-const CORRECTION_THRESHOLD := 120.0
 const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
 const GROUND_TEXTURE_PATH := "res://images/background/ground_grass.png"
@@ -80,29 +91,18 @@ const CP_RESOURCE_BY_TYPE := {
 }
 ## Capture point billboard height in world units.
 const CP_SPRITE_WORLD_HEIGHT := 80.0
-## Living units per unreliable _receive_positions RPC (round-robin; also MTU cap).
-const POSITION_SYNC_BATCH_SIZE := 4
 ## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
 const CAPTURE_SYNC_BATCH_SIZE := 6
 
-var _unit_grid: Dictionary = {}  # "cx_cz" -> Array of unit refs
 var sync_timer := 0.0
-var _sync_cursor := 0
 var _last_sent_cp_owner: Dictionary = {}
 var _last_sent_resources: Dictionary = {}
 var _capture_hud_sent := false
-var army_time_at_cp := {}
-var army_follow_target := {}
-## Server: mock idle detection — only for armies that received `_server_mock_chase_tick` (not human players)
-var _mock_chase_touched: Dictionary = {}
-var _mock_stuck_t: Dictionary = {}
-var _mock_stuck_last: Dictionary = {}
 var player_side := {}  # pid -> "west" | "east" | ... (legacy draft path)
 var player_slot := {}  # pid -> int (index into MapConfig.player_starts)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
 var _server_captures: Array = []
-var _pending_arrow_damage: Array = []
 
 var _camera: Camera3D
 var _camera_pivot: Node3D
@@ -119,7 +119,6 @@ var _pan_drag := false
 var _last_mouse: Vector2
 
 var armies: Array = []
-var all_units: Array = []
 var _map_dragons: Array = []
 var _dragon_ai_timer: float = 0.0
 const DRAGON_AI_TICK := 0.5
@@ -141,11 +140,10 @@ var _ghost_root_3d: Node3D
 var _ghost_marker_mat: StandardMaterial3D
 var _ghost_marker_invalid_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
-var _goal_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 var _show_unit_range: bool = false
 var _show_range_cb: CheckBox = null
+var _draft_size_spin: SpinBox = null
 var _range_markers_3d: Node3D
-var _range_marker_mesh_by_unit: Dictionary = {}  # String -> MeshInstance3D
 var _sun_azimuth_deg: float = 275.0
 var _sun_elevation_deg: float = 0.0
 var _sun_energy: float = 0.12
@@ -154,6 +152,7 @@ var _lighting_azimuth_value_label: Label = null
 var _lighting_elevation_value_label: Label = null
 var _lighting_energy_value_label: Label = null
 var _lighting_summary_label: Label = null
+var _anim_speed_value_label: Label = null
 const MARQUEE_DRAG_THRESHOLD := 6.0
 const RMB_DRAG_CLICK_THRESHOLD := 14.0
 ## Terrain height grid built in `_build_terrain()`; used as fallback when physics raycast misses.
@@ -257,6 +256,8 @@ func _update_lighting_tuning_display() -> void:
 		_lighting_elevation_value_label.text = "%.0f" % _sun_elevation_deg
 	if _lighting_energy_value_label != null:
 		_lighting_energy_value_label.text = "%.2f" % _sun_energy
+	if _anim_speed_value_label != null and _unit_renderer != null:
+		_anim_speed_value_label.text = "%.2f" % _unit_renderer.anim_speed()
 	if _lighting_summary_label != null:
 		_lighting_summary_label.text = (
 			'"sun_azimuth_deg": %.1f, "sun_elevation_deg": %.1f, "energy": %.2f'
@@ -275,6 +276,12 @@ func _on_lighting_energy_changed(value: float) -> void:
 	_sun_energy = value
 	_apply_sun_lighting()
 
+func _on_anim_speed_changed(value: float) -> void:
+	if _unit_renderer != null:
+		_unit_renderer.set_anim_speed(value)
+	if _anim_speed_value_label != null:
+		_anim_speed_value_label.text = "%.2f" % value
+
 func _setup_lighting_tuning_panel() -> void:
 	var layer := CanvasLayer.new()
 	layer.name = "LightingTuningLayer"
@@ -286,7 +293,7 @@ func _setup_lighting_tuning_panel() -> void:
 	panel.offset_left = -300.0
 	panel.offset_top = 40.0
 	panel.offset_right = -10.0
-	panel.offset_bottom = 230.0
+	panel.offset_bottom = 310.0
 	layer.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -308,6 +315,24 @@ func _setup_lighting_tuning_panel() -> void:
 	_add_lighting_slider_row(vbox, "Azimuth", 0.0, 360.0, 1.0, _sun_azimuth_deg, _on_lighting_azimuth_changed, "azimuth")
 	_add_lighting_slider_row(vbox, "Elevation", 0.0, 90.0, 1.0, _sun_elevation_deg, _on_lighting_elevation_changed, "elevation")
 	_add_lighting_slider_row(vbox, "Energy", 0.0, 2.0, 0.01, _sun_energy, _on_lighting_energy_changed, "energy")
+	if not multiplayer.is_server():
+		var anim_title := Label.new()
+		anim_title.text = "Sprite anim"
+		anim_title.add_theme_font_size_override("font_size", 14)
+		vbox.add_child(anim_title)
+		var initial_speed := _UnitRenderer.ANIM_SPEED_DEFAULT
+		if _unit_renderer != null:
+			initial_speed = _unit_renderer.anim_speed()
+		_add_lighting_slider_row(
+			vbox,
+			"Speed",
+			_UnitRenderer.ANIM_SPEED_MIN,
+			_UnitRenderer.ANIM_SPEED_MAX,
+			0.05,
+			initial_speed,
+			_on_anim_speed_changed,
+			"anim_speed"
+		)
 
 	var hint := Label.new()
 	hint.text = "Copy for map JSON:"
@@ -355,7 +380,7 @@ func _add_lighting_slider_row(
 	value_label.custom_minimum_size = Vector2(44.0, 0.0)
 	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	value_label.add_theme_font_size_override("font_size", 12)
-	if value_key == "energy":
+	if value_key == "energy" or value_key == "anim_speed":
 		value_label.text = "%.2f" % initial
 	else:
 		value_label.text = "%.0f" % initial
@@ -366,38 +391,32 @@ func _add_lighting_slider_row(
 			_lighting_elevation_value_label = value_label
 		"energy":
 			_lighting_energy_value_label = value_label
+		"anim_speed":
+			_anim_speed_value_label = value_label
 	row.add_child(value_label)
 
-func _client_unit_scene_visible(u: Node) -> bool:
-	if not u.is_visible_in_tree():
-		return false
-	for c in u.get_children():
-		if c is MeshInstance3D and not c.visible:
-			return false
-	return true
-
 ## Client-only: log TEST_ALL_UNITS_* markers for automated detection (both teams visible, overview frustum).
+## Units are GPU instances now, so "scene visible" means the renderer group for the unit is visible
+## and the unit is alive; the frustum check uses sim positions.
 func _log_unit_visibility(phase: String) -> void:
-	if multiplayer.is_server() or _camera == null:
+	if multiplayer.is_server() or _camera == null or _sim == null:
 		return
 	var pname: String = GameState.local_player_name
 	var total := 0
 	var vis := 0
-	for u in all_units:
-		if not is_instance_valid(u) or not u.is_inside_tree():
-			continue
-		if u.get("is_dead"):
+	var renderer_visible: bool = _unit_renderer != null and _unit_renderer.is_visible_in_tree()
+	for i in range(_sim.count):
+		if not _sim.is_alive(i):
 			continue
 		total += 1
-		if _client_unit_scene_visible(u):
+		if renderer_visible:
 			vis += 1
 	if total == 0:
 		print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=0 total=0" % [pname, phase])
+	elif vis == total:
+		print("TEST_ALL_UNITS_SCENE_VISIBLE: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
 	else:
-		if vis == total:
-			print("TEST_ALL_UNITS_SCENE_VISIBLE: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
-		else:
-			print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
+		print("TEST_ALL_UNITS_SCENE_VISIBLE_FAIL: client=%s phase=%s visible=%d total=%d" % [pname, phase, vis, total])
 	var saved_look := _look_at_xz
 	var saved_dist := _camera_distance
 	_look_at_xz = Vector2(MapConfig.width / 2.0, MapConfig.height / 2.0)
@@ -405,12 +424,12 @@ func _log_unit_visibility(phase: String) -> void:
 	_camera_smoothing_initialized = false
 	_update_camera_position(0.0)
 	var in_frustum := 0
-	for u2 in all_units:
-		if not is_instance_valid(u2) or not u2.is_inside_tree():
+	for i in range(_sim.count):
+		if not _sim.is_alive(i):
 			continue
-		if u2.get("is_dead"):
-			continue
-		if _camera.is_position_in_frustum(u2.global_position):
+		var x: float = _sim.pos_x[i]
+		var z: float = _sim.pos_z[i]
+		if _camera.is_position_in_frustum(Vector3(x, get_ground_height_at(x, z) + UNIT_HALF_HEIGHT, z)):
 			in_frustum += 1
 	if total > 0 and in_frustum == total:
 		print("TEST_ALL_UNITS_IN_FRUSTUM: client=%s phase=%s ok=true visible=%d total=%d" % [pname, phase, in_frustum, total])
@@ -451,6 +470,7 @@ func _ready():
 		_setup_camera()
 		_add_play_boundary_line()
 		return
+	_setup_sim()
 	# Match setup only when real lobby has registered players (skip standalone tests with empty GameState).
 	if multiplayer.is_server() and GameState.players.size() >= 2:
 		GameState.reset_match_state()
@@ -467,9 +487,89 @@ func _ready():
 	if not multiplayer.is_server():
 		_setup_army_command_bar()
 	_add_play_boundary_line()
+	_setup_perf_monitor()
 	call_deferred("_agent_debug_log_world_ready")
 	if not multiplayer.is_server():
 		call_deferred("_notify_client_world_ready")
+
+var _perf_monitor: Node = null
+
+func _setup_perf_monitor() -> void:
+	if not _multiplayer_active():
+		return
+	_perf_monitor = preload("res://PerfMonitor.gd").new()
+	_perf_monitor.name = "PerfMonitor"
+	_perf_monitor.set_unit_count_callback(_alive_unit_count)
+	_perf_monitor.set_extra_stats_callback(_sim_health_stats)
+	add_child(_perf_monitor)
+
+## Anti-regression counters for the two old bugs: hard position snaps (A->B->A teleports) and
+## units animated as walking without displacement. Reset after every report.
+func _sim_health_stats() -> String:
+	if _sim == null:
+		return ""
+	var s := "snaps=%d walk_in_place=%d" % [_sim.snap_count, _sim.walk_in_place_count]
+	if not multiplayer.is_server():
+		print("TEST_SIM_CLIENT %s units=%d" % [s, _sim.alive_count])
+	_sim.snap_count = 0
+	_sim.walk_in_place_count = 0
+	return s
+
+func _alive_unit_count() -> int:
+	if _sim == null:
+		return 0
+	var n := 0
+	for i in range(_sim.count):
+		if _sim.is_alive(i):
+			n += 1
+	return n
+
+## Simulation core shared by server and clients. The server is authoritative (damage, deaths,
+## routs); clients run the same movement sim from the same order stream and get corrected by
+## packed snapshots. Units are ids into the sim arrays; there are no unit nodes anywhere.
+func _setup_sim() -> void:
+	_sim = _UnitSim.new()
+	_sim.setup(_walkability, float(MapConfig.width), float(MapConfig.height), multiplayer.is_server())
+	_net = _NetSync.new()
+	_net.setup(float(MapConfig.width), float(MapConfig.height))
+	if not multiplayer.is_server():
+		_unit_renderer = _UnitRenderer.new()
+		_unit_renderer.name = "UnitRenderer"
+		_unit_renderer.sim = _sim
+		_unit_renderer.set_tick_dt(_UnitSim.SIM_DT)
+		if not _terrain_heights.is_empty():
+			_unit_renderer.set_height_grid(_terrain_heights, _terrain_cols, _terrain_rows, _terrain_step)
+		add_child(_unit_renderer)
+		_unit_audio = _UnitAudio.new()
+		_unit_audio.name = "UnitAudio"
+		_unit_audio.sim = _sim
+		_unit_audio.ground_height_fn = get_ground_height_at
+		add_child(_unit_audio)
+
+## Fixed-step sim driven from _physics_process on both peers.
+func _step_sim(delta: float) -> void:
+	if _sim == null:
+		return
+	_sim_accum += delta
+	var steps := 0
+	while _sim_accum >= _UnitSim.SIM_DT and steps < 4:
+		_sim_accum -= _UnitSim.SIM_DT
+		var t0 := Time.get_ticks_usec()
+		_sim.step(_UnitSim.SIM_DT)
+		if _perf_monitor != null:
+			_perf_monitor.record_sim_step_ms(float(Time.get_ticks_usec() - t0) / 1000.0)
+		_after_sim_tick()
+		steps += 1
+	if _sim_accum > _UnitSim.SIM_DT * 4.0:
+		_sim_accum = 0.0
+
+func _after_sim_tick() -> void:
+	if _sim.combat_hits > 0:
+		GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
+	if multiplayer.is_server():
+		_server_after_tick()
+	else:
+		_client_after_tick()
 
 func _notify_client_world_ready() -> void:
 	if multiplayer.is_server():
@@ -593,6 +693,8 @@ func _build_terrain() -> void:
 	_terrain_cols = cols
 	_terrain_rows = rows
 	_terrain_step = step
+	if _unit_renderer != null:
+		_unit_renderer.set_height_grid(heights, cols, rows, step)
 	# Build the visual ArrayMesh.
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
@@ -1309,6 +1411,7 @@ func _process(delta: float):
 	if not multiplayer.is_server():
 		_update_move_goal_markers_3d()
 		_update_unit_range_markers_3d()
+		_update_click_marker(delta)
 	if _camera_pivot == null:
 		return
 	if multiplayer.is_server():
@@ -1348,33 +1451,28 @@ func _preview_camera_process(delta: float) -> void:
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 	_update_camera_position(delta)
 
+## Move-goal markers: one per selected army that has a destination (pooled meshes).
 func _update_move_goal_markers_3d():
 	if _move_goal_markers_3d == null:
 		_move_goal_markers_3d = Node3D.new()
 		_move_goal_markers_3d.name = "MoveGoalMarkers3D"
 		add_child(_move_goal_markers_3d)
-	var seen: Dictionary = {}
-	for unit in all_units:
-		if not is_instance_valid(unit) or not unit.is_inside_tree():
+	var used := 0
+	var pool: Array = _move_goal_markers_3d.get_children()
+	for a in selected_armies:
+		if a == null or not is_instance_valid(a) or a.fc == null or a.is_routed:
 			continue
-		if unit.get("is_dead"):
+		var fc = a.fc
+		if not fc.moving:
 			continue
-		if not unit.get("has_move_goal"):
+		var d: Vector2 = fc.dest
+		if d.distance_to(fc.anchor) <= MOVE_GOAL_MARKER_HIDE_DIST:
 			continue
-		if not unit.has_move_goal:
-			continue
-		var st: Vector3 = unit.sync_target_position
-		var dx: float = st.x - unit.global_position.x
-		var dz: float = st.z - unit.global_position.z
-		if dx * dx + dz * dz <= MOVE_GOAL_MARKER_HIDE_DIST * MOVE_GOAL_MARKER_HIDE_DIST:
-			continue
-		var uname: String = str(unit.name)
-		seen[uname] = true
-		var gx := st.x
-		var gz := st.z
-		var gy := get_ground_height_at(gx, gz) + 0.2
-		if not _goal_marker_mesh_by_unit.has(uname):
-			var mi := MeshInstance3D.new()
+		var mi: MeshInstance3D
+		if used < pool.size():
+			mi = pool[used]
+		else:
+			mi = MeshInstance3D.new()
 			var cm := CylinderMesh.new()
 			cm.top_radius = 5.0
 			cm.bottom_radius = 5.0
@@ -1387,15 +1485,17 @@ func _update_move_goal_markers_3d():
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mi.material_override = mat
 			_move_goal_markers_3d.add_child(mi)
-			_goal_marker_mesh_by_unit[uname] = mi
-		var mesh_inst: MeshInstance3D = _goal_marker_mesh_by_unit[uname]
-		mesh_inst.position = Vector3(gx, gy, gz)
-	for k in _goal_marker_mesh_by_unit.keys().duplicate():
-		if not seen.has(k):
-			var node: MeshInstance3D = _goal_marker_mesh_by_unit[k]
-			if is_instance_valid(node):
-				node.queue_free()
-			_goal_marker_mesh_by_unit.erase(k)
+			pool.append(mi)
+		mi.visible = true
+		mi.position = Vector3(d.x, get_ground_height_at(d.x, d.y) + 0.2, d.y)
+		var hw: float = fc.half_width()
+		var cm2 := mi.mesh as CylinderMesh
+		if cm2 != null:
+			cm2.top_radius = maxf(5.0, hw)
+			cm2.bottom_radius = maxf(5.0, hw)
+		used += 1
+	for i in range(used, pool.size()):
+		pool[i].visible = false
 
 func _on_show_range_toggled(pressed: bool) -> void:
 	_show_unit_range = pressed
@@ -1403,17 +1503,16 @@ func _on_show_range_toggled(pressed: bool) -> void:
 		_clear_range_markers()
 
 func _clear_range_markers() -> void:
-	for k in _range_marker_mesh_by_unit.keys().duplicate():
-		var node: MeshInstance3D = _range_marker_mesh_by_unit[k]
-		if is_instance_valid(node):
-			node.queue_free()
-		_range_marker_mesh_by_unit.erase(k)
+	if _range_markers_3d == null:
+		return
+	for c in _range_markers_3d.get_children():
+		c.visible = false
 
-func _range_color_for_unit(unit: Node) -> Color:
+func _range_color_for_owner(owner_pid: int) -> Color:
 	var local_pid := multiplayer.get_unique_id()
-	if unit.get("owner_peer_id") == local_pid:
+	if owner_pid == local_pid:
 		return Color(0.25, 0.85, 0.35, 0.55)
-	if UNIT_SPRITE_PATHS.is_neutral_owner(int(unit.get("owner_peer_id"))):
+	if UNIT_SPRITE_PATHS.is_neutral_owner(owner_pid):
 		return Color(1.0, 0.55, 0.1, 0.55)
 	return Color(0.9, 0.25, 0.25, 0.55)
 
@@ -1448,51 +1547,51 @@ func _make_range_ring_mesh(radius: float) -> ArrayMesh:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
+## Range rings: one ring per selected army (attack range + formation half width), pooled.
 func _update_unit_range_markers_3d() -> void:
-	if not _show_unit_range:
+	if not _show_unit_range or _sim == null:
 		return
 	if _range_markers_3d == null:
 		_range_markers_3d = Node3D.new()
 		_range_markers_3d.name = "UnitRangeMarkers3D"
 		add_child(_range_markers_3d)
-	var seen: Dictionary = {}
-	for unit in all_units:
-		if not is_instance_valid(unit) or not unit.is_inside_tree():
+	var pool: Array = _range_markers_3d.get_children()
+	var used := 0
+	for a in selected_armies:
+		if a == null or not is_instance_valid(a) or a.fc == null or a.is_routed:
 			continue
-		if unit.get("is_dead"):
+		var fc = a.fc
+		var rng := 0.0
+		for id in fc.members:
+			if _sim.is_alive(id):
+				rng = _sim.attack_range[id]
+				break
+		if rng <= 0.0:
 			continue
-		var uname: String = str(unit.name)
-		seen[uname] = true
-		var radius: float = float(unit.get("attack_range"))
-		var unit_node := unit as Node3D
-		if unit_node == null:
-			continue
-		var pos: Vector3 = unit_node.global_position
-		var gy: float = get_ground_height_at(pos.x, pos.z) + 0.18
-		if not _range_marker_mesh_by_unit.has(uname):
-			var mi := MeshInstance3D.new()
-			mi.mesh = _make_range_ring_mesh(radius)
+		var radius: float = rng + fc.half_width()
+		var mi: MeshInstance3D
+		if used < pool.size():
+			mi = pool[used]
+		else:
+			mi = MeshInstance3D.new()
 			var mat := StandardMaterial3D.new()
-			mat.albedo_color = _range_color_for_unit(unit)
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			mi.material_override = mat
 			_range_markers_3d.add_child(mi)
-			_range_marker_mesh_by_unit[uname] = mi
-		var mesh_inst: MeshInstance3D = _range_marker_mesh_by_unit[uname]
-		mesh_inst.position = Vector3(pos.x, gy, pos.z)
-		var mat2: StandardMaterial3D = mesh_inst.material_override as StandardMaterial3D
+			pool.append(mi)
+		mi.visible = true
+		if mi.mesh == null or absf(radius - _range_ring_radius(mi.mesh)) > 0.5:
+			mi.mesh = _make_range_ring_mesh(radius)
+		var mat2: StandardMaterial3D = mi.material_override as StandardMaterial3D
 		if mat2 != null:
-			mat2.albedo_color = _range_color_for_unit(unit)
-		if absf(radius - _range_ring_radius(mesh_inst.mesh)) > 0.5:
-			mesh_inst.mesh = _make_range_ring_mesh(radius)
-	for k in _range_marker_mesh_by_unit.keys().duplicate():
-		if not seen.has(k):
-			var node: MeshInstance3D = _range_marker_mesh_by_unit[k]
-			if is_instance_valid(node):
-				node.queue_free()
-			_range_marker_mesh_by_unit.erase(k)
+			mat2.albedo_color = _range_color_for_owner(a.owner_id)
+		var c: Vector2 = _sim.army_centroid(fc)
+		mi.position = Vector3(c.x, get_ground_height_at(c.x, c.y) + 0.18, c.y)
+		used += 1
+	for i in range(used, pool.size()):
+		pool[i].visible = false
 
 func _range_ring_radius(mesh: Mesh) -> float:
 	if mesh == null or mesh.get_surface_count() == 0:
@@ -1544,6 +1643,18 @@ func _setup_draft_menu():
 	_show_range_cb.text = "Show range"
 	_show_range_cb.toggled.connect(_on_show_range_toggled)
 	vbox.add_child(_show_range_cb)
+	var size_row := HBoxContainer.new()
+	var size_label := Label.new()
+	size_label.text = "Soldiers"
+	size_row.add_child(size_label)
+	_draft_size_spin = SpinBox.new()
+	_draft_size_spin.name = "SoldierCount"
+	_draft_size_spin.min_value = MIN_SOLDIERS_PER_ARMY
+	_draft_size_spin.max_value = MAX_SOLDIERS_PER_ARMY
+	_draft_size_spin.step = 10
+	_draft_size_spin.value = DEFAULT_SOLDIERS_PER_ARMY
+	size_row.add_child(_draft_size_spin)
+	vbox.add_child(size_row)
 	var create_btn = Button.new()
 	create_btn.name = "CreateArmyBtn"
 	create_btn.text = "Create army"
@@ -1568,13 +1679,71 @@ func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: Ch
 	var use_horse = horse_cb.button_pressed
 	var use_spear = spear_cb.button_pressed
 	var use_bow = bow_cb.button_pressed
-	_request_draft(use_horse, use_spear, use_bow)
+	var count := DEFAULT_SOLDIERS_PER_ARMY
+	if _draft_size_spin != null:
+		count = int(_draft_size_spin.value)
+	_request_draft(use_horse, use_spear, use_bow, count)
 
-func request_draft_from_mock(use_horse: bool, use_spear: bool, use_bow: bool = false):
-	_request_draft(use_horse, use_spear, use_bow)
+func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
+	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow, soldier_count)
 
-func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool):
-	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow)
+## ---------------------------------------------------------------------------------------------
+## Orders: formation-level, tiny and reliable. Client -> server request, server validates
+## ownership, stamps (order_seq, sim_tick), applies to its sim and echoes reliably to every
+## peer (including the sender). Clients apply on echo; both sims then run the same movement.
+## ---------------------------------------------------------------------------------------------
+
+func _stamp_order() -> int:
+	_order_seq += 1
+	return _order_seq
+
+func _owned_live_armies(sender: int, army_ids: Array) -> Array:
+	var out: Array = []
+	for aid in army_ids:
+		var army = _find_army(str(aid))
+		if army == null or army.owner_id != sender or army.is_routed:
+			continue
+		out.append(army)
+	return out
+
+## Shared by server and clients: apply a batch of MOVE / ATTACK_MOVE orders to the sim.
+## `dests` = [x0, z0, x1, z1, ...], `facings` front angle per army (< -100 keeps travel
+## direction), `widths` desired line width per army (<= 0 keeps the current rows).
+func _apply_move_orders(army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> int:
+	var n := 0
+	for k in range(army_ids.size()):
+		var army = _find_army(str(army_ids[k]))
+		if army == null or army.fc == null or army.is_routed:
+			continue
+		var fc = army.fc
+		var dest := snap_move_goal_xz(_clamp_map_v2(Vector2(dests[k * 2], dests[k * 2 + 1])))
+		var facing: float = facings[k] if k < facings.size() else -999.0
+		var width: float = widths[k] if k < widths.size() else 0.0
+		_sim.recentre_anchor(fc)
+		if width > 0.0:
+			fc.fit_rows_to_width(_sim.army_alive_count(fc), width)
+		var line_dir := -999.0
+		if facing > -100.0:
+			line_dir = _Formation.line_direction_for_front(facing)
+		fc.issue_move(dest, line_dir, attack_move)
+		n += 1
+	return n
+
+func _apply_attack_order(army_ids: Array, target_army_id: String, target_unit: int) -> int:
+	var n := 0
+	var target_army = _find_army(target_army_id) if target_army_id != "" else null
+	for aid in army_ids:
+		var army = _find_army(str(aid))
+		if army == null or army.fc == null or army.is_routed:
+			continue
+		_sim.recentre_anchor(army.fc)
+		if target_army != null and target_army.fc != null and not target_army.is_routed:
+			army.fc.issue_attack_army(target_army.fc.index)
+			n += 1
+		elif target_unit >= 0 and _sim.is_alive(target_unit):
+			army.fc.issue_attack_unit(target_unit)
+			n += 1
+	return n
 
 @rpc("any_peer", "reliable")
 func _server_set_all_armies_aggressive():
@@ -1584,45 +1753,25 @@ func _server_set_all_armies_aggressive():
 	if sender == 0 or not GameState.players.has(sender):
 		return
 	var pname := str(GameState.players[sender].get("name", sender))
-	var n := 0
-	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
-			continue
-		if a.owner_peer_id != sender:
-			continue
-		a.set_stance(_Army3D.Stance.AGGRESSIVE)
-		a.clear_order()
-		n += 1
 	var ids: Array = []
 	for a in armies:
-		if a and is_instance_valid(a) and not a.is_routed and a.owner_peer_id == sender:
-			ids.append(a.army_id)
-	rpc("_client_sync_army_stance", ids, _Army3D.Stance.AGGRESSIVE)
+		if a == null or not is_instance_valid(a) or a.is_routed or a.owner_id != sender:
+			continue
+		a.fc.set_stance(_Formation.Stance.AGGRESSIVE)
+		a.fc.clear_order()
+		ids.append(a.army_id)
+	rpc("_client_sync_army_stance", ids, _Formation.Stance.AGGRESSIVE)
 	var marker = "TEST_A_AGGRESSIVE" if pname == "A" else "TEST_B_AGGRESSIVE"
-	print("%s: Player '%s' set %d armies to aggressive" % [marker, pname, n])
+	print("%s: Player '%s' set %d armies to aggressive" % [marker, pname, ids.size()])
 
 @rpc("authority", "reliable")
 func _client_sync_army_stance(army_ids: Array, new_stance: int):
 	for aid in army_ids:
 		var army = _find_army(str(aid))
-		if army and is_instance_valid(army):
-			army.set_stance(new_stance)
-
-@rpc("authority", "reliable")
-func _client_set_army_stance_for_owner(owner_pid: int, new_stance: String):
-	var s := _Army3D.Stance.DEFENSIVE
-	match new_stance:
-		"aggressive":
-			s = _Army3D.Stance.AGGRESSIVE
-		"hold":
-			s = _Army3D.Stance.HOLD
-		"passive":
-			s = _Army3D.Stance.PASSIVE
-	var ids: Array = []
-	for a in armies:
-		if a and is_instance_valid(a) and a.owner_peer_id == owner_pid:
-			ids.append(a.army_id)
-	_client_sync_army_stance(ids, s)
+		if army != null and army.fc != null:
+			army.fc.set_stance(new_stance)
+			if new_stance == _Formation.Stance.AGGRESSIVE:
+				army.fc.clear_order()
 
 @rpc("any_peer", "reliable")
 func _server_armies_set_stance(army_ids: Array, stance: int):
@@ -1630,175 +1779,128 @@ func _server_armies_set_stance(army_ids: Array, stance: int):
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	var synced: Array = []
-	for aid in army_ids:
-		var army = _find_army(str(aid))
-		if army == null or army.owner_peer_id != sender or army.is_routed:
-			continue
-		army.set_stance(stance)
-		if stance == _Army3D.Stance.AGGRESSIVE:
-			army.clear_order()
-		synced.append(str(aid))
+	for army in _owned_live_armies(sender, army_ids):
+		army.fc.set_stance(stance)
+		if stance == _Formation.Stance.AGGRESSIVE:
+			army.fc.clear_order()
+		synced.append(army.army_id)
 	if not synced.is_empty():
 		rpc("_client_sync_army_stance", synced, stance)
 
 @rpc("any_peer", "reliable")
-func _server_army_order_attack(army_id: String, target_army_id: String, target_unit_name: String):
+func _server_armies_order_attack(army_ids: Array, target_army_id: String, target_unit: int):
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	var army = _find_army(army_id)
-	if army == null or army.owner_peer_id != sender or army.is_routed:
+	var owned := _owned_live_armies(sender, army_ids)
+	if owned.is_empty():
 		return
-	army_follow_target.erase(army_id)
+	var ids: Array = []
+	for a in owned:
+		ids.append(a.army_id)
+	if _apply_attack_order(ids, target_army_id, target_unit) == 0:
+		return
+	var seq := _stamp_order()
+	rpc("_client_order_attack", seq, _sim.tick, ids, target_army_id, target_unit)
 	if target_army_id != "":
-		army.issue_attack_army(target_army_id)
-		print("TEST_ARMY_ATTACK: %s -> army %s" % [army_id, target_army_id])
-	elif target_unit_name != "":
-		army.issue_attack_unit(target_unit_name)
-		print("TEST_ARMY_ATTACK: %s -> unit %s" % [army_id, target_unit_name])
-	rpc("_client_army_order_attack", army_id, target_army_id, target_unit_name)
+		print("TEST_ARMY_ATTACK: %s -> army %s" % [",".join(ids), target_army_id])
+	else:
+		print("TEST_ARMY_ATTACK: %s -> unit %d" % [",".join(ids), target_unit])
 
 @rpc("authority", "reliable")
-func _client_army_order_attack(army_id: String, target_army_id: String, target_unit_name: String):
-	var army = _find_army(army_id)
-	if army == null:
-		return
-	if target_army_id != "":
-		army.issue_attack_army(target_army_id)
-	elif target_unit_name != "":
-		army.issue_attack_unit(target_unit_name)
+func _client_order_attack(_seq: int, _tick: int, army_ids: Array, target_army_id: String, target_unit: int):
+	_apply_attack_order(army_ids, target_army_id, target_unit)
 
 @rpc("any_peer", "reliable")
 func _server_armies_order_attack_move(army_ids: Array, dest_x: float, dest_y: float):
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	var dest := Vector2(dest_x, dest_y)
-	for aid in army_ids:
-		var army = _find_army(str(aid))
-		if army == null or army.owner_peer_id != sender or army.is_routed:
-			continue
-		army_follow_target.erase(str(aid))
-		army.issue_attack_move(dest)
-		rpc("_client_move_army", str(aid), dest)
-	print("TEST_ARMY_ATTACK_MOVE: sender=%d dest=(%d,%d) armies=%d" % [
-		sender, int(dest.x), int(dest.y), army_ids.size()
-	])
+	var owned := _owned_live_armies(sender, army_ids)
+	if owned.is_empty():
+		return
+	var ids: Array = []
+	var dests := PackedFloat32Array()
+	for a in owned:
+		ids.append(a.army_id)
+		dests.append(dest_x)
+		dests.append(dest_y)
+	_server_broadcast_move(ids, dests, PackedFloat32Array(), PackedFloat32Array(), true)
+	print("TEST_ARMY_ATTACK_MOVE: sender=%d dest=(%d,%d) armies=%d" % [sender, int(dest_x), int(dest_y), ids.size()])
 
+## MockPlayer / simple move: one army to a point, facing the travel direction.
 @rpc("any_peer", "reliable")
 func _server_move_army(aid: String, target: Vector2):
 	if not multiplayer.is_server():
 		return
 	var army = _find_army(aid)
-	if army == null:
+	if army == null or army.is_routed:
 		return
 	var sender = multiplayer.get_remote_sender_id()
-	if sender != army.owner_peer_id:
+	if sender != army.owner_id:
 		return
 	var marker = "TEST_009_MOVE" if army.owner_name == "A" else "TEST_009_MOVE_B"
 	print("%s: Server moving army '%s' to (%d,%d)" % [marker, aid, int(target.x), int(target.y)])
-	army_follow_target.erase(aid)
-	army.issue_move(target)
-	rpc("_client_move_army", aid, target)
+	_server_broadcast_move([aid], PackedFloat32Array([target.x, target.y]), PackedFloat32Array(), PackedFloat32Array(), false)
 
-func _army_center_xz_server(army) -> Vector2:
-	if army == null or not is_instance_valid(army):
-		return Vector2.ZERO
-	if army.has_method("get_alive_soldiers"):
-		var alive: Array = army.get_alive_soldiers()
-		if alive.size() > 0:
-			var sx := 0.0
-			var sz := 0.0
-			for s in alive:
-				sx += s.global_position.x
-				sz += s.global_position.z
-			return Vector2(sx / float(alive.size()), sz / float(alive.size()))
-	return Vector2(army.global_position.x, army.global_position.z)
-
-## Average of all enemy army centers (authoritative) — mock clients call this so chase targets match server sim.
-func _enemy_blob_center_for_peer(sender_id: int) -> Vector2:
-	var sx := 0.0
-	var sz := 0.0
-	var n := 0
-	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
-			continue
-		if a.owner_peer_id == sender_id:
-			continue
-		var c := _army_center_xz_server(a)
-		sx += c.x
-		sz += c.y
-		n += 1
-	if n == 0:
-		return Vector2.ZERO
-	return Vector2(sx / float(n), sz / float(n))
-
+## Formation orders from click / drag: per-army destination, facing and line width.
 @rpc("any_peer", "reliable")
-func _server_mock_chase_tick():
-	if not multiplayer.is_server() or game_over:
+func _server_order_move(army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool):
+	if not multiplayer.is_server():
+		return
+	if dests.size() < army_ids.size() * 2:
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if sender == 0 or not GameState.players.has(sender):
+	var ids: Array = []
+	var d2 := PackedFloat32Array()
+	var f2 := PackedFloat32Array()
+	var w2 := PackedFloat32Array()
+	for k in range(army_ids.size()):
+		var army = _find_army(str(army_ids[k]))
+		if army == null or army.owner_id != sender or army.is_routed:
+			continue
+		ids.append(army.army_id)
+		d2.append(dests[k * 2])
+		d2.append(dests[k * 2 + 1])
+		f2.append(facings[k] if k < facings.size() else -999.0)
+		w2.append(widths[k] if k < widths.size() else 0.0)
+	if ids.is_empty():
 		return
-	var blob := _enemy_blob_center_for_peer(sender)
-	if blob == Vector2.ZERO:
-		return
-	const MOCK_STOP := 95.0
-	var orders := 0
-	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
-			continue
-		if a.owner_peer_id != sender:
-			continue
-		var my_c := _army_center_xz_server(a)
-		if my_c.distance_to(blob) <= MOCK_STOP:
-			continue
-		army_follow_target.erase(a.army_id)
-		var marker = "TEST_009_MOVE" if a.owner_name == "A" else "TEST_009_MOVE_B"
-		print("%s: Server moving army '%s' to (%d,%d)" % [marker, a.army_id, int(blob.x), int(blob.y)])
-		a.move_army(blob)
-		rpc("_client_move_army", a.army_id, blob)
-		_mock_chase_touched[a.army_id] = true
-		orders += 1
-	if orders > 0:
-		var pname: String = str(GameState.players[sender].get("name", sender))
-		print("TEST_MOCK_SEEK_ENEMY: server player=%s orders=%d blob=(%.0f,%.0f)" % [pname, orders, blob.x, blob.y])
+	_server_broadcast_move(ids, d2, f2, w2, attack_move)
+	print("TEST_GROUP_FORMATION: server armies=%d sender=%d attack_move=%s" % [ids.size(), sender, attack_move])
 
-func _server_mock_stuck_update(delta: float):
-	if game_over:
+func _server_broadcast_move(ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> void:
+	if _apply_move_orders(ids, dests, facings, widths, attack_move) == 0:
 		return
-	const NEAR_COMBAT := 78.0
-	const STILL_EPS := 11.0
-	const STUCK_SEC := 5.0
-	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
-			continue
-		var aid: String = a.army_id
-		if not _mock_chase_touched.get(aid, false):
-			continue
-		var c := _army_center_xz_server(a)
-		var blob := _enemy_blob_center_for_peer(a.owner_peer_id)
-		if blob == Vector2.ZERO or c.distance_to(blob) <= NEAR_COMBAT:
-			_mock_stuck_t.erase(aid)
-			_mock_stuck_last.erase(aid)
-			continue
-		var last: Vector2 = _mock_stuck_last.get(aid, c)
-		if c.distance_to(last) < STILL_EPS:
-			_mock_stuck_t[aid] = float(_mock_stuck_t.get(aid, 0.0)) + delta
-		else:
-			_mock_stuck_t[aid] = 0.0
-		_mock_stuck_last[aid] = c
-		if float(_mock_stuck_t.get(aid, 0.0)) >= STUCK_SEC:
-			_mock_stuck_t[aid] = 0.0
-			army_follow_target.erase(aid)
-			var marker = "TEST_009_MOVE" if a.owner_name == "A" else "TEST_009_MOVE_B"
-			print("%s: Server moving army '%s' to (%d,%d)" % [marker, aid, int(blob.x), int(blob.y)])
-			a.move_army(blob)
-			rpc("_client_move_army", aid, blob)
-			print("TEST_MOCK_IDLE_SEEK_REFRESH: server army=%s blob=(%.0f,%.0f)" % [aid, blob.x, blob.y])
+	var seq := _stamp_order()
+	rpc("_client_order_move", seq, _sim.tick, ids, dests, facings, widths, attack_move)
+
+@rpc("authority", "reliable")
+func _client_order_move(_seq: int, _tick: int, army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool):
+	_apply_move_orders(army_ids, dests, facings, widths, attack_move)
 
 @rpc("any_peer", "reliable")
-func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false):
+func _server_rotate_army(aid: String, delta_angle: float):
+	if not multiplayer.is_server():
+		return
+	var army = _find_army(aid)
+	if army == null or army.fc == null:
+		return
+	var sender = multiplayer.get_remote_sender_id()
+	if sender != army.owner_id:
+		return
+	army.fc.rotate(delta_angle)
+	rpc("_client_rotate_army", aid, army.fc.direction)
+
+@rpc("authority", "reliable")
+func _client_rotate_army(aid: String, new_line_dir: float):
+	var army = _find_army(aid)
+	if army != null and army.fc != null:
+		army.fc.direction = new_line_dir
+		army.fc.slots_dirty = true
+
+@rpc("any_peer", "reliable")
+func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
 	if not multiplayer.is_server() or game_over:
 		return
 	var sender_id = multiplayer.get_remote_sender_id()
@@ -1806,13 +1908,16 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false)
 		sender_id = 1
 	if sender_id not in GameState.players:
 		return
+	soldier_count = clampi(soldier_count, MIN_SOLDIERS_PER_ARMY, MAX_SOLDIERS_PER_ARMY)
 	if not GameState.resources.has(sender_id):
 		GameState.resources[sender_id] = GameState.default_resources()
 	var res = GameState.resources[sender_id]
-	var need_villagers := DRAFT_COST_PER_EQUIPMENT
-	var need_horses = DRAFT_COST_PER_EQUIPMENT if use_horse else 0
-	var need_spears = DRAFT_COST_PER_EQUIPMENT if use_spear else 0
-	var need_bows = DRAFT_COST_PER_EQUIPMENT if use_bow else 0
+	# Cost scales with size: DRAFT_COST_PER_EQUIPMENT covers DEFAULT_SOLDIERS_PER_ARMY soldiers.
+	var cost_units: int = ceili(float(DRAFT_COST_PER_EQUIPMENT) * float(soldier_count) / float(DEFAULT_SOLDIERS_PER_ARMY))
+	var need_villagers := cost_units
+	var need_horses = cost_units if use_horse else 0
+	var need_spears = cost_units if use_spear else 0
+	var need_bows = cost_units if use_bow else 0
 	if res.get("villagers", 0) < need_villagers \
 			or res.get("horses", 0) < need_horses \
 			or res.get("spears", 0) < need_spears \
@@ -1850,80 +1955,16 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false)
 		spawn_pos = SOUTH_SPAWN
 		stop_pos = Vector2(SOUTH_SPAWN.x, SOUTH_STOP_Y)
 		dir = -PI / 2.0
-	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow}
+	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow, "soldiers": soldier_count}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
-	army.move_army(stop_pos)
 	var data = _serialize_one_army(army)
 	data["stop_x"] = stop_pos.x
 	data["stop_y"] = stop_pos.y
 	rpc("_client_spawn_drafted_army", data)
-	rpc("_client_move_army", aid, stop_pos)
+	_server_broadcast_move([aid], PackedFloat32Array([stop_pos.x, stop_pos.y]), PackedFloat32Array([dir]), PackedFloat32Array(), false)
 	_sync_capture_state()
-	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s)" % [aid, use_horse, use_spear, use_bow])
-
-@rpc("any_peer", "reliable")
-func _server_rotate_army(aid: String, delta_angle: float):
-	if not multiplayer.is_server():
-		return
-	var army = _find_army(aid)
-	if army == null:
-		return
-	var sender = multiplayer.get_remote_sender_id()
-	if sender != army.owner_peer_id:
-		return
-	army.rotate_army(delta_angle)
-	rpc("_client_rotate_army", aid, army.direction)
-
-@rpc("any_peer", "reliable")
-func _server_move_group_formation(unit_targets: Array, attack_move: bool = false):
-	if not multiplayer.is_server():
-		return
-	var sender := multiplayer.get_remote_sender_id()
-	var affected := {}
-	var assigned := 0
-	for entry in unit_targets:
-		if typeof(entry) != TYPE_DICTIONARY:
-			continue
-		var uname := str(entry.get("n", ""))
-		var tx := float(entry.get("x", 0.0))
-		var ty := float(entry.get("y", 0.0))
-		var goal := snap_move_goal_xz(Vector2(tx, ty))
-		var u = get_node_or_null(NodePath(uname))
-		if u == null or not (u is CharacterBody3D):
-			continue
-		if u.get("is_dead"):
-			continue
-		if u.owner_peer_id != sender:
-			continue
-		if u.has_method("set_move_target"):
-			u.set_move_target(goal)
-		affected[u.army_id] = true
-		assigned += 1
-	if assigned > 0:
-		print("TEST_GROUP_FORMATION: server assigned=%d sender=%d attack_move=%s" % [
-			assigned, sender, attack_move
-		])
-	for aid_str in affected.keys():
-		army_follow_target.erase(aid_str)
-		var army = _find_army(aid_str)
-		if army == null:
-			continue
-		army.order_type = _Army3D.OrderType.ATTACK_MOVE if attack_move else _Army3D.OrderType.MOVE
-		army.order_target_army_id = ""
-		army.order_target_unit_name = ""
-		var alive = army.get_alive_soldiers()
-		if alive.is_empty():
-			continue
-		var cx := 0.0
-		var cz := 0.0
-		for s in alive:
-			var mt: Vector2 = s.move_target
-			cx += mt.x
-			cz += mt.y
-		army.order_destination = Vector2(cx / float(alive.size()), cz / float(alive.size()))
-		var gy = get_ground_height_at(army.order_destination.x, army.order_destination.y)
-		army.global_position = Vector3(army.order_destination.x, gy, army.order_destination.y)
+	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s soldiers=%d)" % [aid, use_horse, use_spear, use_bow, soldier_count])
 
 func _set_player_sides():
 	# Assign each player a map-slot (index into MapConfig.player_starts) by
@@ -1940,48 +1981,16 @@ func _set_player_sides():
 	for pid in player_ids:
 		army_index_per_player[pid] = MapConfig.max_armies_per_player() + 1
 
-func _team_collision_layer_for_peer(peer_id: int) -> int:
-	var slot := 0
-	if peer_id in GameState.players:
-		slot = int(GameState.players[peer_id].get("color_index", 0))
-	return TEAM_COLLISION_LAYERS[clampi(slot, 0, TEAM_COLLISION_LAYERS.size() - 1)]
-
-func _enemy_collision_mask_for_peer(peer_id: int) -> int:
-	var own_layer := _team_collision_layer_for_peer(peer_id)
-	var mask := 0
-	for layer in TEAM_COLLISION_LAYERS:
-		if layer != own_layer:
-			mask |= layer
-	return mask
-
-func _configure_unit_collision(unit: CharacterBody3D, peer_id: int) -> void:
-	unit.collision_layer = _team_collision_layer_for_peer(peer_id)
-	if UNIT_PASS_THROUGH:
-		unit.collision_mask = 0
-	else:
-		unit.collision_mask = _enemy_collision_mask_for_peer(peer_id)
-
-func _make_server_unit_3d(peer_id: int) -> CharacterBody3D:
-	var unit = CharacterBody3D.new()
-	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-	_configure_unit_collision(unit, peer_id)
-	var box = BoxShape3D.new()
-	box.size = Vector3(14, 22, 14)
-	var col = CollisionShape3D.new()
-	col.shape = box
-	unit.add_child(col)
-	return unit
+func _soldiers_for_army_cfg(ac: Dictionary) -> int:
+	return clampi(int(ac.get("soldiers", DEFAULT_SOLDIERS_PER_ARMY)), MIN_SOLDIERS_PER_ARMY, MAX_SOLDIERS_PER_ARMY)
 
 func _spawn_armies():
-	_mock_chase_touched.clear()
-	_mock_stuck_t.clear()
-	_mock_stuck_last.clear()
 	var player_ids = GameState.players.keys()
 	if player_ids.size() < 2:
 		print("ERROR: Need at least 2 players to spawn armies")
 		return
-	# Spawn armies from MapConfig.player_starts[slot].armies.
-	# Slot is assigned by join order in `_assign_player_slots()`.
+	# Spawn armies from MapConfig.player_starts[slot].armies (slot assigned by join order).
+	var total_soldiers := 0
 	for p in range(player_ids.size()):
 		var pid = player_ids[p]
 		var pname = GameState.players[pid]["name"]
@@ -1997,19 +2006,66 @@ func _spawn_armies():
 				"horse": ac.get("horse", false),
 				"spear": ac.get("spear", false),
 				"bow": ac.get("bow", false),
+				"soldiers": _soldiers_for_army_cfg(ac),
 			}
 			var army = _create_army(army_id, pid, pname, pos, dir, equipment)
 			armies.append(army)
+			total_soldiers += army.soldier_count()
+		total_soldiers += _spawn_stress_armies(pid, pname, start_armies)
 	var armies_per_player := MapConfig.max_armies_per_player()
-	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers each)" % [armies.size(), armies_per_player, UNITS_PER_ARMY])
+	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers total)" % [armies.size(), armies_per_player, total_soldiers])
 	_match_started = true
 	_match_elapsed = 0.0
 	for a in armies:
-		var axz = Vector2(a.global_position.x, a.global_position.z)
-		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name])
+		var axz: Vector2 = a.anchor()
+		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s soldiers=%d" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name, a.soldier_count()])
 	rpc("_client_spawn_armies", _serialize_armies())
 	_spawn_map_dragons()
 
+## `--stress-units=N`: top up each player with extra armies laid out in a grid behind the
+## player's first map army until N soldiers exist. Returns the number of soldiers added.
+func _spawn_stress_armies(pid: int, pname: String, start_armies: Array) -> int:
+	var want: int = GameState.stress_units_per_player
+	if want <= 0 or start_armies.is_empty():
+		return 0
+	var have := 0
+	for ac in start_armies:
+		have += _soldiers_for_army_cfg(ac)
+	var per_army := STRESS_SOLDIERS_PER_ARMY
+	var extra_armies: int = ceili(float(want - have) / float(per_army))
+	if extra_armies <= 0:
+		return 0
+	var ac0: Dictionary = start_armies[0]
+	var base := Vector2(float(ac0.get("x", 0.0)), float(ac0.get("y", 0.0)))
+	var dir := float(ac0.get("direction", 0.0))
+	var per_row: int = maxi(1, int(sqrt(float(extra_armies))))
+	var pitch := 140.0
+	var equipment_cycle: Array = [
+		{"spear": true}, {}, {"bow": true}, {"horse": true},
+	]
+	var added := 0
+	for k in range(extra_armies):
+		var row: int = k / per_row
+		var col: int = k % per_row
+		var offset := Vector2(float(col - per_row / 2) * pitch, float(row + 1) * pitch)
+		# Push away from map centre so the grid grows toward the player's own edge.
+		if base.y > MapConfig.height * 0.5:
+			offset.y = -offset.y
+		var pos := _clamp_map_v2(snap_move_goal_xz(base + offset))
+		var eq: Dictionary = equipment_cycle[k % equipment_cycle.size()]
+		var army_id := "P%d_S%d" % [pid, k + 1]
+		var army = _create_army(army_id, pid, pname, pos, dir, {
+			"horse": eq.get("horse", false),
+			"spear": eq.get("spear", false),
+			"bow": eq.get("bow", false),
+			"soldiers": per_army,
+		})
+		armies.append(army)
+		added += army.soldier_count()
+	print("TEST_STRESS_SPAWN: pid=%d extra_armies=%d target_units=%d" % [pid, extra_armies, want])
+	return added
+
+## Neutral dragons are one-unit armies owned by NEUTRAL_DRAGON_OWNER_ID with a simple aggro AI.
 func _spawn_map_dragons() -> void:
 	if not multiplayer.is_server():
 		return
@@ -2027,53 +2083,19 @@ func _spawn_map_dragons() -> void:
 			continue
 		var pos := Vector2(float(cfg.get("x", MapConfig.width * 0.5)), float(cfg.get("y", MapConfig.height * 0.5)))
 		var color := str(cfg.get("color", "red"))
-		var unit := _make_dragon_unit_3d()
-		unit.set_script(_Unit3D)
-		unit.name = "MapDragon_%d" % i
-		unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
-		unit.owner_name = "Dragon"
-		unit.army_id = "neutral_dragon_%d" % i
-		unit.apply_dragon(color)
-		var uy: float = get_ground_height_at(pos.x, pos.y) + UNIT_SPRITE_PATHS.DRAGON_HALF_HEIGHT
-		unit.position = Vector3(pos.x, uy, pos.y)
-		add_child(unit)
-		if unit.has_method("initialize_goal_at_current"):
-			unit.initialize_goal_at_current()
-		all_units.append(unit)
-		_map_dragons.append(unit)
+		var aid := "neutral_dragon_%d" % i
+		var army = _create_army(aid, UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID, "Dragon", pos, 0.0, {"dragon": true, "soldiers": 1, "color": color})
+		armies.append(army)
+		_map_dragons.append(army)
 		print("TEST_MAP_DRAGON_SPAWN: dragon %d at (%d,%d) aggro=%.0f attack=%.0f" % [
-			i, int(pos.x), int(pos.y), UNIT_SPRITE_PATHS.dragon_aggro_radius(), unit.attack_range
+			i, int(pos.x), int(pos.y), UNIT_SPRITE_PATHS.dragon_aggro_radius(), _UnitSim.DRAGON_ATTACK_RANGE
 		])
-		dragon_data.append({
-			"index": i,
-			"x": pos.x,
-			"y": pos.y,
-			"color": color,
-			"hp": unit.hp,
-			"speed": unit.speed,
-			"attack": unit.attack,
-			"attack_range": unit.attack_range,
-			"half_height": unit.half_height,
-		})
+		var d := _serialize_one_army(army)
+		d["index"] = i
+		d["color"] = color
+		dragon_data.append(d)
 	if not dragon_data.is_empty():
 		rpc("_client_spawn_dragons", dragon_data)
-
-func _make_dragon_unit_3d() -> CharacterBody3D:
-	var unit := CharacterBody3D.new()
-	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-	unit.collision_layer = NEUTRAL_DRAGON_COLLISION_LAYER
-	unit.collision_mask = 0 if UNIT_PASS_THROUGH else 0
-	var box := BoxShape3D.new()
-	box.size = Vector3(40, 66, 40)
-	var col := CollisionShape3D.new()
-	col.shape = box
-	unit.add_child(col)
-	return unit
-
-func _unit_half_height(unit: Node) -> float:
-	if unit != null and unit.get("half_height") != null:
-		return float(unit.half_height)
-	return UNIT_HALF_HEIGHT
 
 func _update_map_dragon_ai(delta: float) -> void:
 	if _map_dragons.is_empty():
@@ -2082,103 +2104,114 @@ func _update_map_dragon_ai(delta: float) -> void:
 	if _dragon_ai_timer < DRAGON_AI_TICK:
 		return
 	_dragon_ai_timer = 0.0
-	for dragon in _map_dragons:
-		if dragon == null or not is_instance_valid(dragon) or dragon.is_dead:
+	for army in _map_dragons:
+		if army == null or not is_instance_valid(army) or army.is_routed or army.fc == null:
 			continue
-		_update_one_map_dragon_ai(dragon)
+		if _sim.army_alive_count(army.fc) == 0:
+			continue
+		_update_one_map_dragon_ai(army)
 
-func _update_one_map_dragon_ai(dragon: CharacterBody3D) -> void:
-	var center := Vector2(dragon.global_position.x, dragon.global_position.z)
+func _update_one_map_dragon_ai(army) -> void:
+	var fc = army.fc
+	var center: Vector2 = _sim.army_centroid(fc)
 	var aggro := UNIT_SPRITE_PATHS.dragon_aggro_radius()
-	var best: CharacterBody3D = null
-	var best_dist := aggro + 1.0
-	for u in get_units_in_radius(center, aggro):
-		if u == dragon or u.get("is_dead"):
-			continue
-		if UNIT_SPRITE_PATHS.is_neutral_owner(int(u.get("owner_peer_id"))):
-			continue
-		var uxz := Vector2(u.global_position.x, u.global_position.z)
-		var dist := center.distance_to(uxz)
-		if dist < best_dist:
-			best_dist = dist
-			best = u
-	if best == null:
-		dragon.is_moving = false
-		if dragon.has_method("initialize_goal_at_current"):
-			dragon.initialize_goal_at_current()
+	var best: int = _sim.nearest_unit(center, aggro, UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID, true)
+	if best < 0:
+		if fc.order_type != _Formation.OrderType.NONE:
+			fc.clear_order()
+			rpc("_client_order_clear", army.army_id)
 		return
-	var target_xz := Vector2(best.global_position.x, best.global_position.z)
-	if dragon.has_method("set_move_target"):
-		dragon.set_move_target(target_xz)
+	if fc.order_type == _Formation.OrderType.ATTACK and fc.order_target_unit == best:
+		return
+	_sim.recentre_anchor(fc)
+	fc.set_stance(_Formation.Stance.AGGRESSIVE)
+	fc.issue_attack_unit(best)
+	rpc("_client_order_attack", _stamp_order(), _sim.tick, [army.army_id], "", best)
 
-func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node3D:
+@rpc("authority", "reliable")
+func _client_order_clear(aid: String) -> void:
+	var army = _find_army(aid)
+	if army != null and army.fc != null:
+		army.fc.clear_order()
+
+## Server: create an army (FormationController in the sim + thin Army3D handle) with `soldiers`
+## units at `pos` facing `dir` (front angle). Unit ids are allocated sequentially by the server.
+func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float, equipment: Dictionary = {}) -> Node:
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
 	var use_bow: bool = equipment.get("bow", false)
-	var army = Node3D.new()
-	army.set_script(preload("res://Army3D.gd"))
-	army.army_id = aid
-	army.owner_peer_id = pid
-	army.owner_name = pname
-	var gy_a = get_ground_height_at(pos.x, pos.y)
-	army.position = Vector3(pos.x, gy_a, pos.y)
-	army.direction = dir
-	army.initial_count = UNITS_PER_ARMY
-	army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
-	army.name = "Army_%s" % aid
-	army.army_routed.connect(_on_army_routed)
+	var is_dragon: bool = equipment.get("dragon", false)
+	var n: int = clampi(int(equipment.get("soldiers", DEFAULT_SOLDIERS_PER_ARMY)), 1, MAX_SOLDIERS_PER_ARMY)
+	var utype: int = _UnitSim.UnitType.DRAGON if is_dragon else _UnitSim.unit_type_for_equipment(use_horse, use_spear, use_bow)
+	var fc = _make_formation(aid, pid, pname, pos, dir, n, use_horse, use_spear, use_bow)
+	var first_id := _next_unit_id
+	_next_unit_id += n
+	_sim.spawn_army_units(fc, first_id, n, utype)
+	return _make_army_handle(aid, pid, pname, fc)
+
+func _make_formation(aid: String, pid: int, pname: String, pos: Vector2, front_dir: float, n: int, use_horse: bool, use_spear: bool, use_bow: bool):
+	var fc = _Formation.new()
+	fc.army_id = aid
+	fc.owner_pid = pid
+	fc.owner_name = pname
+	fc.is_npc = UNIT_SPRITE_PATHS.is_neutral_owner(pid)
+	fc.initial_count = n
+	fc.has_horse = use_horse
+	fc.has_spear = use_spear
+	fc.has_bow = use_bow
+	fc.spacing = _Formation.MOUNTED_SPACING if use_horse else _Formation.FOOT_SPACING
+	fc.rows = fc.default_rows_for(n)
+	fc.direction = _Formation.line_direction_for_front(front_dir)
+	fc.anchor = _clamp_map_v2(pos)
+	fc.hold_position = fc.anchor
+	_sim.add_army(fc)
+	return fc
+
+func _make_army_handle(aid: String, pid: int, pname: String, fc, color: String = "") -> Node:
+	var army = _Army3D.new()
+	army.setup(aid, pid, pname, fc)
+	army.selection_changed.connect(_on_army_selection_changed)
 	add_child(army)
-	var formation_positions = army.calculate_formation_positions(pos, dir, UNITS_PER_ARMY)
-	for idx in range(UNITS_PER_ARMY):
-		var unit = _make_server_unit_3d(pid)
-		unit.set_script(preload("res://Unit3D.gd"))
-		var fpos: Vector2 = formation_positions[idx]
-		var uy = get_ground_height_at(fpos.x, fpos.y) + UNIT_HALF_HEIGHT
-		unit.name = "Soldier_%s_%d" % [aid, idx]
-		unit.owner_peer_id = pid
-		unit.owner_name = pname
-		unit.army_id = aid
-		unit.apply_equipment(use_horse, use_spear, use_bow)
-		unit.position = Vector3(fpos.x, uy, fpos.y)
-		unit.unit_died.connect(army.on_soldier_died)
-		add_child(unit)
-		if unit.has_method("initialize_goal_at_current"):
-			unit.initialize_goal_at_current()
-		army.soldiers.append(unit)
-		all_units.append(unit)
+	if _unit_renderer != null:
+		if color.is_empty():
+			color = "red" if fc.is_npc else UNIT_SPRITE_PATHS.color_folder_for_peer(pid)
+		for id in fc.members:
+			_unit_renderer.add_unit(id, color, _UnitSim.unit_type_name(_sim.utype[id]))
 	return army
+
+func _on_army_selection_changed(army, selected: bool) -> void:
+	if _unit_renderer != null and army.fc != null:
+		_unit_renderer.set_selected_ids(army.fc.members, selected)
 
 func _serialize_armies() -> Array:
 	var data := []
 	for army in armies:
-		var soldier_data := []
-		for s in army.soldiers:
-			soldier_data.append({
-				"name": s.name,
-				"x": s.global_position.x,
-				"y": s.global_position.z
-			})
-		var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
-		var use_horse: bool = s0.has_horse if s0 else false
-		var use_spear: bool = s0.has_spear if s0 else false
-		var use_bow: bool = s0.has_bow if s0 else false
-		data.append({
-			"army_id": army.army_id,
-			"pid": army.owner_peer_id,
-			"name": army.owner_name,
-			"x": army.global_position.x,
-			"y": army.global_position.z,
-			"dir": army.direction,
-			"initial_count": army.initial_count,
-			"spear": use_spear,
-			"horse": use_horse,
-			"bow": use_bow,
-			"soldiers": soldier_data,
-			"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
-			"attack": s0.attack if s0 else 10.0,
-			"attack_range": s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE,
-		})
+		data.append(_serialize_one_army(army))
 	return data
+
+## Compact spawn payload: ids are contiguous from `first_id`; positions as packed arrays.
+func _serialize_one_army(army) -> Dictionary:
+	var fc = army.fc
+	var pp: Dictionary = _sim.army_positions(fc)
+	var first_id: int = fc.members[0] if fc.members.size() > 0 else 0
+	var utype: int = _sim.utype[first_id] if fc.members.size() > 0 else _UnitSim.UnitType.CLUBMAN
+	return {
+		"army_id": army.army_id,
+		"pid": army.owner_id,
+		"name": army.owner_name,
+		"x": fc.anchor.x,
+		"y": fc.anchor.y,
+		"dir": fc.front_angle(),
+		"count": fc.members.size(),
+		"first_id": first_id,
+		"type": utype,
+		"spear": fc.has_spear,
+		"horse": fc.has_horse,
+		"bow": fc.has_bow,
+		"stance": fc.stance,
+		"xs": pp["xs"],
+		"zs": pp["zs"],
+	}
 
 func _spawn_capture_points():
 	for cfg in MapConfig.capture_points:
@@ -2264,145 +2297,38 @@ func _sync_capture_state():
 	_last_sent_resources = res_data.duplicate(true)
 	_capture_hud_sent = true
 
-func _serialize_one_army(army) -> Dictionary:
-	var soldier_data := []
-	for s in army.soldiers:
-		soldier_data.append({
-			"name": s.name,
-			"x": s.global_position.x,
-			"y": s.global_position.z
-		})
-	var s0 = army.soldiers[0] if army.soldiers.size() > 0 else null
-	var use_horse: bool = s0.has_horse if s0 else false
-	var use_spear: bool = s0.has_spear if s0 else false
-	var use_bow: bool = s0.has_bow if s0 else false
-	return {
-		"army_id": army.army_id,
-		"pid": army.owner_peer_id,
-		"name": army.owner_name,
-		"x": army.global_position.x,
-		"y": army.global_position.z,
-		"dir": army.direction,
-		"initial_count": army.initial_count,
-		"spear": use_spear,
-		"horse": use_horse,
-		"bow": use_bow,
-		"soldiers": soldier_data,
-		"speed": s0.speed if s0 else _Unit3D.speed_for_equipment(false),
-		"attack": s0.attack if s0 else 10.0,
-		"attack_range": s0.attack_range if s0 else UNIT_SPRITE_PATHS.MELEE_ATTACK_RANGE,
-	}
-
 func _get_closest_enemy_army(army) -> Node:
 	var best = null
 	var best_dist := 1e10
-	var a_xz = Vector2(army.global_position.x, army.global_position.z)
+	var a_xz: Vector2 = _sim.army_centroid(army.fc)
 	for a in armies:
-		if a.owner_peer_id == army.owner_peer_id or a.is_routed:
+		if a.owner_id == army.owner_id or a.is_routed or a.fc == null:
 			continue
-		var o_xz = Vector2(a.global_position.x, a.global_position.z)
-		var d = a_xz.distance_to(o_xz)
+		if UNIT_SPRITE_PATHS.is_neutral_owner(a.owner_id) and UNIT_SPRITE_PATHS.is_neutral_owner(army.owner_id):
+			continue
+		var d = a_xz.distance_to(_sim.army_centroid(a.fc))
 		if d < best_dist:
 			best_dist = d
 			best = a
 	return best
 
-func _is_army_at_capture_point(army) -> bool:
-	var a_xz = Vector2(army.global_position.x, army.global_position.z)
-	for c in _server_captures:
-		var cp = Vector2(c["x"], c["y"])
-		if a_xz.distance_to(cp) <= CAPTURE_RADIUS_SEEK:
-			return true
-	return false
-
-func _update_cp_seek_and_follow(delta: float):
-	var now = Time.get_ticks_msec() / 1000.0
-	if now - GameState.last_combat_time < CP_PEACE_SECONDS:
-		for a in armies:
-			if a.army_id in army_time_at_cp:
-				army_time_at_cp[a.army_id] = 0.0
-		return
-	for army in armies:
-		if army.is_routed:
-			continue
-		var aid = army.army_id
-		if _is_army_at_capture_point(army):
-			var t = army_time_at_cp.get(aid, 0.0)
-			if t >= 0:
-				t += delta
-				army_time_at_cp[aid] = t
-				if t >= CP_PEACE_SECONDS:
-					var enemy = _get_closest_enemy_army(army)
-					if enemy:
-						army_follow_target[aid] = enemy.army_id
-						army_time_at_cp[aid] = -1.0
-						print("TEST_SEEK_ENEMY: Army '%s' seeking closest enemy '%s'" % [aid, enemy.army_id])
-		else:
-			army_time_at_cp[aid] = 0.0
-
-func _apply_follow_targets():
-	var to_erase := []
-	for aid in army_follow_target.keys():
-		var target_id = army_follow_target[aid]
-		var army = _find_army(aid)
-		var target_army = _find_army(target_id)
-		if army == null or target_army == null or target_army.is_routed:
-			to_erase.append(aid)
-			continue
-		var txz = Vector2(target_army.global_position.x, target_army.global_position.z)
-		army.move_army(txz)
-		rpc("_client_move_army", aid, txz)
-	for aid in to_erase:
-		army_follow_target.erase(aid)
-
-func _grid_key(cell: Vector2i) -> String:
-	return "%d_%d" % [cell.x, cell.y]
-
-func _update_unit_grid():
-	_unit_grid.clear()
-	for u in all_units:
-		if not u or not is_instance_valid(u) or u.is_dead:
-			continue
-		var p = u.global_position
-		var cx = int(floor(p.x / GRID_CELL_SIZE))
-		var cz = int(floor(p.z / GRID_CELL_SIZE))
-		var k = _grid_key(Vector2i(cx, cz))
-		if not _unit_grid.has(k):
-			_unit_grid[k] = []
-		_unit_grid[k].append(u)
-
-func get_units_in_radius(center: Vector2, radius: float) -> Array:
-	var out := []
-	var cell_radius = ceili(radius / GRID_CELL_SIZE)
-	var cx0 = int(floor(center.x / GRID_CELL_SIZE))
-	var cy0 = int(floor(center.y / GRID_CELL_SIZE))
-	for dx in range(-cell_radius, cell_radius + 1):
-		for dy in range(-cell_radius, cell_radius + 1):
-			var k = _grid_key(Vector2i(cx0 + dx, cy0 + dy))
-			if not _unit_grid.has(k):
-				continue
-			for u in _unit_grid[k]:
-				if not u or not is_instance_valid(u) or u.is_dead:
-					continue
-				var uxz = Vector2(u.global_position.x, u.global_position.z)
-				if center.distance_to(uxz) <= radius:
-					out.append(u)
-	return out
+## Living unit ids within `radius` of `center` (spatial hash; valid after the first sim tick).
+func get_units_in_radius(center: Vector2, radius: float) -> PackedInt32Array:
+	if _sim == null:
+		return PackedInt32Array()
+	return _sim.units_in_radius(center, radius)
 
 func _server_capture_and_resources(delta: float):
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _sim == null:
 		return
 	for c in _server_captures:
 		var nearby_pids := {}
 		var center = Vector2(c["x"], c["y"])
-		var candidates = get_units_in_radius(center, CP_CAPTURE_RADIUS)
-		for u in candidates:
-			if u.get("is_dead"):
+		for id in _sim.units_in_radius(center, CP_CAPTURE_RADIUS):
+			var pid: int = _sim.owner_pid[id]
+			if UNIT_SPRITE_PATHS.is_neutral_owner(pid):
 				continue
-			var uxz = Vector2(u.global_position.x, u.global_position.z)
-			var dist = uxz.distance_to(center)
-			if dist <= CP_CAPTURE_RADIUS:
-				nearby_pids[u.owner_peer_id] = true
+			nearby_pids[pid] = true
 		if nearby_pids.size() == 1:
 			var new_owner = nearby_pids.keys()[0]
 			if new_owner != c["owner_pid"]:
@@ -2446,182 +2372,132 @@ var _match_started: bool = false
 var _clients_world_ready: Dictionary = {}
 
 ## Server: aggressive stance with no explicit order — chase closest enemy periodically.
+## Server: aggressive stance with no explicit order — engage the closest enemy army periodically.
 func _update_aggressive_armies(delta: float):
 	_aggressive_timer += delta
 	if _aggressive_timer < AGGRESSIVE_TICK_INTERVAL:
 		return
 	_aggressive_timer = 0.0
 	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
+		if a == null or not is_instance_valid(a) or a.is_routed or a.fc == null:
 			continue
-		if a.stance != _Army3D.Stance.AGGRESSIVE:
+		if UNIT_SPRITE_PATHS.is_neutral_owner(a.owner_id):
 			continue
-		if a.has_player_order():
+		var fc = a.fc
+		if fc.stance != _Formation.Stance.AGGRESSIVE:
+			continue
+		if fc.has_player_order():
 			# Stay locked while closing or fighting. If they have fallen out of
 			# contact, pick the closest enemy again so swapped blobs re-engage.
 			var now := Time.get_ticks_msec() / 1000.0
-			if GameState.last_combat_time < 0.0 or (now - GameState.last_combat_time) < 4.0:
+			if fc.order_type != _Formation.OrderType.ATTACK or GameState.last_combat_time < 0.0 or (now - GameState.last_combat_time) < 4.0:
 				continue
 		var enemy = _get_closest_enemy_army(a)
-		if enemy == null:
+		if enemy == null or enemy.fc == null:
 			continue
-		a.issue_attack_army(enemy.army_id)
-		var exz := _army_center_xz_server(enemy)
-		exz = Vector2(clampf(exz.x, 0.0, float(MapConfig.width)), clampf(exz.y, 0.0, float(MapConfig.height)))
-		army_follow_target.erase(a.army_id)
-		var gy := get_ground_height_at(exz.x, exz.y)
-		a.global_position = Vector3(exz.x, gy, exz.y)
-		var alive: Array = a.get_alive_soldiers()
-		var positions: Array = a.calculate_formation_positions(exz, a.direction, alive.size())
-		for i in range(alive.size()):
-			var p: Vector2 = positions[i]
-			p.x = clampf(p.x, 0.0, float(MapConfig.width))
-			p.y = clampf(p.y, 0.0, float(MapConfig.height))
-			var uy := get_ground_height_at(p.x, p.y) + UNIT_HALF_HEIGHT
-			alive[i].sync_target_position = Vector3(p.x, uy, p.y)
-			if alive[i].has_method("set_move_target"):
-				alive[i].set_move_target(p)
-		_apply_army_combat_directives(a)
-		rpc("_client_move_army", a.army_id, exz)
+		if fc.order_type == _Formation.OrderType.ATTACK and fc.order_target_army == enemy.fc.index:
+			continue
+		_apply_attack_order([a.army_id], enemy.army_id, -1)
+		rpc("_client_order_attack", _stamp_order(), _sim.tick, [a.army_id], enemy.army_id, -1)
+		var exz: Vector2 = _sim.army_centroid(enemy.fc)
 		print("TEST_AGGRESSIVE_TICK: army=%s owner=%s target_enemy=%s at=(%d,%d)" % [
 			a.army_id, a.owner_name, enemy.army_id, int(exz.x), int(exz.y)
 		])
 
-func _resolve_attack_order_xz(army) -> Vector2:
-	if army.order_target_army_id != "":
-		var enemy = _find_army(army.order_target_army_id)
-		if enemy == null or enemy.is_routed:
-			army.clear_order()
-			return Vector2.ZERO
-		return _army_center_xz_server(enemy)
-	if army.order_target_unit_name != "":
-		var node = get_node_or_null(NodePath(army.order_target_unit_name))
-		if node == null or not is_instance_valid(node) or node.get("is_dead"):
-			army.clear_order()
-			return Vector2.ZERO
-		return Vector2(node.global_position.x, node.global_position.z)
-	return Vector2.ZERO
-
-func _units_in_army(army_id: String) -> Array:
-	var out: Array = []
-	for u in all_units:
-		if u and is_instance_valid(u) and not u.is_dead and str(u.army_id) == army_id:
-			out.append(u)
-	return out
-
-func _nearest_unit_name_to(units: Array, pos: Vector2) -> String:
-	var best := ""
-	var best_dist := 1e10
-	for u in units:
-		var uxz := Vector2(u.global_position.x, u.global_position.z)
-		var d := pos.distance_to(uxz)
-		if d < best_dist:
-			best_dist = d
-			best = str(u.name)
-	return best
-
-func _apply_army_combat_directives(army) -> void:
-	var cmd_name := ""
-	if army.order_type == _Army3D.OrderType.ATTACK:
-		if army.order_target_army_id != "":
-			var enemies := _units_in_army(army.order_target_army_id)
-			for s in army.get_alive_soldiers():
-				var spos := Vector2(s.global_position.x, s.global_position.z)
-				cmd_name = _nearest_unit_name_to(enemies, spos)
-				if s.has_method("set_combat_directives"):
-					s.set_combat_directives(cmd_name, army.stance)
-			return
-		cmd_name = army.order_target_unit_name
-	army.apply_combat_directives_to_soldiers(cmd_name)
-
-func _apply_formation_goals_server(army, center: Vector2) -> void:
-	center = snap_move_goal_xz(_clamp_map_v2(center))
-	var gy := get_ground_height_at(center.x, center.y)
-	army.global_position = Vector3(center.x, gy, center.y)
-	var alive: Array = army.get_alive_soldiers()
-	var positions: Array = army.calculate_formation_positions(center, army.direction, alive.size())
-	for i in range(alive.size()):
-		var p: Vector2 = snap_move_goal_xz(_clamp_map_v2(positions[i]))
-		var uy := get_ground_height_at(p.x, p.y) + _unit_half_height(alive[i])
-		alive[i].sync_target_position = Vector3(p.x, uy, p.y)
-		if alive[i].has_method("set_move_target"):
-			alive[i].set_move_target(p)
-
-func _max_pursuit_for_army(army) -> float:
-	var max_p := 40.0
-	for s in army.get_alive_soldiers():
-		var prof: Dictionary = _UnitBehaviour.profile_for_unit(s)
-		max_p = maxf(max_p, float(prof.get("pursuit_distance", 80.0)))
-	return max_p
-
-func _update_army_orders(delta: float) -> void:
-	for a in armies:
-		if a == null or not is_instance_valid(a) or a.is_routed:
-			continue
-		if a.order_type == _Army3D.OrderType.NONE:
-			_apply_army_combat_directives(a)
-			continue
-		if a.order_type == _Army3D.OrderType.MOVE:
-			a.order_destination = Vector2(a.global_position.x, a.global_position.z)
-			_apply_army_combat_directives(a)
-			continue
-		if a.order_type == _Army3D.OrderType.ATTACK_MOVE:
-			var dest: Vector2 = a.order_destination
-			var acenter := Vector2(a.global_position.x, a.global_position.z)
-			var to_dest := dest - acenter
-			if to_dest.length() > GOAL_ARRIVAL_DIST:
-				var step := minf(to_dest.length(), 50.0 * delta)
-				acenter += to_dest.normalized() * step
-			else:
-				acenter = dest
-			_apply_formation_goals_server(a, acenter)
-			_apply_army_combat_directives(a)
-			continue
-		if a.order_type == _Army3D.OrderType.ATTACK:
-			var target_xz := _resolve_attack_order_xz(a)
-			if target_xz == Vector2.ZERO:
-				continue
-			var acenter := Vector2(a.global_position.x, a.global_position.z)
-			var to_target := target_xz - acenter
-			if to_target.length() > 5.0:
-				var step := minf(to_target.length(), 50.0 * delta)
-				var new_center := acenter + to_target.normalized() * step
-				if a.stance != _Army3D.Stance.AGGRESSIVE:
-					var pursuit := _max_pursuit_for_army(a)
-					if a.stance == _Army3D.Stance.HOLD:
-						pursuit *= 0.5
-					if new_center.distance_to(a.hold_position) > pursuit:
-						var from_hold: Vector2 = new_center - a.hold_position
-						if from_hold.length() > 0.01:
-							new_center = a.hold_position + from_hold.normalized() * pursuit
-						else:
-							new_center = a.hold_position
-				acenter = new_center
-			_apply_formation_goals_server(a, acenter)
-			_apply_army_combat_directives(a)
-
-const GOAL_ARRIVAL_DIST := 0.2
-
 func _physics_process(delta: float):
-	if preview_only:
+	if preview_only or _sim == null:
 		return
-	if multiplayer.is_server() and not game_over:
-		_process_pending_arrow_damage(delta)
+	var t0 := Time.get_ticks_usec()
+	if multiplayer.is_server():
+		if game_over:
+			return
 		_check_match_timeout(delta)
 		if game_over:
 			return
 		_server_capture_and_resources(delta)
-		_update_unit_grid()
-		_update_army_orders(delta)
 		_update_aggressive_armies(delta)
 		_update_map_dragon_ai(delta)
+		_step_sim(delta)
 		sync_timer += delta
-		if sync_timer >= 0.05:
+		if sync_timer >= 0.5:
 			sync_timer = 0.0
-			if not _all_clients_world_ready():
-				return
-			_sync_unit_positions()
 			_sync_capture_state()
+	else:
+		if not _multiplayer_active() and not _local_sim_enabled:
+			return
+		_step_sim(delta)
+	if _perf_monitor != null:
+		_perf_monitor.record_physics_ms(float(Time.get_ticks_usec() - t0) / 1000.0)
+
+## Server: after every sim tick send batched events (reliable) and prioritised snapshots.
+func _server_after_tick() -> void:
+	if not _all_clients_world_ready():
+		_sim.died_ids.clear()
+		_sim.routed_armies.clear()
+		return
+	if _sim.died_ids.size() > 0:
+		rpc("_client_units_died", _sim.died_ids.duplicate())
+	for ai in _sim.routed_armies:
+		var fc = _sim.armies[ai]
+		var army = _find_army(fc.army_id)
+		if army != null:
+			_on_army_routed(army)
+	if _sim.arrows.size() > 0:
+		rpc("_client_arrows", _sim.arrows.duplicate())
+	_sim.died_ids.clear()
+	_sim.routed_armies.clear()
+	var budget: int = _net.budget_for(_sim.alive_count)
+	var ids: PackedInt32Array = _net.select_units(_sim, _sim.tick, budget)
+	if ids.is_empty():
+		return
+	for chunk in _net.pack_chunks(_sim, ids, _sim.tick):
+		rpc("_client_snapshot", chunk)
+		_snapshot_bytes_sent += chunk.size()
+
+func _client_after_tick() -> void:
+	if _sim.died_ids.size() > 0:
+		# Local (non-authoritative) sims never kill units; this only fires for reconciled deaths.
+		_sim.died_ids.clear()
+	_sim.routed_armies.clear()
+	if _unit_renderer != null:
+		_unit_renderer.write_tick()
+	if _unit_audio != null:
+		_unit_audio.tick()
+
+## Snapshot: packed unit records (see sim/NetSync.gd). Stale records are dropped per unit.
+@rpc("authority", "unreliable_ordered")
+func _client_snapshot(bytes: PackedByteArray) -> void:
+	if _sim == null or _net == null:
+		return
+	var snap: Dictionary = _net.unpack(bytes)
+	if snap.is_empty():
+		return
+	_net.apply_snapshot(_sim, snap)
+	if _sim.died_ids.size() > 0:
+		_sim.died_ids.clear()
+
+@rpc("authority", "reliable")
+func _client_units_died(ids: PackedInt32Array) -> void:
+	if _sim == null:
+		return
+	_sim.kill_units(ids)
+	_sim.died_ids.clear()
+	if _unit_audio != null:
+		_unit_audio.on_deaths(ids)
+
+## Batched arrows for this tick: [from_x, from_z, to_x, to_z, duration, peak, ...] (map coords).
+@rpc("authority", "unreliable")
+func _client_arrows(data: PackedFloat32Array) -> void:
+	var n := int(data.size() / 6)
+	var shown := mini(n, MAX_ARROWS_PER_TICK)
+	for k in range(shown):
+		var o := k * 6
+		var arrow := Node3D.new()
+		arrow.set_script(_ArrowProjectile)
+		add_child(arrow)
+		var from := Vector3(data[o], get_ground_height_at(data[o], data[o + 1]) + UNIT_HALF_HEIGHT, data[o + 1])
+		var to := Vector3(data[o + 2], get_ground_height_at(data[o + 2], data[o + 3]) + UNIT_HALF_HEIGHT, data[o + 3])
+		arrow.setup(from, to, data[o + 4], data[o + 5])
 
 func _check_match_timeout(delta: float) -> void:
 	if not _match_started or game_over:
@@ -2639,9 +2515,9 @@ func _check_match_timeout(delta: float) -> void:
 	var counts := {}
 	var names := {}
 	for a in armies:
-		if a and is_instance_valid(a) and not a.is_routed:
-			counts[a.owner_peer_id] = int(counts.get(a.owner_peer_id, 0)) + 1
-			names[a.owner_peer_id] = a.owner_name
+		if a and is_instance_valid(a) and not a.is_routed and not UNIT_SPRITE_PATHS.is_neutral_owner(a.owner_id):
+			counts[a.owner_id] = int(counts.get(a.owner_id, 0)) + 1
+			names[a.owner_id] = a.owner_name
 	var winner_pid := 0
 	var winner_count := -1
 	var tied := false
@@ -2660,113 +2536,28 @@ func _check_match_timeout(delta: float) -> void:
 	rpc("_announce_winner", winner_name)
 	_announce_winner(winner_name)
 
-func _notify_unit_death(unit_name: String):
-	rpc("_client_unit_died", unit_name)
-
-func _unit_position_payload(u) -> Dictionary:
-	var here = u.global_position
-	var final_mt: Vector2
-	if u.is_moving:
-		final_mt = u.move_target
-	else:
-		final_mt = Vector2(here.x, here.z)
-	var steer_mt := final_mt
-	if u.is_moving and u.has_method("_current_steer_target_xz"):
-		steer_mt = u._current_steer_target_xz()
-	return {
-		"n": u.name, "x": here.x, "y": here.z, "hp": u.hp,
-		"tx": steer_mt.x, "ty": steer_mt.y,
-		"fx": final_mt.x, "fy": final_mt.y,
-		"ic": u.in_combat,
-		"moving": u.is_moving,
-	}
-
-func _sync_unit_positions():
-	var living := []
-	var dead_names := []
-	for u in all_units:
-		if u == null or not is_instance_valid(u):
-			continue
-		if u.get("is_dead"):
-			dead_names.append(u.name)
-		else:
-			living.append(u)
-	if living.is_empty():
-		if not dead_names.is_empty():
-			rpc("_receive_positions", [], dead_names)
-		return
-	if _sync_cursor < 0 or _sync_cursor >= living.size():
-		_sync_cursor = 0
-	var n := mini(POSITION_SYNC_BATCH_SIZE, living.size())
-	var pos_data := []
-	var wrapped := false
-	for i in range(n):
-		var idx := (_sync_cursor + i) % living.size()
-		if i > 0 and idx < _sync_cursor:
-			wrapped = true
-		pos_data.append(_unit_position_payload(living[idx]))
-	_sync_cursor = (_sync_cursor + n) % living.size()
-	if _sync_cursor == 0:
-		wrapped = true
-	var dead_batch := dead_names if wrapped else []
-	rpc("_receive_positions", pos_data, dead_batch)
-
-func spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
-	if multiplayer.is_server():
-		rpc("_client_spawn_arrow", from, to, duration, peak)
-
-@rpc("authority", "call_local", "reliable")
-func _client_spawn_arrow(from: Vector3, to: Vector3, duration: float, peak: float) -> void:
-	var arrow := Node3D.new()
-	arrow.set_script(_ArrowProjectile)
-	add_child(arrow)
-	arrow.setup(from, to, duration, peak)
-
-func schedule_arrow_damage(target_name: String, dmg: float, attacker_id: int, delay: float) -> void:
-	if not multiplayer.is_server():
-		return
-	_pending_arrow_damage.append({
-		"target_name": target_name,
-		"dmg": dmg,
-		"attacker_id": attacker_id,
-		"time_left": delay,
-	})
-
-func _process_pending_arrow_damage(delta: float) -> void:
-	var i := 0
-	while i < _pending_arrow_damage.size():
-		var entry: Dictionary = _pending_arrow_damage[i]
-		entry["time_left"] = float(entry["time_left"]) - delta
-		if float(entry["time_left"]) > 0.0:
-			_pending_arrow_damage[i] = entry
-			i += 1
-			continue
-		_pending_arrow_damage.remove_at(i)
-		var node = get_node_or_null(NodePath(str(entry["target_name"])))
-		if node == null or not is_instance_valid(node):
-			continue
-		if node.get("is_dead"):
-			continue
-		if node.has_method("take_damage"):
-			node.take_damage(float(entry["dmg"]), int(entry["attacker_id"]))
-
 func _on_army_routed(army):
 	if game_over:
 		return
 	rpc("_client_army_routed", army.army_id)
-	var loser_pid = army.owner_peer_id
+	if army in selected_armies:
+		selected_armies.erase(army)
+	var loser_pid = army.owner_id
 	var loser_name = army.owner_name
+	if UNIT_SPRITE_PATHS.is_neutral_owner(loser_pid):
+		print("TEST_MAP_DRAGON_DEAD: %s" % army.army_id)
+		return
 	var all_routed = true
 	for a in armies:
-		if a.owner_peer_id == loser_pid and not a.is_routed:
+		if a.owner_id == loser_pid and not a.is_routed:
 			all_routed = false
 			break
 	if all_routed:
 		print("TEST_PLAYER_ELIMINATED: Player '%s' has no armies left (all routed)" % loser_name)
 	var players_with_armies := {}
 	for a in armies:
-		if not a.is_routed:
-			players_with_armies[a.owner_peer_id] = a.owner_name
+		if not a.is_routed and not UNIT_SPRITE_PATHS.is_neutral_owner(a.owner_id):
+			players_with_armies[a.owner_id] = a.owner_name
 	if players_with_armies.size() == 1:
 		game_over = true
 		var winner_name = players_with_armies.values()[0]
@@ -2856,9 +2647,9 @@ func _clear_selection():
 	if _army_command_bar != null:
 		_army_command_bar.set_visible_bar(false)
 
-func _set_selection(armies: Array):
+func _set_selection(new_armies: Array):
 	_clear_selection()
-	for a in armies:
+	for a in new_armies:
 		if a and is_instance_valid(a) and not a.is_routed:
 			selected_armies.append(a)
 			a.select()
@@ -2872,18 +2663,21 @@ func _get_selected_non_routed() -> Array:
 			out.append(a)
 	return out
 
+## Marquee: an army is picked when any living soldier projects inside the screen rect.
 func _armies_in_screen_rect_3d(rect: Rect2, my_id: int) -> Array:
 	var out := []
-	if _camera == null:
+	if _camera == null or _sim == null:
 		return out
 	for army in armies:
-		if army.owner_peer_id != my_id or army.is_routed:
+		if army.owner_id != my_id or army.is_routed or army.fc == null:
 			continue
 		var any_inside := false
-		for s in army.soldiers:
-			if s == null or not is_instance_valid(s) or s.get("is_dead"):
+		for id in army.fc.members:
+			if not _sim.is_alive(id):
 				continue
-			var sp := _camera.unproject_position(s.global_position)
+			var x: float = _sim.pos_x[id]
+			var z: float = _sim.pos_z[id]
+			var sp := _camera.unproject_position(Vector3(x, get_ground_height_at(x, z) + UNIT_HALF_HEIGHT, z))
 			if rect.has_point(sp):
 				any_inside = true
 				break
@@ -2894,47 +2688,63 @@ func _armies_in_screen_rect_3d(rect: Rect2, my_id: int) -> Array:
 func _clamp_map_v2(v: Vector2) -> Vector2:
 	return Vector2(clampf(v.x, 0, MapConfig.width), clampf(v.y, 0, MapConfig.height))
 
-func _first_alive_soldier_3d(army) -> Node3D:
-	if army == null or not is_instance_valid(army):
-		return null
-	for s in army.soldiers:
-		if s and is_instance_valid(s) and not s.get("is_dead"):
-			return s
-	return null
-
-## Single RMB click: shift every selected soldier's goal by the same delta so the anchor's goal lands on click.
-## Delta uses the first alive soldier of the first selected army's current goal (not physical position).
 func _is_attack_move_mode() -> bool:
 	return _army_command_bar != null \
 		and _army_command_bar.get_order_mode() == _ArmyCommandBar.OrderMode.ATTACK_MOVE
 
-func _issue_group_move_first_soldier_anchor_3d(click_xz: Vector2):
+## Single RMB click: the selected group's centroid goes to the click; each army keeps its
+## offset from that centroid. Facing follows travel direction. Instant local click marker.
+func _issue_group_move_click(click_xz: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var s0 = _first_alive_soldier_3d(sel[0])
-	if s0 == null or not s0.has_method("get_goal_xz"):
-		return
-	var g0: Vector2 = s0.get_goal_xz()
 	var click_c := snap_move_goal_xz(_clamp_map_v2(click_xz))
-	var delta := click_c - g0
+	var centroid := Vector2.ZERO
+	var centres: Array = []
+	for a in sel:
+		var c: Vector2 = _sim.army_centroid(a.fc)
+		centres.append(c)
+		centroid += c
+	centroid /= float(sel.size())
+	var ids: Array = []
+	var dests := PackedFloat32Array()
+	var facings := PackedFloat32Array()
+	for k in range(sel.size()):
+		var d: Vector2 = _clamp_map_v2(click_c + (centres[k] - centroid))
+		ids.append(sel[k].army_id)
+		dests.append(d.x)
+		dests.append(d.y)
+		facings.append(-999.0)
 	var marker = "TEST_009_MOVE" if GameState.local_player_name == "A" else "TEST_009_MOVE_B"
-	var payload: Array = []
-	var n_units := 0
-	for army in sel:
-		for s in army.soldiers:
-			if s == null or not is_instance_valid(s) or s.get("is_dead"):
-				continue
-			if not s.has_method("get_goal_xz"):
-				continue
-			var og: Vector2 = s.get_goal_xz()
-			var nw := snap_move_goal_xz(_clamp_map_v2(og + delta))
-			payload.append({"n": str(s.name), "x": nw.x, "y": nw.y})
-			n_units += 1
-	if payload.is_empty():
+	print("%s: Group move %d armies to click (%d,%d)" % [marker, ids.size(), int(click_c.x), int(click_c.y)])
+	_show_click_marker(click_c)
+	rpc_id(1, "_server_order_move", ids, dests, facings, PackedFloat32Array(), _is_attack_move_mode())
+
+func _show_click_marker(p: Vector2) -> void:
+	if _click_marker == null:
+		_click_marker = MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 6.0
+		cm.bottom_radius = 6.0
+		cm.height = 0.3
+		_click_marker.mesh = cm
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.3, 1.0, 0.4, 0.8)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_click_marker.material_override = mat
+		add_child(_click_marker)
+	_click_marker.position = Vector3(p.x, get_ground_height_at(p.x, p.y) + 0.3, p.y)
+	_click_marker.visible = true
+	_click_marker_t = 0.6
+
+func _update_click_marker(delta: float) -> void:
+	if _click_marker == null or not _click_marker.visible:
 		return
-	print("%s: Anchor goal move %d units to click (%d,%d)" % [marker, n_units, int(click_c.x), int(click_c.y)])
-	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
+	_click_marker_t -= delta
+	if _click_marker_t <= 0.0:
+		_click_marker.visible = false
 
 func _ensure_ghost_marker_material(valid: bool = true) -> StandardMaterial3D:
 	if valid:
@@ -2953,12 +2763,20 @@ func _ensure_ghost_marker_material(valid: bool = true) -> StandardMaterial3D:
 		_ghost_marker_invalid_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	return _ghost_marker_invalid_mat
 
+func _selection_counts_and_mounts(sel: Array) -> Dictionary:
+	var counts: Array = []
+	var mounted: Array = []
+	for a in sel:
+		counts.append(_sim.army_alive_count(a.fc))
+		mounted.append(a.has_horse)
+	return {"counts": counts, "mounted": mounted}
+
 func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
-	var positions: Array = pack.get("positions", [])
+	var cm := _selection_counts_and_mounts(sel)
+	var positions: Array[Vector2] = _GroupFormation.preview_positions(line_start, line_end, cm["counts"], cm["mounted"])
 	if positions.is_empty():
 		return
 	if _ghost_root_3d == null:
@@ -2968,7 +2786,8 @@ func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 	var mat := _ensure_ghost_marker_material(true)
 	var invalid_mat := _ensure_ghost_marker_material(false)
 	var ghosts: Array = _ghost_root_3d.get_children()
-	while ghosts.size() < positions.size():
+	var shown: int = mini(positions.size(), MAX_GHOST_MARKERS)
+	while ghosts.size() < shown:
 		var box := MeshInstance3D.new()
 		var bm := BoxMesh.new()
 		bm.size = Vector3(12, 4, 12)
@@ -2976,38 +2795,45 @@ func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 		box.material_override = mat
 		_ghost_root_3d.add_child(box)
 		ghosts.append(box)
-	while ghosts.size() > positions.size():
-		var extra: Node = ghosts[ghosts.size() - 1]
-		extra.queue_free()
-		ghosts.remove_at(ghosts.size() - 1)
-	for i in range(positions.size()):
-		var p: Vector2 = positions[i]
-		var gy := get_ground_height_at(p.x, p.y)
+	for i in range(ghosts.size()):
 		var box: MeshInstance3D = ghosts[i]
-		box.position = Vector3(p.x, gy + 2.0, p.y)
+		if i >= shown:
+			box.visible = false
+			continue
+		var p: Vector2 = positions[i]
+		box.visible = true
+		box.position = Vector3(p.x, get_ground_height_at(p.x, p.y) + 2.0, p.y)
 		box.material_override = mat if is_walkable_at(p.x, p.y) else invalid_mat
 
 func _clear_formation_ghosts_3d():
 	if _ghost_root_3d:
 		for c in _ghost_root_3d.get_children():
-			c.queue_free()
+			c.visible = false
 
+## RMB drag: each selected army gets its own sub-segment of the drag line; the formation is
+## centred on the segment, as wide as the segment allows, facing away from the drag rear.
 func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var pack: Dictionary = _GroupFormation.compute_multi_army_positions(line_start, line_end, sel)
-	var units: Array = pack.get("units", [])
-	var positions: Array = pack.get("positions", [])
-	if units.is_empty():
-		return
-	var payload: Array = []
-	for i in range(units.size()):
-		var u = units[i]
-		var p: Vector2 = positions[i]
-		p = snap_move_goal_xz(_clamp_map_v2(p))
-		payload.append({"n": str(u.name), "x": p.x, "y": p.y})
-	rpc_id(1, "_server_move_group_formation", payload, _is_attack_move_mode())
+	var segs: Array = _GroupFormation.split_segments(line_start, line_end, sel.size())
+	var ids: Array = []
+	var dests := PackedFloat32Array()
+	var facings := PackedFloat32Array()
+	var widths := PackedFloat32Array()
+	var front := _GroupFormation.front_angle_for_segment(line_start, line_end)
+	for k in range(sel.size()):
+		var seg: Dictionary = segs[k]
+		var s: Vector2 = seg["start"]
+		var e: Vector2 = seg["end"]
+		var mid := _clamp_map_v2((s + e) * 0.5)
+		ids.append(sel[k].army_id)
+		dests.append(mid.x)
+		dests.append(mid.y)
+		facings.append(front)
+		widths.append(s.distance_to(e))
+	_show_click_marker((line_start + line_end) * 0.5)
+	rpc_id(1, "_server_order_move", ids, dests, facings, widths, _is_attack_move_mode())
 
 func _handle_world3d_mouse_extended(event: InputEvent):
 	var my_id := multiplayer.get_unique_id()
@@ -3060,7 +2886,7 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 					var world_xz := Vector2(gh2.x, gh2.z) if gh2 != Vector3.ZERO else _rmb_press_ground
 					var drag_len := _rmb_press_screen.distance_to(screen_pos)
 					if drag_len < RMB_DRAG_CLICK_THRESHOLD:
-						_issue_group_move_first_soldier_anchor_3d(world_xz)
+						_issue_group_move_click(world_xz)
 					else:
 						_commit_group_formation_line_3d(_rmb_press_ground, world_xz)
 				_rmb_drag_active = false
@@ -3113,54 +2939,37 @@ func _get_enemy_army_at(pos_2d: Vector2, for_peer_id: int):
 	var best = null
 	var best_dist = ARMY_CLICK_RADIUS
 	for army in armies:
-		if army.owner_peer_id == for_peer_id or army.is_routed:
+		if army.owner_id == for_peer_id or army.is_routed or army.fc == null:
 			continue
-		var a_pos = Vector2(army.global_position.x, army.global_position.z)
-		var dist = pos_2d.distance_to(a_pos)
+		if _sim.army_alive_count(army.fc) == 0:
+			continue
+		var dist = pos_2d.distance_to(_sim.army_centroid(army.fc))
 		if dist < best_dist:
 			best_dist = dist
 			best = army
 	return best
 
-func _get_attackable_unit_at(pos_2d: Vector2, for_peer_id: int):
-	var best = null
-	var best_dist := ARMY_CLICK_RADIUS
-	for dragon in _map_dragons:
-		if dragon == null or not is_instance_valid(dragon) or dragon.get("is_dead"):
-			continue
-		var dxz := Vector2(dragon.global_position.x, dragon.global_position.z)
-		var dist := pos_2d.distance_to(dxz)
-		if dist < best_dist:
-			best_dist = dist
-			best = dragon
-	for u in all_units:
-		if u == null or not is_instance_valid(u) or u.get("is_dead"):
-			continue
-		if u.owner_peer_id == for_peer_id:
-			continue
-		if UNIT_SPRITE_PATHS.is_neutral_owner(int(u.get("owner_peer_id"))):
-			continue
-		var uxz := Vector2(u.global_position.x, u.global_position.z)
-		var dist2 := pos_2d.distance_to(uxz)
-		if dist2 < best_dist:
-			best_dist = dist2
-			best = u
-	return best
+## Nearest hostile unit id near the click (dragons included), or -1.
+func _get_attackable_unit_at(pos_2d: Vector2, for_peer_id: int) -> int:
+	return _sim.nearest_unit(pos_2d, ARMY_CLICK_RADIUS, for_peer_id, false)
 
 func _issue_armies_attack_at(pos: Vector2) -> void:
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
 	var my_id := multiplayer.get_unique_id()
+	var ids: Array = []
+	for a in sel:
+		ids.append(a.army_id)
 	var enemy_army = _get_enemy_army_at(pos, my_id)
 	if enemy_army != null:
-		for a in sel:
-			rpc_id(1, "_server_army_order_attack", a.army_id, enemy_army.army_id, "")
+		_show_click_marker(pos)
+		rpc_id(1, "_server_armies_order_attack", ids, enemy_army.army_id, -1)
 		return
-	var unit = _get_attackable_unit_at(pos, my_id)
-	if unit != null:
-		for a in sel:
-			rpc_id(1, "_server_army_order_attack", a.army_id, "", str(unit.name))
+	var unit := _get_attackable_unit_at(pos, my_id)
+	if unit >= 0:
+		_show_click_marker(pos)
+		rpc_id(1, "_server_armies_order_attack", ids, "", unit)
 
 func _issue_armies_attack_move_3d(dest: Vector2) -> void:
 	var sel := _get_selected_non_routed()
@@ -3176,18 +2985,28 @@ func _get_army_at(pos_2d: Vector2, peer_id: int):
 	var best = null
 	var best_dist = ARMY_CLICK_RADIUS
 	for army in armies:
-		if army.owner_peer_id != peer_id or army.is_routed:
+		if army.owner_id != peer_id or army.is_routed or army.fc == null:
 			continue
-		var a_pos = Vector2(army.global_position.x, army.global_position.z)
-		var dist = pos_2d.distance_to(a_pos)
-		if dist < best_dist:
-			best_dist = dist
+		# Distance to the nearest soldier, so wide formations are clickable anywhere.
+		var d := 1e10
+		for id in army.fc.members:
+			if not _sim.is_alive(id):
+				continue
+			var dx: float = _sim.pos_x[id] - pos_2d.x
+			var dz: float = _sim.pos_z[id] - pos_2d.y
+			d = minf(d, sqrt(dx * dx + dz * dz))
+		if d < best_dist:
+			best_dist = d
 			best = army
 	return best
 
 func _find_army(aid: String):
+	var a = _army_by_id.get(aid, null)
+	if a != null and is_instance_valid(a):
+		return a
 	for army in armies:
 		if army.army_id == aid:
+			_army_by_id[aid] = army
 			return army
 	return null
 
@@ -3208,18 +3027,10 @@ func _terrain_grid_height_at(x: float, z: float) -> float:
 	var h11: float = _terrain_heights[j1 * _terrain_cols + i1]
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
 
+## Bilinear lookup in the terrain height grid (the same samples the ground mesh was built
+## from). This is called per unit per tick, so it must never hit the physics server.
 func get_ground_height_at(x: float, z: float) -> float:
-	var space = get_world_3d().direct_space_state
-	var from_y := _max_terrain_height + 500.0
-	var from_vec = Vector3(x, from_y, z)
-	var to_vec = Vector3(x, -200.0, z)
-	var query = PhysicsRayQueryParameters3D.create(from_vec, to_vec)
-	query.collision_mask = 2
-	query.hit_back_faces = true
-	var result = space.intersect_ray(query)
-	if result.is_empty():
-		return _terrain_grid_height_at(x, z)
-	return result["position"].y
+	return _terrain_grid_height_at(x, z)
 
 func _add_play_boundary_line():
 	var existing := get_node_or_null("PlayBoundary")
@@ -3265,123 +3076,57 @@ func _add_play_boundary_line():
 	top.material_override = mat
 	root.add_child(top)
 
-func _make_client_unit_3d(peer_id: int) -> CharacterBody3D:
-	var unit = CharacterBody3D.new()
-	unit.motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-	_configure_unit_collision(unit, peer_id)
-	var box = BoxShape3D.new()
-	box.size = Vector3(14, 22, 14)
-	var col = CollisionShape3D.new()
-	col.shape = box
-	unit.add_child(col)
-	return unit
-
 @rpc("authority", "reliable")
 func _client_spawn_armies(data: Array):
-	# One frame later: ensures this node and physics/world are fully in the tree
-	# (avoids get_global_transform errors during early match setup).
+	# One frame later: ensures this node and the renderer are fully in the tree.
 	call_deferred("_client_spawn_armies_impl", data)
 
+## Client (and headless tests): build armies + units in the local sim from the compact payload
+## produced by `_serialize_one_army`. Ids come from the server so snapshots address the same units.
 func _client_spawn_armies_impl(data: Array):
 	for ad in data:
-		var use_horse: bool = ad.get("horse", false)
-		var use_spear: bool = ad.get("spear", false)
-		var use_bow: bool = ad.get("bow", false)
-		var army = Node3D.new()
-		army.set_script(preload("res://Army3D.gd"))
-		add_child(army)
-		army.army_id = ad["army_id"]
-		army.owner_peer_id = ad["pid"]
-		army.owner_name = ad["name"]
-		army.direction = ad["dir"]
-		army.name = "Army_%s" % ad["army_id"]
-		army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
-		army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
-		var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
-		army.position = Vector3(ad["x"], gy, ad["y"])
-		armies.append(army)
-		for sd in ad["soldiers"]:
-			var unit = _make_client_unit_3d(ad["pid"])
-			unit.set_script(preload("res://Unit3D.gd"))
-			unit.name = sd["name"]
-			unit.owner_peer_id = ad["pid"]
-			unit.owner_name = ad["name"]
-			unit.army_id = ad["army_id"]
-			if unit.has_method("apply_equipment"):
-				unit.apply_equipment(use_horse, use_spear, use_bow)
-			if ad.has("speed"):
-				unit.speed = float(ad["speed"])
-				unit.attack = float(ad.get("attack", unit.attack))
-				unit.attack_range = float(ad.get("attack_range", unit.attack_range))
-			var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
-			var pos = Vector3(sd["x"], uy, sd["y"])
-			unit.sync_target_position = pos
-			unit.position = pos
-			unit.has_move_goal = false
-			add_child(unit)
-			if unit.has_method("refresh_visuals"):
-				unit.refresh_visuals()
-			army.soldiers.append(unit)
-			all_units.append(unit)
+		if typeof(ad) != TYPE_DICTIONARY:
+			continue
+		_client_spawn_one_army(ad, "")
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
-	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [all_units.size(), armies.size()])
-	#region agent log
-	var u0pos: Array = []
-	if all_units.size() > 0 and is_instance_valid(all_units[0]):
-		var u = all_units[0]
-		u0pos = [ u.global_position.x, u.global_position.y, u.global_position.z ]
-	GameState.agent_debug_log("H3", "World.gd:_client_spawn_armies_impl", "after_army_spawn", {
-		"data_armies": data.size(),
-		"all_units": all_units.size(),
-		"armies": armies.size(),
-		"first_unit_pos": u0pos
-	})
-	#endregion
-	call_deferred("_validate_units_height")
-	call_deferred("_validate_unit_textures")
+	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [_alive_unit_count(), armies.size()])
 	_schedule_visibility_checks()
+
+func _client_spawn_one_army(ad: Dictionary, color: String) -> Node:
+	var aid := str(ad.get("army_id", ""))
+	if aid.is_empty() or _find_army(aid) != null:
+		return null
+	var pid := int(ad.get("pid", 0))
+	var pname := str(ad.get("name", ""))
+	var use_horse: bool = ad.get("horse", false)
+	var use_spear: bool = ad.get("spear", false)
+	var use_bow: bool = ad.get("bow", false)
+	var n := int(ad.get("count", 0))
+	var xs: PackedFloat32Array = ad.get("xs", PackedFloat32Array())
+	var zs: PackedFloat32Array = ad.get("zs", PackedFloat32Array())
+	if n <= 0:
+		n = xs.size()
+	var first_id := int(ad.get("first_id", _next_unit_id))
+	var utype := int(ad.get("type", _UnitSim.unit_type_for_equipment(use_horse, use_spear, use_bow)))
+	var pos := Vector2(float(ad.get("x", 0.0)), float(ad.get("y", 0.0)))
+	var fc = _make_formation(aid, pid, pname, pos, float(ad.get("dir", 0.0)), n, use_horse, use_spear, use_bow)
+	fc.stance = int(ad.get("stance", fc.stance))
+	_sim.spawn_army_units(fc, first_id, n, utype, xs, zs)
+	_next_unit_id = maxi(_next_unit_id, first_id + n)
+	var army = _make_army_handle(aid, pid, pname, fc, color)
+	armies.append(army)
+	return army
 
 @rpc("authority", "reliable")
 func _client_spawn_dragons(data: Array) -> void:
 	for entry in data:
 		if typeof(entry) != TYPE_DICTIONARY:
 			continue
-		_client_spawn_one_dragon(entry)
-
-func _client_spawn_one_dragon(data: Dictionary) -> void:
-	var index := int(data.get("index", _map_dragons.size()))
-	for existing in _map_dragons:
-		if existing != null and is_instance_valid(existing) and existing.name == "MapDragon_%d" % index:
-			return
-	var unit := _make_dragon_unit_3d()
-	unit.set_script(_Unit3D)
-	unit.name = "MapDragon_%d" % index
-	unit.owner_peer_id = UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID
-	unit.owner_name = "Dragon"
-	unit.army_id = "neutral_dragon_%d" % index
-	var color := str(data.get("color", "red"))
-	unit.apply_dragon(color)
-	unit.hp = float(data.get("hp", unit.hp))
-	unit.sync_target_hp = unit.hp
-	unit.speed = float(data.get("speed", unit.speed))
-	unit.attack = float(data.get("attack", unit.attack))
-	unit.attack_range = float(data.get("attack_range", unit.attack_range))
-	var hh := float(data.get("half_height", unit.half_height))
-	unit.half_height = hh
-	var px := float(data.get("x", MapConfig.width * 0.5))
-	var pz := float(data.get("y", MapConfig.height * 0.5))
-	var uy := get_ground_height_at(px, pz) + hh
-	var pos := Vector3(px, uy, pz)
-	unit.position = pos
-	unit.sync_target_position = pos
-	unit.has_move_goal = false
-	add_child(unit)
-	if unit.has_method("refresh_visuals"):
-		unit.refresh_visuals()
-	all_units.append(unit)
-	_map_dragons.append(unit)
-	print("TEST_MAP_DRAGON_SPAWN: client dragon %d at (%d,%d)" % [index, int(px), int(pz)])
-	call_deferred("_validate_units_height")
+		var army = _client_spawn_one_army(entry, str(entry.get("color", "red")))
+		if army != null:
+			_map_dragons.append(army)
+			var pos := Vector2(float(entry.get("x", 0.0)), float(entry.get("y", 0.0)))
+			print("TEST_MAP_DRAGON_SPAWN: client dragon %d at (%d,%d)" % [int(entry.get("index", 0)), int(pos.x), int(pos.y)])
 
 func _load_image_texture(path: String) -> Texture2D:
 	var img := Image.new()
@@ -3535,168 +3280,23 @@ func _update_topbar_local(cp_data: Array, res_data):
 	)
 
 @rpc("authority", "reliable")
-func _client_move_army(aid: String, target: Vector2):
-	var army = _find_army(aid)
-	if army:
-		army.move_army(target)
-
-@rpc("authority", "reliable")
-func _client_rotate_army(aid: String, new_dir: float):
-	var army = _find_army(aid)
-	if army:
-		army.direction = new_dir
-		if army.has_method("assign_formation_targets"):
-			army.assign_formation_targets()
-
-@rpc("authority", "reliable")
 func _client_spawn_drafted_army(army_data: Dictionary):
-	var ad = army_data
-	var use_horse: bool = ad.get("horse", false)
-	var use_spear: bool = ad.get("spear", false)
-	var use_bow: bool = ad.get("bow", false)
-	var army = Node3D.new()
-	army.set_script(preload("res://Army3D.gd"))
-	add_child(army)
-	army.army_id = ad["army_id"]
-	army.owner_peer_id = ad["pid"]
-	army.owner_name = ad["name"]
-	army.direction = ad["dir"]
-	army.name = "Army_%s" % ad["army_id"]
-	army.initial_count = ad.get("initial_count", UNITS_PER_ARMY)
-	army.spacing = _Army3D.MOUNTED_SPACING if use_horse else _Army3D.FOOT_SPACING
-	var gy = get_ground_height_at(ad["x"], ad["y"]) + UNIT_HALF_HEIGHT
-	army.position = Vector3(ad["x"], gy, ad["y"])
-	armies.append(army)
-	for sd in ad["soldiers"]:
-		var unit = _make_client_unit_3d(ad["pid"])
-		unit.set_script(preload("res://Unit3D.gd"))
-		unit.name = sd["name"]
-		unit.owner_peer_id = ad["pid"]
-		unit.owner_name = ad["name"]
-		unit.army_id = ad["army_id"]
-		if unit.has_method("apply_equipment"):
-			unit.apply_equipment(use_horse, use_spear, use_bow)
-		if ad.has("speed"):
-			unit.speed = float(ad["speed"])
-			unit.attack = float(ad.get("attack", unit.attack))
-			unit.attack_range = float(ad.get("attack_range", unit.attack_range))
-		var uy = get_ground_height_at(sd["x"], sd["y"]) + UNIT_HALF_HEIGHT
-		var pos = Vector3(sd["x"], uy, sd["y"])
-		unit.sync_target_position = pos
-		unit.position = pos
-		unit.has_move_goal = false
-		add_child(unit)
-		if unit.has_method("refresh_visuals"):
-			unit.refresh_visuals()
-		army.soldiers.append(unit)
-		all_units.append(unit)
-	if ad.has("stop_x") and ad.has("stop_y"):
-		army.move_army(Vector2(ad["stop_x"], ad["stop_y"]))
-	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s'" % army.army_id)
-	call_deferred("_validate_units_height")
-	call_deferred("_validate_unit_textures")
-
-func _validate_unit_textures():
-	var ok := 0
-	var fail := 0
-	for unit in all_units:
-		if not is_instance_valid(unit) or not unit.is_inside_tree():
-			continue
-		if unit.has_method("has_valid_spearman_texture") and unit.has_valid_spearman_texture():
-			ok += 1
-		else:
-			fail += 1
-			print("TEST_3D_TEXTURE_MISSING: %s" % unit.name)
-	if fail == 0:
-		print("TEST_3D_TEXTURES_OK: count=%d" % ok)
-	else:
-		print("TEST_3D_TEXTURES_BAD: ok=%d fail=%d" % [ok, fail])
-
-func _validate_units_height():
-	for unit in all_units:
-		if not is_instance_valid(unit) or not unit.is_inside_tree():
-			continue
-		var ground_y = get_ground_height_at(unit.global_position.x, unit.global_position.z)
-		if unit.global_position.y < ground_y - 0.5:
-			print("TEST_3D_UNIT_HEIGHT_INVALID: %s spawn_below_ground" % unit.name)
-
-@rpc("authority", "unreliable")
-func _receive_positions(pos_data: Array, dead_names: Array = []):
-	for pd in pos_data:
-		var node = get_node_or_null(NodePath(str(pd["n"])))
-		if node and is_instance_valid(node):
-			if node.get("is_dead"):
-				continue
-			var hh := _unit_half_height(node)
-			var here_y = get_ground_height_at(pd["x"], pd["y"]) + hh
-			var tx = pd.get("tx", pd["x"])
-			var ty = pd.get("ty", pd["y"])
-			var fx = pd.get("fx", tx)
-			var fy = pd.get("fy", ty)
-			var final_goal_xz := Vector2(float(fx), float(fy))
-			var there_y = get_ground_height_at(tx, ty) + hh
-			var here = Vector3(pd["x"], here_y, pd["y"])
-			var there = Vector3(tx, there_y, ty)
-			var err = node.global_position.distance_to(here)
-			if node.has_method("apply_network_sync"):
-				node.apply_network_sync(
-					here,
-					there,
-					float(pd.get("hp", node.get("hp"))),
-					bool(pd.get("ic", false)),
-					CORRECTION_THRESHOLD,
-					final_goal_xz,
-				)
-			else:
-				if err > CORRECTION_THRESHOLD:
-					node.global_position = here
-				node.set("sync_target_position", there)
-				node.set("has_move_goal", bool(pd.get("moving", false)))
-				if "sync_target_hp" in node:
-					node.set("sync_target_hp", pd["hp"])
-					node.set("hp", pd["hp"])
-				if "sync_in_combat" in node:
-					node.set("sync_in_combat", bool(pd.get("ic", false)))
-	for dn in dead_names:
-		var dead_node = get_node_or_null(NodePath(str(dn)))
-		if dead_node and dead_node.has_method("is_in_death_sequence") and dead_node.is_in_death_sequence():
-			continue
-		_cleanup_client_unit(str(dn))
-
-@rpc("authority", "reliable")
-func _client_unit_died(unit_name: String):
-	_cleanup_client_unit(unit_name)
-
-func _cleanup_client_unit(unit_name: String):
-	var node = get_node_or_null(NodePath(unit_name))
-	if node == null:
+	var army = _client_spawn_one_army(army_data, "")
+	if army == null:
 		return
-	if node.has_method("is_in_death_sequence") and node.is_in_death_sequence():
-		return
-	if node.has_method("begin_death"):
-		node.begin_death()
-		print("TEST_UNIT_CLEANUP: client freed unit %s" % unit_name)
-		return
-	if node.get("is_dead") != true:
-		node.set("is_dead", true)
-		print("TEST_UNIT_CLEANUP: client freed unit %s" % unit_name)
-		get_tree().create_timer(0.5).timeout.connect(func():
-			if is_instance_valid(node):
-				node.queue_free()
-		)
+	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s' (soldiers=%d)" % [army.army_id, army.soldier_count()])
 
 @rpc("authority", "reliable")
 func _client_army_routed(army_id: String):
 	var army = _find_army(army_id)
-	if army == null:
+	if army == null or army.fc == null:
 		return
-	army.is_routed = true
 	if army in selected_armies:
 		selected_armies.erase(army)
-	for s in army.soldiers:
-		if is_instance_valid(s):
-			s.set("is_dead", true)
-			s.queue_free()
+		army.deselect()
+	_sim.rout_army(army.fc)
+	_sim.died_ids.clear()
+	_sim.routed_armies.clear()
 
 @rpc("authority", "reliable")
 func _announce_winner(winner_name: String):
@@ -3709,6 +3309,6 @@ func get_my_armies() -> Array:
 	var my_id = multiplayer.get_unique_id()
 	var result := []
 	for army in armies:
-		if army.owner_peer_id == my_id and not army.is_routed:
+		if army.owner_id == my_id and not army.is_routed:
 			result.append(army)
 	return result

@@ -96,7 +96,27 @@
       "implementation": "! grep -q 'TEST_GAME_OVER_TIMEOUT' ../logs/server.log"
     },
     {
-      "description_of_test": "Headless texture paths: red/blue spearman PNGs load as ImageTexture (same path logic as Unit3D)",
+      "description_of_test": "Clients never hard-snapped a unit (TEST_SIM_CLIENT snaps= must stay 0 after spawn; a non-zero value means prediction and server diverged by > 60 units, the old teleport symptom)",
+      "implementation": "! grep 'TEST_SIM_CLIENT' ../logs/client_A.log ../logs/client_B.log | grep -qv 'snaps=0 '"
+    },
+    {
+      "description_of_test": "Clients never animated a unit as walking without displacement (TEST_SIM_CLIENT walk_in_place= must stay 0)",
+      "implementation": "! grep 'TEST_SIM_CLIENT' ../logs/client_A.log ../logs/client_B.log | grep -qv 'walk_in_place=0 '"
+    },
+    {
+      "description_of_test": "SpatialHash: counting-sort grid radius/nearest queries match brute force on 3000 random points, and a 2000-unit rebuild + queries stay within budget",
+      "implementation": "godot --headless --path . -s test_spatial_hash.gd 2>&1 | grep -q 'TEST_SPATIAL_HASH_OK'"
+    },
+    {
+      "description_of_test": "UnitSim: formation move arrives with monotonic distance-to-goal, flags track displacement, combat kills and routs, 2000-unit step budget, no NaN/off-map positions; NetSync 8-byte snapshot pack/unpack round-trips",
+      "implementation": "godot --headless --path . -s test_unit_sim.gd 2>&1 | grep -q 'TEST_UNIT_SIM_OK'"
+    },
+    {
+      "description_of_test": "Headless server match: World as offline authority with two fake players, all armies aggressive, sim driven at 60 Hz until someone routs and a winner is announced (combat must not stall)",
+      "implementation": "godot --headless --path . -s test_server_match.gd 2>&1 | grep -q 'TEST_SERVER_MATCH_OK'"
+    },
+    {
+      "description_of_test": "Headless texture paths: red/blue spearman PNGs load as ImageTexture (same path logic as UnitRenderer)",
       "implementation": "godot --headless --path . -s test_texture_paths.gd 2>&1 | grep -q 'TEST_TEXTURE_PATHS_OK: red_blue_png_readable'"
     },
     {
@@ -104,7 +124,7 @@
       "implementation": "godot --headless --path . -s test_world3d_spawn.gd 2>&1 | grep -q 'TEST_WORLD3D_SPAWN_OK: units=2'"
     },
     {
-      "description_of_test": "Headless 3D goal arrival: Army3D.move_army drives every soldier's sync_target to within 3px on XZ",
+      "description_of_test": "Headless formation move: a move order applied through the order echo path drives every soldier of a 12-man army to its slot (within 3 units), with no distance-to-goal back-jumps after arrival (A->B->A regression) and no moving flag without displacement (walking-in-place regression)",
       "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
     },
     {
@@ -116,7 +136,7 @@
       "implementation": "godot --headless --path . -s test_terrain_height_consistency.gd 2>&1 | grep -q 'TEST_TERRAIN_HEIGHT_OK'"
     },
     {
-      "description_of_test": "Headless 3D client spawn: horse armies receive mounted speed on client units",
+      "description_of_test": "Headless client spawn: horse armies receive the mounted sim speed and F_HORSE flag",
       "implementation": "godot --headless --path . -s test_world3d_horse_speed.gd 2>&1 | grep -q 'TEST_WORLD3D_HORSE_SPEED_OK'"
     },
     {
@@ -154,7 +174,7 @@
   ],
   "ad_hoc_tests": [
     {
-      "description_of_test": "Sprite facing flip: ask a client-side Unit3D to move right, then left, then stand still. Every time _facing_right changes the code prints 'TEST_FACING_FLIP: ...'. The headless harness asserts the material's UV flip is applied correctly (uv1_scale.x < 0 + uv1_offset.x = 1 when facing right, unflipped when facing left, and facing persists while idle). Not run by verify_test_logs.sh; invoke manually when you suspect the soldier sprites are not mirroring.",
+      "description_of_test": "Sprite facing: a sim unit walking right must set F_FACING_RIGHT, walking left must clear it, and the facing must persist while idle (the renderer turns this flag into the billboard flip). Not run by verify_test_logs.sh; invoke manually when you suspect the soldier sprites are not mirroring.",
       "implementation": "godot --headless --path . -s test_facing_flip.gd 2>&1 | grep -q 'TEST_FACING_FLIP_OK'"
     }
   ]

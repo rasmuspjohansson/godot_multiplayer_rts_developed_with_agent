@@ -30,6 +30,8 @@ REMOTE_DEBUG=false
 REMOTE_DEBUG_URI="tcp://127.0.0.1:6007"
 SERVER_WINDOW=false
 MAP_SIZE="S"
+# Forwarded to server and clients (e.g. --stress-units=1000).
+PASSTHROUGH_ARGS=()
 
 args=("$@")
 i=0
@@ -42,6 +44,9 @@ while [ $i -lt ${#args[@]} ]; do
     --server-window) SERVER_WINDOW=true ;;
     --map=*)
       MAP_SIZE="${arg#*=}"
+      ;;
+    --stress-units=*)
+      PASSTHROUGH_ARGS+=("$arg")
       ;;
     --map)
       if [ $((i + 1)) -lt ${#args[@]} ]; then
@@ -104,7 +109,7 @@ if [ "$SERVER_WINDOW" = true ]; then
   export DISPLAY="${DISPLAY:-:0}"
 fi
 
-SERVER_EXTRA_ARGS=()
+SERVER_EXTRA_ARGS=("${PASSTHROUGH_ARGS[@]}")
 if [ "$AUTO_TEST" = true ]; then
   SERVER_EXTRA_ARGS+=(--auto-test)
 fi
@@ -129,19 +134,19 @@ if [ "$AUTO_TEST" = true ]; then
   echo "Starting auto-test clients A and B..."
   echo "Two game windows should open shortly."
   export DISPLAY="${DISPLAY:-:0}"
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=A --auto-test --map="$MAP_SIZE" > logs/client_A.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=A --auto-test --map="$MAP_SIZE" "${PASSTHROUGH_ARGS[@]}" > logs/client_A.log 2>&1 &
   echo $! > logs/client_A.pid
   sleep 2
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=B --auto-test --color=1 --map="$MAP_SIZE" > logs/client_B.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=B --auto-test --color=1 --map="$MAP_SIZE" "${PASSTHROUGH_ARGS[@]}" > logs/client_B.log 2>&1 &
   echo $! > logs/client_B.pid
   echo "Clients A and B started (auto-test). Logs: logs/client_A.log, logs/client_B.log"
 else
   echo "Starting human-play clients Player1 and Player2..."
   export DISPLAY="${DISPLAY:-:0}"
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player1 --map="$MAP_SIZE" > logs/client_Player1.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player1 --map="$MAP_SIZE" "${PASSTHROUGH_ARGS[@]}" > logs/client_Player1.log 2>&1 &
   echo $! > logs/client_Player1.pid
   sleep 2
-  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player2 --map="$MAP_SIZE" > logs/client_Player2.log 2>&1 &
+  nohup "$GODOT_BIN" "${REMOTE_DEBUG_ARGS[@]}" --rendering-driver opengl3 --path "$GAME_PATH" -- --client --name=Player2 --map="$MAP_SIZE" "${PASSTHROUGH_ARGS[@]}" > logs/client_Player2.log 2>&1 &
   echo $! > logs/client_Player2.pid
   echo "Two game windows should open. Connect, set name/color, press Ready in both."
   echo "Logs: logs/client_Player1.log, logs/client_Player2.log"

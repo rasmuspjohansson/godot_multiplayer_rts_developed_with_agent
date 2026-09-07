@@ -1,6 +1,7 @@
 extends SceneTree
-## Headless: client spawn applies mounted speed for horse armies.
+## Headless: client spawn applies mounted speed for horse armies (sim speed table).
 
+const UnitSim := preload("res://sim/UnitSim.gd")
 const EXPECTED_HORSE_SPEED := 140.0 / 6.0
 
 func _init():
@@ -17,27 +18,27 @@ func _begin():
 		"x": 400.0,
 		"y": 300.0,
 		"dir": 0.0,
-		"initial_count": 1,
+		"count": 1,
+		"first_id": 0,
 		"horse": true,
 		"spear": false,
-		"speed": EXPECTED_HORSE_SPEED,
-		"attack": 10.0,
-		"soldiers": [
-			{"name": "Soldier_T_horse_speed_0", "x": 400.0, "y": 300.0},
-		]
 	}]
 	w._client_spawn_armies_impl(data)
-	if w.all_units.is_empty():
+	var sim = w._sim
+	if sim.count == 0 or not sim.is_alive(0):
 		print("TEST_WORLD3D_HORSE_SPEED_FAIL: no units spawned")
 		quit(1)
 		return
-	var unit = w.all_units[0]
-	if not unit.get("has_horse"):
-		print("TEST_WORLD3D_HORSE_SPEED_FAIL: has_horse false")
+	if (sim.flags[0] & UnitSim.F_HORSE) == 0 or sim.utype[0] != UnitSim.UnitType.KNIGHT:
+		print("TEST_WORLD3D_HORSE_SPEED_FAIL: unit not mounted (type=%d)" % sim.utype[0])
 		quit(1)
 		return
-	if absf(float(unit.speed) - EXPECTED_HORSE_SPEED) > 0.001:
-		print("TEST_WORLD3D_HORSE_SPEED_FAIL: speed=%.4f expected=%.4f" % [unit.speed, EXPECTED_HORSE_SPEED])
+	if absf(float(sim.speed[0]) - EXPECTED_HORSE_SPEED) > 0.001:
+		print("TEST_WORLD3D_HORSE_SPEED_FAIL: speed=%.4f expected=%.4f" % [sim.speed[0], EXPECTED_HORSE_SPEED])
+		quit(1)
+		return
+	if not w.armies[0].has_horse:
+		print("TEST_WORLD3D_HORSE_SPEED_FAIL: army handle has_horse false")
 		quit(1)
 		return
 	print("TEST_WORLD3D_HORSE_SPEED_OK")

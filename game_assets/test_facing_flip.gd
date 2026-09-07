@@ -1,69 +1,67 @@
 extends SceneTree
-## Ad-hoc test: exercise Unit3D._update_facing through a "move right, then move
-## left, then stand still" sequence and assert that the sprite is mirrored
-## correctly via the material UV flip. Not run by verify_test_logs.sh.
+## Sprite facing: a unit walking right must set F_FACING_RIGHT, walking left must clear it, and
+## the facing must persist while idle. The renderer mirrors the (right-facing) sheet only when
+## that flag is clear, so this is the sim half of the billboard flip.
 ##
 ## Run: godot --headless --path . -s test_facing_flip.gd
+
+const UnitSim := preload("res://sim/UnitSim.gd")
+const Formation := preload("res://sim/FormationController.gd")
 
 func _init() -> void:
 	call_deferred("_begin")
 
-func _begin() -> void:
-	var Unit3DClass = load("res://Unit3D.gd")
-	var u = Unit3DClass.new()
-	# Build the client visual state by hand — we don't want _ready() to try to
-	# load textures from disk in this logic-only test.
-	u.name = "FacingTestUnit"
-	u.owner_name = "A"
-	u.army_id = "A1"
-	u._mesh = MeshInstance3D.new()
-	u._material = StandardMaterial3D.new()
-	u._material.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
-	u._texture_loaded = true
-	u.global_position = Vector3(500.0, 20.0, 360.0)
+func _spawn(sim, x: float) -> RefCounted:
+	var fc = Formation.new()
+	fc.army_id = "F1"
+	fc.owner_pid = 1
+	fc.initial_count = 1
+	fc.rows = 1
+	fc.anchor = Vector2(x, 360.0)
+	sim.add_army(fc)
+	sim.spawn_army_units(fc, 0, 1, UnitSim.UnitType.SPEARMAN)
+	return fc
 
+func _run_until_settled(sim, fc, max_ticks: int) -> void:
+	for _i in range(max_ticks):
+		sim.step(UnitSim.SIM_DT)
+		if not fc.moving and (sim.flags[0] & UnitSim.F_MOVING) == 0:
+			return
+
+func _begin() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var fc = _spawn(sim, 500.0)
 	print("TEST_FACING_FLIP_BEGIN")
 
-	# Step 1: army ordered right.
-	u.has_move_goal = true
-	u.sync_target_position = Vector3(900.0, 20.0, 360.0)
-	u.velocity = Vector3(30.0, 0.0, 0.0)
-	u._update_facing()
-	var right_ok: bool = (u._facing_right == true) \
-		and (u._material.uv1_scale.x < 0.0) \
-		and is_equal_approx(u._material.uv1_offset.x, 1.0)
-	print("TEST_FACING_FLIP_STEP: after_move_right facing_right=%s uv1_scale_x=%.2f uv1_offset_x=%.2f pass=%s" % [
-		u._facing_right, u._material.uv1_scale.x, u._material.uv1_offset.x, right_ok
-	])
+	sim.recentre_anchor(fc)
+	fc.issue_move(Vector2(700.0, 360.0))
+	for _i in range(5):
+		sim.step(UnitSim.SIM_DT)
+	var right_ok: bool = (sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0 and (sim.flags[0] & UnitSim.F_MOVING) != 0
+	print("TEST_FACING_FLIP_STEP: after_move_right facing_right=%s pass=%s" % [(sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0, right_ok])
+	_run_until_settled(sim, fc, 20 * 30)
 
-	# Step 2: army ordered left.
-	u.sync_target_position = Vector3(100.0, 20.0, 360.0)
-	u.velocity = Vector3(-30.0, 0.0, 0.0)
-	u._update_facing()
-	var left_ok: bool = (u._facing_right == false) \
-		and (u._material.uv1_scale.x > 0.0) \
-		and is_equal_approx(u._material.uv1_offset.x, 0.0)
-	print("TEST_FACING_FLIP_STEP: after_move_left facing_right=%s uv1_scale_x=%.2f uv1_offset_x=%.2f pass=%s" % [
-		u._facing_right, u._material.uv1_scale.x, u._material.uv1_offset.x, left_ok
-	])
+	sim.recentre_anchor(fc)
+	fc.issue_move(Vector2(300.0, 360.0))
+	for _i in range(5):
+		sim.step(UnitSim.SIM_DT)
+	var left_ok: bool = (sim.flags[0] & UnitSim.F_FACING_RIGHT) == 0 and (sim.flags[0] & UnitSim.F_MOVING) != 0
+	print("TEST_FACING_FLIP_STEP: after_move_left facing_right=%s pass=%s" % [(sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0, left_ok])
+	_run_until_settled(sim, fc, 20 * 40)
 
-	# Step 3: army stops (no velocity, no move goal). Facing must persist.
-	var prev: bool = u._facing_right
-	u.velocity = Vector3.ZERO
-	u.has_move_goal = false
-	u._update_facing()
-	var idle_ok: bool = (u._facing_right == prev)
-	print("TEST_FACING_FLIP_STEP: after_idle facing_right=%s pass=%s" % [u._facing_right, idle_ok])
+	var prev: bool = (sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0
+	for _i in range(20):
+		sim.step(UnitSim.SIM_DT)
+	var idle_ok: bool = ((sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0) == prev and (sim.flags[0] & UnitSim.F_MOVING) == 0
+	print("TEST_FACING_FLIP_STEP: after_idle facing_right=%s pass=%s" % [(sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0, idle_ok])
 
-	# Step 4: army ordered right again from idle.
-	u.has_move_goal = true
-	u.sync_target_position = Vector3(900.0, 20.0, 360.0)
-	u.velocity = Vector3(30.0, 0.0, 0.0)
-	u._update_facing()
-	var right_again_ok: bool = (u._facing_right == true) and (u._material.uv1_scale.x < 0.0)
-	print("TEST_FACING_FLIP_STEP: after_move_right_again facing_right=%s uv1_scale_x=%.2f pass=%s" % [
-		u._facing_right, u._material.uv1_scale.x, right_again_ok
-	])
+	sim.recentre_anchor(fc)
+	fc.issue_move(Vector2(700.0, 360.0))
+	for _i in range(5):
+		sim.step(UnitSim.SIM_DT)
+	var right_again_ok: bool = (sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0
+	print("TEST_FACING_FLIP_STEP: after_move_right_again facing_right=%s pass=%s" % [(sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0, right_again_ok])
 
 	if right_ok and left_ok and idle_ok and right_again_ok:
 		print("TEST_FACING_FLIP_OK")

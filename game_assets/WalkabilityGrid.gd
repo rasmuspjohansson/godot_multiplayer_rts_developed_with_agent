@@ -44,6 +44,10 @@ func is_walkable_cell(i: int, j: int) -> bool:
 		return false
 	return _walkable[j * _cols + i] != 0
 
+## Raw grid for hot loops that inline the lookup (see UnitSim): {bytes, cols, rows, step}.
+func grid_data() -> Dictionary:
+	return {"bytes": _walkable, "cols": _cols, "rows": _rows, "step": _step}
+
 func is_walkable_world(x: float, z: float) -> bool:
 	var cell := world_to_cell(x, z)
 	return is_walkable_cell(cell.x, cell.y)

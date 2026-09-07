@@ -58,7 +58,7 @@ Maps are selected at launch with `--map=S|L|XL` (default **S**). [`MapConfig.gd`
 ./run_test.sh --map XL --no_test
 ```
 
-The arena is described entirely by the chosen map JSON. This is the single place to change map size, capture-point locations, or player starting positions.
+The arena is described entirely by the chosen map JSON. This is the single place to change map size, capture-point locations, player starting positions or army sizes (`"soldiers": N` per army entry, 10–200; default 10). For stress runs `./run_test.sh --stress-units=1000` adds extra armies per player until that many soldiers exist (`./run_stress.sh` wraps this and checks the perf markers).
 
 ```json
 {
@@ -215,10 +215,14 @@ grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 
 ## Architecture
 
-- Dedicated **headless** server (authoritative for movement, combat, capture points, resources, and the aggressive-seek logic) and two **3D** clients on port 8910.
-- Map is `1280 × 720` on XZ with terrain ground collision; 3D camera pitches from bird's-eye to near-horizontal as you zoom in.
-- Unit movement: enemies block each other; friendlies pass through. See `game.md` Physics / collision to toggle pass-through.
-- `Army3D` has a `stance` field; when `aggressive` the server retargets the army to its closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).
+- Dedicated **headless** server (authoritative for combat, deaths, routs, capture points, resources and the aggressive-seek logic) and two **3D** clients on port 8910.
+- **Data-oriented unit simulation** (`game_assets/sim/`): units are integer ids into `PackedFloat32Array`/`PackedByteArray` columns in `UnitSim.gd`; there are no unit nodes, no `CharacterBody3D` and no physics bodies for units anywhere. The sim runs at a fixed **20 Hz** on server and clients from an accumulator in `World._physics_process`.
+- **Formation-level orders**: a `FormationController` per army owns the order, one A* path per order and an anchor that advances along it; soldiers steer to slots (anchor + rotated offset). Orders are tiny reliable RPCs; the server validates, stamps and echoes them to every client, which then runs the same movement sim locally.
+- **Snapshots are corrections, not movement**: the server sends packed 8-byte unit records (`NetSync.gd`) on `unreliable_ordered`, prioritising units that changed; clients blend small errors and snap only on real desync.
+- **GPU instancing**: clients draw all units with one `MultiMeshInstance3D` per (team colour, unit type) (`UnitRenderer.gd` + `shaders/unit_billboard.gdshader`); the shader does billboarding, spritesheet frame selection, flip, selection tint and interpolation between sim ticks. Audio is a 16-player pool parked at army clusters (`UnitAudio.gd`).
+- Map sizes S/L/XL (`maps/map_*.json`); terrain height is a bilinear grid lookup (`_terrain_grid_height_at`), never a per-unit raycast. 3D camera pitches from bird's-eye to near-horizontal as you zoom in.
+- Design target: 2 players, ~2000–2500 units total. Measured on one laptop running server + 2 clients (XL, 2040 units): server sim tick ≈ 17 ms at a steady 20 Hz, clients ≈ 85 fps, ≈ 33 KB/s server upload. `./run_stress.sh` reproduces this and asserts the thresholds.
+- `Army3D` is a thin per-army handle (id, owner, selection, equipment flags, `fc` = its `FormationController`). Aggressive armies with no order are retargeted to the closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).
 
 ## Remote debugging
 
@@ -246,8 +250,8 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
 - **Port**: 8910 (default). Server binds on `*:8910`, clients connect to `localhost:8910`.
 
 ## Game View & Controls
-- **Perspective**: Top-down 2D.
-- **Navigation**: grid `AStarGrid2D` walkability (water + steep slopes) in [`WalkabilityGrid.gd`](../game_assets/WalkabilityGrid.gd); server pathfinds per soldier on move orders.
+- **Perspective**: 3D, bird's-eye to near-horizontal camera over billboarded sprites.
+- **Navigation**: grid `AStarGrid2D` walkability (water + steep slopes) in [`WalkabilityGrid.gd`](../game_assets/WalkabilityGrid.gd); **one A* path per army order**, computed identically on server and clients. Soldiers only get an individual (throttled) path when they are stuck behind an obstacle.
 - **Player Controls**:
   - Left-click: Select own army.
   - Right-click: Move selected army to clicked position.
@@ -259,15 +263,15 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
 
 ## Army System (Total War Style)
 - On map **S** and **XL**, each player starts with **2 armies** (spear + horse). On **L**, each player starts with **1 club army** (no equipment).
-- Each army has **10 soldiers** arranged in a **2-row x 5-column** formation.
-- An army has a **center position** and a **facing direction** (angle in radians).
-- Soldier positions are calculated from the army center + grid offset rotated by facing angle.
-- When soldiers die, surviving soldiers **repack** to fill gaps (grid shrinks).
+- **Army size is a per-army parameter (10–200 soldiers)**: `soldiers` in the map JSON, a SpinBox in the draft menu, `--stress-units=N` for stress runs (`STRESS_SOLDIERS_PER_ARMY` per extra army). Rows default from the count (`FormationController.default_rows_for`).
+- An army has an **anchor position** and a **facing direction** (angle in radians); slot offsets are cached per shape.
+- Soldier goals are anchor + rotated slot offset, snapped to the nearest walkable cell; the anchor moves along the army's path at the slowest soldier's speed and slows/pauses while a large share of the army is in melee contact.
+- When soldiers die the survivors **repack** once the loss passes `REPACK_FRACTION`, not on every death (stable slot assignment).
 
 ## Drafting
 - **Draft menu**: Lower-left of screen. Checkboxes **Horse**, **Spear**, and **Bow**, button **Create army**.
 - **Cost**: **10 villagers** for every army, plus **10** of each checked equipment type (horse / spear / bow). Player must have enough resources.
-- **Created army**: 10 soldiers, spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
+- **Created army**: chosen soldier count (default 10), spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
 - **Unit types** (equipment priority): Horse+Bow → **bauer_horse_archer**; Bow → **bowman**; Horse → **knight**; Spear → **spearman**; none → **clubman**.
 - **Equipment effects**: Horse → mounted speed/HP. Spear → higher attack/melee range. Bow / bauer_horse_archer → ranged attack. Starting armies on map S and XL use spear/horse from JSON; L starts with clubmen.
 
@@ -294,14 +298,11 @@ Army-level control (select with LMB / marquee). Command bar appears when an army
 
 Behaviour spec: `RTS_Unit_Behaviour_Spec.md`. Move orders are **not** cancelled when attacked. Attack orders lock onto the commanded target. Ranged units (bow, horse archer) can attack while moving.
 
-## Physics / collision
-- Units have a `CollisionShape3D` box (14×22×14) on each `CharacterBody3D`. **Enemy teams block each other** during movement; **friendlies pass through** (same collision layer).
-- **Combat** uses distance checks in `Unit3D._try_attack()`, not physics contact.
-- **Collision layers** (`World.gd`):
-  - Layer `2` — ground / terrain (used by `get_ground_height_at()` and `_raycast_ground_at_screen()`)
-  - Layers `1`, `4`, `8`, `16` — one per player team (`TEAM_COLLISION_LAYERS`)
-- **Toggle:** `UNIT_PASS_THROUGH` in `World.gd`. `false` (current) — enemies block via `_enemy_collision_mask_for_peer()`; friendlies pass. `true` — all units pass through (`collision_mask = 0`).
-- **Friendly blocking too:** extend `_enemy_collision_mask_for_peer()` to also OR in the unit's own team layer (or use a single shared unit layer with a mask that includes it).
+## Movement, separation and combat (no physics bodies)
+- Units have **no collision shapes**. `UnitSim._step_units` does, per unit per tick: slot steering (with catch-up speed when far behind a marching formation), **soft separation** through a counting-sort `SpatialHash` (weak push between friendlies, strong push between hostiles, capped per tick), a **walkability slide** (try full step, then x-only, then z-only), network correction blending, and combat.
+- **Combat** is distance based: each unit rescans for a target at 5 Hz (`COMBAT_SCAN_PHASES`), validates it every tick, and attacks on a 1 s cooldown when in range. Melee units on the offensive acquire targets out to `MELEE_ACQUIRE_RADIUS` and walk in. Armies whose broad-phase check (0.5 s round-robin) finds no hostile within reach skip all per-unit scans. Damage, deaths, arrows and routs are only resolved on the authority (server); clients learn them from reliable events.
+- **Animation state comes from measured displacement** (`F_MOVING` is set only when a unit actually moved > 15 % of its step), so a unit can never show the walk cycle while standing still.
+- Physics layers are still used for the terrain collider (`ground`, layer 2) and mouse picking only.
 
 ## Unit Stats (Defaults)
 | Stat    | Value |
@@ -333,8 +334,8 @@ Behaviour spec: `RTS_Unit_Behaviour_Spec.md`. Move orders are **not** cancelled 
 |-----------------|---------|
 | `Main.tscn`     | Entry point: parses CLI args, creates network peer, switches to Lobby. |
 | `Lobby.tscn`    | Shows name input, color picker (5 boxes), connected players, ready states. "Ready" toggle button. |
-| `World.tscn`    | 3D arena (ground mesh + physics). Server and clients spawn armies here. |
-| `Unit3D`        | `CharacterBody3D` soldier (server sim + client billboard mesh). |
+| `World.tscn`    | 3D arena (ground mesh + terrain collider). Server and clients spawn armies into the sim here. |
+| (units)         | No unit scene: units are rows in `sim/UnitSim.gd`, drawn by `sim/UnitRenderer.gd` (MultiMesh). |
 | (capture)       | Capture points are pillars + server-side logic in `World.gd` (no separate CP scene). |
 | `GameOver.tscn` | Displays winner. Clients auto-disconnect after a delay. |
 
@@ -343,9 +344,16 @@ Behaviour spec: `RTS_Unit_Behaviour_Spec.md`. Move orders are **not** cancelled 
 |-----------------|------|
 | `Main.gd`       | Networking setup, scene switching. |
 | `Lobby.gd`      | Ready-state RPCs, player list UI. |
-| `World.gd`      | Army spawning, capture points, selection, camera, rout/win checking, sync. |
-| `Army3D.gd`     | Formation math, movement, rotation, repack on death, rout detection (XZ). |
-| `Unit3D.gd`     | Soldier: move/attack on server; interpolate and visuals on client. |
+| `World.gd`      | Orchestration: order RPCs (validate + echo), sim stepping, snapshots/events, spawning, capture points, selection, camera, rout/win checking. |
+| `Army3D.gd`     | Thin per-army handle: id, owner, selection, equipment flags, reference to the sim's `FormationController`. |
+| `sim/UnitSim.gd` | Data-oriented unit simulation (SoA arrays): steering, separation, walkability, combat, deaths, routs. Server and clients run the same code; only the authority resolves damage. |
+| `sim/FormationController.gd` | Per-army orders (move / attack-move / attack / stances / rotate), slot layout for 10–200 soldiers, one A* path per order, anchor advance and contact pausing. |
+| `sim/SpatialHash.gd` | Counting-sort uniform grid over the map; radius / nearest queries for separation, combat, capture points, dragon AI and picking. |
+| `sim/NetSync.gd` | Packed 8-byte unit snapshots (<= 1200 B chunks), dirty/idle send scheduling, client reconciliation with per-unit tick check. |
+| `sim/UnitRenderer.gd` | GPU-instanced billboards: one MultiMesh per (colour, type), stacked spritesheet textures, per-tick buffer writes, shader-side interpolation. |
+| `sim/UnitAudio.gd` | Pooled positional audio (16 cluster players + 6 death one-shots) instead of one player per unit. |
+| `GroupFormation.gd` | Line-formation math for RMB drag orders (segments per army, ghost preview positions). |
+| `PerfMonitor.gd` | `TEST_PERF_*` markers every 5 s (frame/physics/sim times, sim Hz, fps, memory, bytes/s) and `TEST_SIM_CLIENT` health counters. |
 | `TopBar.gd`     | HUD overlay: shows resources and capture point ownership. |
 | `GameOver.gd`   | Winner display, disconnect logic. |
 | `MockPlayer.gd` | Automated test client (activated by `--auto-test`). |
@@ -455,245 +463,131 @@ Optional: `./run_test.sh --remote-debug --server-window` for a visible server wi
 
 # Network activity
 
-How this game talks over the network, why clients used to drop, and how to scale to far more units.
+How this game talks over the network and why it scales to thousands of units. Transport: Godot 4
+High-Level Multiplayer API on **ENet**, UDP port **8910**. The dedicated server is authoritative
+for combat, deaths, routs, capture points and resources; **movement is simulated on both sides**
+from the same order stream and the server only sends compact corrections.
 
-Transport: Godot 4 High-Level Multiplayer API on **ENet**, UDP port **8910**. Dedicated server is authoritative. Clients send orders; the server simulates movement, combat, capture, and resources. Clients **walk locally toward the last known goal**; the server only **corrects** a few units at a time.
-
-ENet MTU in this Godot build is **1392 bytes** for a single unreliable packet. Larger unreliable RPCs are warned and **fragment / drop**. That caused WAN disconnects (XL capture sync at 1672 bytes; unbatched 40-unit position dump at ~9700 bytes). Batches stay at most 4 units / 6 capture points per packet.
+ENet MTU in this Godot build is **1392 bytes** for a single unreliable packet; every unreliable
+message below stays under **1200 bytes** by construction (chunking), so nothing fragments.
 
 ---
 
 ## Mental model
 
 ```
-Client                         Server                         Other clients
-  |  reliable order (click)      |                                  |
-  |----------------------------->|  sim (physics, combat, A*)       |
-  |                              |  reliable army goal              |
-  |<-----------------------------|--------------------------------->|
-  |  walk locally toward goal    |                                  |
-  |  unreliable: 4 units / 50ms  |  round-robin corrections         |
-  |<-----------------------------|--------------------------------->|
-  |  capture/resources on change |                                  |
+Client                                 Server                              Other clients
+  |  reliable order (army ids, dest,     |                                       |
+  |  facing, seq)  ------------------->  |  validate ownership, stamp seq,       |
+  |                                      |  apply to authoritative UnitSim       |
+  |  <------ reliable order echo ------- | ------- reliable order echo --------> |
+  |  apply to local UnitSim (same code)  |  UnitSim 20 Hz: paths, slots,         |
+  |  UnitSim 20 Hz: same movement        |  separation, combat, deaths           |
+  |  <--- unreliable_ordered snapshot -- | ---- 8-byte records, <= 1200 B -----> |
+  |  reconcile: ignore stale, blend,     |  changed units first, idle ones       |
+  |  snap only on real desync            |  every 2 s                            |
+  |  <--- reliable batched events ------ | ---- deaths, routs, spawns ---------> |
+  |  <--- unreliable arrows/tick ------- |                                       |
 ```
-
-Two kinds of traffic:
 
 | Kind | Channel | If it fails |
 |------|---------|-------------|
-| **Orders and lifecycle** (move, draft, death, spawn, win) | `reliable` | Must arrive. ENet retries. Delay is OK; loss is not. |
-| **Visual corrections / HUD** (staggered positions, HP, CP on change) | `unreliable` | A missed packet is OK. The next correction overwrites. **Oversized packets are not OK** — they cause disconnects. |
+| **Orders and lifecycle** (move / attack / stance / rotate echoes, draft, spawn payloads, deaths, routs, capture/resources, win) | `reliable` | Must arrive. ENet retries; delay is OK, loss is not. |
+| **Snapshots** (`_client_snapshot`) | `unreliable_ordered` | A missed chunk is fine: the next one for that unit overwrites. Out-of-order chunks are dropped per unit by sim tick. |
+| **Arrow VFX** (`_client_arrows`) | `unreliable` | Purely cosmetic. |
 
 ---
 
-## How often things are sent
+## Orders (client -> server -> everyone)
 
-### Staggered unit corrections (~2 Hz per unit at 40 units)
+All orders are **formation level**: they carry army ids, not unit goals. Sizes are a few dozen
+bytes regardless of army size, and the client does **no** pathfinding work before sending.
 
-From `_physics_process` in [`World.gd`](../game_assets/World.gd), after `_receive_client_world_ready`:
+| RPC (client -> server) | Payload | Server does | Echo to all clients |
+|---|---|---|---|
+| `_server_order_move(army_ids, dests, facings, widths, attack_move)` | `Array` of ids + `PackedFloat32Array`s | ownership check, clamp to map, `FormationController.issue_move` per army | `_client_order_move(seq, tick, ...)` |
+| `_server_move_army(aid, target)` (MockPlayer / legacy) | id + Vector2 | same as above for one army | `_client_order_move` |
+| `_server_armies_order_attack(army_ids, target_army_id, target_unit)` | ids | `issue_attack_army/unit` | `_client_order_attack(seq, tick, ...)` |
+| `_server_armies_order_attack_move(army_ids, dest_x, dest_y)` | ids + 2 floats | attack-move | `_client_order_move(..., attack_move=true)` |
+| `_server_armies_set_stance(army_ids, stance)` | ids + int | `set_stance` | `_client_sync_army_stance` |
+| `_server_rotate_army(aid, delta_angle)` | id + float | rotate formation | `_client_rotate_army(aid, new_line_dir)` |
+| `_server_set_all_armies_aggressive()` | none | stance for all of the sender's armies | `_client_sync_army_stance` |
+| `request_draft_army(use_horse, use_spear, use_bow, soldier_count)` | 3 bools + int | resources, `_create_army` | `_client_spawn_drafted_army` |
 
-Every **50 ms** the server sends **one** unreliable `_receive_positions` RPC with at most `POSITION_SYNC_BATCH_SIZE` (**4**) living units, then advances `_sync_cursor`. Units are not all synced on the same tick.
-
-| Living units | Full cycle | Per-unit rate |
-|-------------:|-----------:|--------------:|
-| 40 (current match) | 0.5 s | **~2 Hz** |
-| 200 | 2.5 s | **~0.4 Hz** |
-| 4 or fewer | 50 ms | 20 Hz (harmless) |
-
-Payload per unit (Godot `Dictionary` / Variant) is unchanged:
-
-| Key | Meaning | Type today |
-|-----|---------|------------|
-| `n` | Unit node name | `String` |
-| `x`, `y` | Server XZ | `float` |
-| `hp` | Hit points | `float` |
-| `tx`, `ty` | Path steer waypoint | `float` × 2 |
-| `fx`, `fy` | Final formation goal | `float` × 2 |
-| `ic` | In combat | `bool` |
-| `moving` | Has a move goal | `bool` |
-
-`dead_names` is attached when the cursor wraps a full cycle. Deaths are also sent **reliable** via `_client_unit_died`.
-
-**Client apply** ([`Unit3D.apply_network_sync`](../game_assets/Unit3D.gd)):
-
-- Error **> 120** world units: snap to server position, then repath (desync safety net).
-- Smaller error: store an XZ offset and **blend it in** at up to unit `speed` (no teleport). Keep walking the existing goal.
-- HP always lerps toward `sync_target_hp` (moving or idle).
-- Fight anim (`in_combat`) can lag by up to one cycle (~0.5 s). Arrows and deaths stay reliable.
-
-New destinations still arrive immediately on **reliable** `_client_move_army` (player click, draft walk-in, aggressive chase). The staggered snapshot is catch-up, not the order channel.
-
-### Capture and resources — on change only
-
-`_sync_capture_state()` still runs on the 50 ms pump and after draft, but **returns without an RPC** unless:
-
-- a capture point `owner_pid` changed, or
-- any player inventory integer changed (2 s production tick, draft spend), or
-- this is the **first** HUD send after world-ready.
-
-Batching: `CAPTURE_SYNC_BATCH_SIZE := 6` if several CPs flip in one frame (XL has 11).
-
-### On player input (rare)
-
-Client → server, all **reliable**:
-
-| RPC | When |
-|-----|------|
-| `_server_move_army` | RMB move |
-| `_server_move_group_formation` | Formation / line move (array of `{n, x, y}` per soldier) |
-| `_server_armies_order_attack_move` | Attack-move |
-| `_server_army_order_attack` | Attack army or unit |
-| `_server_armies_set_stance` | Stance buttons |
-| `_server_rotate_army` | Q/E rotate |
-| `request_draft_army` | Create army |
-| `_server_set_all_armies_aggressive` | MockPlayer / bulk stance |
-
-Server fans out a small **reliable** echo (`_client_move_army`, `_client_sync_army_stance`, …).
-
-### Once per match / on events (rare)
-
-All **reliable**:
-
-| RPC | When | Must succeed? |
-|-----|------|----------------|
-| `register_player`, `set_my_color`, `_receive_ready`, `_sync_players*` | Lobby | Yes |
-| `_start_match` | All ready | Yes |
-| `_receive_client_world_ready` | Client finished building World | Yes — otherwise server never starts corrections |
-| `_client_spawn_armies`, `_client_spawn_capture_points`, `_client_spawn_dragons` | Match start | Yes |
-| `_client_spawn_drafted_army` | Draft | Yes |
-| `_client_unit_died`, `_client_army_routed` | Combat | Yes (otherwise ghosts) |
-| `_client_spawn_arrow` | Each ranged shot | Nice-to-have; miss = missing VFX only |
-| `_announce_winner`, `_client_return_to_lobby` | End of match | Yes |
-
-Spawn army payload is large but sent **once**. Reliable + fragmentation is acceptable here.
+`seq` is a per-server monotonically increasing order counter (`_order_seq`) so a client can
+detect reordering; clients apply orders **on echo** (one round trip, the standard RTS model) and
+show an immediate local click marker for perceived responsiveness. Both sides then run
+`FormationController` + `UnitSim` from the same order, so the client's units start walking the
+same path the server's do. A move order is never re-sent per soldier: A* runs once per army.
 
 ---
 
-## What must arrive vs what may fail
+## Snapshots (`sim/NetSync.gd`)
 
-**Must succeed:**
+Wire format, little endian, written with `StreamPeerBuffer`:
 
-- Join / color / ready / start match
-- “World loaded” handshake
-- Spawn armies, CPs, drafted armies
-- Move / attack / stance / draft *orders*
-- Unit death and army rout
-- Winner + return to lobby
+```
+header  : tick u32 | chunk u8 | reserved u8                     (6 bytes)
+per unit: id u16 | x u16 | z u16 | hp u8 (percent) | flags u8   (8 bytes)
+```
 
-**OK to lose a packet:**
+- `x`/`z` are quantised over the map size (`65535 / map_w`), i.e. < 0.1 unit error on XL.
+- `flags` is the sim flag byte (alive, moving, in_combat, facing_right, ranged, horse, neutral).
+- A chunk holds at most `MAX_UNITS_PER_CHUNK` (149) records = **1198 bytes**.
 
-- One staggered position correction — client keeps walking toward last known goal
-- One HP correction — bar lerps on the next packet for that unit
-- One capture/resource HUD update
-- Arrow VFX
+**Scheduling (server, per 20 Hz tick).** `budget_for(alive)` = `alive * 2.5 / 20` records,
+clamped to [40, 450]: every changed unit is refreshed about every 8 ticks (2.5 Hz). `select_units`
+walks the unit list round-robin and takes units whose `dirty_tick` (last tick the unit moved or
+changed hp/flags) is newer than their last send and at least `CHANGED_RESEND_TICKS` old, plus
+idle units every `IDLE_INTERVAL_TICKS` (40 ticks = 2 s). Nobody starves; parked armies cost
+almost nothing.
 
-**Not OK even on unreliable:**
+**Reconciliation (client).** For each record: drop it if `last_applied_tick[id]` is newer;
+otherwise `UnitSim.reconcile` sets hp from the percentage, kills the unit if the server says
+dead, and corrects the position: error < 2 units is ignored, < 60 units is blended (35 % of the
+remaining error per tick, so ~0.25 s), larger errors snap. **A snapshot never triggers a repath**;
+paths come from orders. Hard snaps are counted (`TEST_SIM_CLIENT snaps=`) and must stay 0 in
+tests: they were the old "teleport A -> B -> A" symptom.
 
-- A **single packet larger than ~1392 bytes**. Godot logs `Sending N bytes unreliably which is above the MTU`.
-
-Rule of thumb: **unreliable = small corrections; reliable = important and rare.**
-
----
-
-## Why dropouts happened (and what changed)
-
-1. **MTU overflow** — full 40-unit dump and 11-CP HUD on unreliable. **Mitigated:** max 4 units per packet; CP batches of 6; HUD not every tick.
-2. **Client still loading World** — XL `_ready` blocked for seconds while snapshots flooded. **Mitigated:** `_receive_client_world_ready` gate.
-3. **Volume** — was ~480 unreliable packets/s at 40 units (20 Hz × 12 RPCs × 2 clients). **Now:** 20 position RPCs/s total (one per 50 ms per broadcast), plus CP RPCs only on capture/resource ticks (~0.5 Hz).
-4. **Fat Variant dicts** — still true; packing is the next bandwidth win, not required for current counts.
-5. **No delta** — idle units are still in the round-robin (cheap at 4/tick). Unchanged CPs/resources are **not** resent.
+**Bandwidth.** 2040 units on XL with every army parked: ~1 KB/s. Everything marching or
+fighting: the budget caps at 450 records/tick = 3.6 KB/tick = **~72 KB/s per client** worst case;
+measured stress run averaged **33 KB/s** server upload for two clients.
 
 ---
 
-## Bandwidth sketch
+## Events (reliable, batched per tick)
 
-Assumptions: Variant overhead ~80 bytes/unit; 2 clients; 40 units.
+| RPC | When | Payload |
+|---|---|---|
+| `_client_units_died(ids: PackedInt32Array)` | any death this tick | one RPC per tick, all ids |
+| `_client_army_routed(army_id)` | army under the rout threshold | id |
+| `_client_spawn_armies(payloads)` / `_client_spawn_dragons` / `_client_spawn_drafted_army` | match start / draft | per army: id, owner, name, anchor, direction, `count`, `first_id`, unit type, equipment flags, optional packed `xs`/`zs` |
+| `_client_update_capture` batches (`CAPTURE_SYNC_BATCH_SIZE` = 6) | every 0.5 s / on change | capture ownership + resources |
+| `_client_arrows(PackedFloat32Array)` (unreliable) | ranged attacks this tick | 6 floats per arrow, capped at `MAX_ARROWS_PER_TICK` |
 
-| Setup | Position traffic (order of magnitude) |
-|-------|--------------------------------------|
-| Old 20 Hz everyone | 40 × 80 × 20 = **~64 KB/s** per client |
-| **Staggered 4 units / 50 ms (~2 Hz each)** | 4 × 80 × 20 = **~6 KB/s** per client |
-| 200 units, same stagger | still **~6 KB/s** (cycle slows; each unit less often) |
-
-Capture/resources: one small RPC per production tick (2 s) or on capture/draft, not 40 RPCs/s.
-
----
-
-## Data types on the wire
-
-GDScript `float` is IEEE-754 **double**. RPC arguments are Godot **Variants**, not a packed struct.
-
-| Field | Current | Needed precision | Better wire type |
-|-------|---------|------------------|------------------|
-| Unit id | `String` name | Unique among thousands | `uint16` / `uint32` at spawn |
-| Position XZ | `float` | 0.1 world-unit | quantized `uint16` or `float32` |
-| Goal XZ | two `float` pairs | Same | quantize; skip if goal unchanged |
-| HP | `float` | 0–300 integer | `uint8` / `uint16` |
-| In combat / moving | `bool` | 1 bit | bitflags |
-| CP id / type | `String` | Small enum | `uint8` |
-| Owner name | `String` on CP events | HUD | `owner_pid` only |
-| Resources | four `int`s on change | Already on change | keep |
-
-A packed snapshot of one unit could be ~12–16 bytes. Useful before hundreds of units, not required at 40.
+Unit ids are assigned by the server at spawn (`_next_unit_id`) and are the only unit identity on
+the wire; there are no node paths or names in hot messages.
 
 ---
 
-## Layers (what is implemented vs later)
+## Debugging
 
-**A. Reliable events (done)** — spawn, death, rout, orders, draft, winner, lobby.
-
-**B. Client goal-follow (done)** — after `_client_move_army` / snapshot `fx,fy`, client A* walks locally.
-
-**C. Unreliable staggered correction (done)** — 4 units per 50 ms, soft-blend, snap only if error > 120.
-
-**D. Capture/resources on change (done).**
-
-**E. Reconnect / repair snapshot (not implemented)**
-
-If a client is silent or rejoins:
-
-1. Client sends `request_full_state` (or server notices timeout).
-2. Server sends one **reliable** packed blob: living units, CPs, resources.
-3. Client replaces local state; resumes goal-follow.
-
-Do not replay missed unreliable ticks. Snapshots are the repair.
-
-Suggested timeout (not implemented): 10–15 s → current `peer_disconnected` path. Reconnect with same name needs numeric unit ids (names embed peer id today).
-
-**F. Later scale work:** skip units that have not moved; drop `tx,ty` (client pathfinds to `fx,fy`); numeric ids; `PackedByteArray`; interest management (only units near camera).
-
----
-
-## Scaling unit count
-
-| Scale | What breaks first | What is in place |
-|------:|-------------------|------------------|
-| 40 | Used to be MTU + 20 Hz flood | Stagger + batch + world-ready + CP-on-change |
-| ~200 | Correction interval ~2.5 s; combat anim lag | Raise batch size slightly, or dirty-only units |
-| ~300 | Server sim CPU, then Variant size | Packed snapshots, numeric ids |
-| 1000+ | Pathfinding + combat | Spatial hashing, interest |
-
-Server remains authority for combat and capture. Clients never decide “this unit died.” They may be a fraction of a second behind on position.
-
----
-
-## Debugging dropouts
-
-1. `Sending N bytes unreliably which is above the MTU (1392)` — payload too big.
-2. Disconnect before `TEST_CLIENT_WORLD_READY` — client still in `_ready`.
-3. One client drops mid-match, no MTU line — NAT, stall, or GPU; `TEST_PEER_DISCONNECT` on server.
-4. Ghost units after combat — missed reliable `_client_unit_died` (should be rare).
-
-Useful markers: `TEST_CLIENT_WORLD_READY`, `TEST_PEER_DISCONNECT`, `TEST_CLIENT_DISCONNECT`, `TEST_ARMIES_SPAWNED`.
-
----
+- Server: `TEST_PERF_TICK_MS avg= max= sim_avg= sim_max= sim_hz= ... tx_kbs=` every 5 s.
+- Clients: `TEST_PERF_FRAME_MS ... rx_kbs=` and `TEST_SIM_CLIENT snaps= walk_in_place= units=`.
+- `./run_stress.sh --units=1000 --map=XL` runs server + two auto-test clients and asserts
+  server sim tick <= 25 ms at >= 19 Hz and clients >= 45 fps. Auto-test clients disable vsync
+  (`Main.gd`) so a blanked monitor cannot masquerade as a frame-rate problem.
+- `above the MTU` warnings in `server.log` mean an unreliable RPC grew past 1392 bytes; the
+  stress script counts them (expected 0).
 
 ## Summary
 
-- **Hot path:** one unreliable RPC every 50 ms with **4 units** (round-robin). Clients simulate movement toward goals. Soft-blend corrections; snap only if far off.
-- **HUD:** capture ownership and resources only when they change.
-- **Cold path:** reliable lobby, spawn, orders, death, win.
-- **Next for huge armies:** packed ids/coords, skip idle units, reconnect snapshot.
+- **Hot path:** 20 Hz sim on both peers; server sends 8-byte records for changed units at
+  ~2.5 Hz per unit in <= 1200 B chunks. Clients blend, snap only on real desync, never repath.
+- **Orders:** formation level, reliable, echoed once with a sequence number; A* once per army.
+- **Cold path:** reliable lobby, spawn, deaths, routs, capture/resources, win.
+- **Possible next steps:** interest management (prioritise on-screen units using a camera rect
+  from the client), reconnect snapshot, porting `UnitSim.step` to a GDExtension for 4 players.
 
 
 ---
@@ -766,9 +660,12 @@ Reference: `Main.gd` PORT (line 3), `create_client("localhost", PORT)` (line 70)
 
 ## Phase D: Movement sync (implement last)
 
-- [x] **D1 – "You are HERE, on your way to THERE"**  
-  Server sends per unit: current position (HERE) and current move target (THERE). Client moves unit smoothly toward THERE; on each update, correct position to new HERE and continue toward new THERE.  
-  **Verification:** Events 1 and 2; smooth movement, no regressions.
+- [x] **D1 – "You are HERE, on your way to THERE"** (superseded)  
+  The first version sent per-unit HERE/THERE pairs round-robin. It was replaced by the
+  order-echo + packed-snapshot model described in *Network activity*: clients run the same
+  20 Hz `UnitSim` from echoed formation orders and only receive 8-byte corrections with a sim
+  tick, which removed the teleport-back and walking-in-place symptoms of the old scheme.  
+  **Verification:** Events 1 and 2, `TEST_SIM_CLIENT snaps=0 walk_in_place=0`, `./run_stress.sh`.
 
 
 ---

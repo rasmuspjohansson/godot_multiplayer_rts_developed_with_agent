@@ -45,6 +45,18 @@ echo "=== Headless: test_walkability.gd (--map=XL) ==="
 echo "=== Headless: test_vegetation.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_vegetation.gd
 
+echo "=== Headless: test_spatial_hash.gd ==="
+"$GODOT_BIN" --headless --path . -s test_spatial_hash.gd
+
+echo "=== Headless: test_unit_sim.gd ==="
+"$GODOT_BIN" --headless --path . -s test_unit_sim.gd
+
+echo "=== Headless: test_world3d_horse_speed.gd ==="
+"$GODOT_BIN" --headless --path . -s test_world3d_horse_speed.gd
+
+echo "=== Headless: test_server_match.gd ==="
+"$GODOT_BIN" --headless --path . -s test_server_match.gd
+
 if [[ "${1:-}" == "--with-logs" ]]; then
 	echo "=== verify_test_logs.sh ==="
 	./verify_test_logs.sh
