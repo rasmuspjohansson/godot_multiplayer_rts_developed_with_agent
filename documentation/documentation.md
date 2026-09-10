@@ -58,7 +58,7 @@ Maps are selected at launch with `--map=S|L|XL` (default **S**). [`MapConfig.gd`
 ./run_test.sh --map XL --no_test
 ```
 
-The arena is described entirely by the chosen map JSON. This is the single place to change map size, capture-point locations, player starting positions or army sizes (`"soldiers": N` per army entry, 10–200; default 10). For stress runs `./run_test.sh --stress-units=1000` adds extra armies per player until that many soldiers exist (`./run_stress.sh` wraps this and checks the perf markers).
+The arena is described entirely by the chosen map JSON. This is the single place to change map size, capture-point locations, player start rally points, army loadouts, or army sizes (`"soldiers": N` per army entry, 10–200; default 10). For stress runs `./run_test.sh --stress-units=1000` adds extra armies per player until that many soldiers exist (`./run_stress.sh` wraps this and checks the perf markers).
 
 ```json
 {
@@ -70,8 +70,14 @@ The arena is described entirely by the chosen map JSON. This is the single place
     {"id": "Blacksmith", "type": "Blacksmith", "x": 780.8, "y": 496.8},
     {"id": "Village", "type": "Village", "x": 640.0, "y": 580.0}
   ],
+  "start_positions": [
+    {"x": 199.68, "y": 180.0},
+    {"x": 1050.0, "y": 540.0},
+    {"x": 1050.0, "y": 180.0},
+    {"x": 199.68, "y": 540.0}
+  ],
   "player_starts": [
-    {"slot": 0, "corner": "NW", "armies": [{"x": 199.68, "y": 180.0, "direction": 0.0, "spear": true}, ...]},
+    {"slot": 0, "corner": "NW", "armies": [{"spear": true}, {"horse": true}]},
     {"slot": 1, "corner": "SE", "armies": [...]},
     {"slot": 2, "corner": "NE", "armies": [...]},
     {"slot": 3, "corner": "SW", "armies": [...]}
@@ -80,16 +86,18 @@ The arena is described entirely by the chosen map JSON. This is the single place
 ```
 
 - `size` — play-area width (X) and height (Z in 3D). All camera and movement clamping uses these.
-- `terrain.type` / `terrain.features` — analytical terrain built at startup. Height at any point is the **max** over positive features (`hill`, `ridge`, `spline_ridge`, `plateau`), then **valleys** carve downward (clamped to 0). Feature schemas:
+- `terrain.type` / `terrain.features` — analytical terrain built at startup. Height is **max(positive features, 5 starting ground) − carves**. Valleys and craters may go below 5. Feature schemas:
   - **hill** — radial Gaussian bump: `{type, x, y, base_width, height}` (`y` is map Z).
   - **ridge** — straight Gaussian spine: `{type, x1, y1, x2, y2, width, height}`.
   - **spline_ridge** — curved Gaussian spine through control points: `{type, points: [{x, y}, ...], width, height}` (≥2 points; Catmull-Rom spline).
   - **plateau** — flat top with smooth rim: `{type, x, y, radius, falloff, height}`.
   - **plateau_polygon** — flat polygon top with smooth exterior falloff: `{type, points: [{x, y}, ...], height, falloff}` (≥3 points).
-  - **valley** — radial carve (subtract from positive height): `{type, x, y, base_width, depth}`.
-  - **valley_polygon** — smooth polygon depression (inverted hill): `{type, points: [{x, y}, ...], depth, falloff}` (≥3 points).
+  - **valley** — radial Gaussian carve: `{type, x, y, base_width, depth}`.
+  - **crater** — radial inverse of hill (same Gaussian, subtracted): `{type, x, y, base_width, depth}`.
+  - **valley_polygon** — polygon carve, no rim: `{type, points: [{x, y}, ...], depth, falloff}` (≥3 points).
 - `capture_points[]` — capturable objectives; types: `Stables`, `Blacksmith`, `Village`, `Archery`. IDs `Stables` and `Blacksmith` are used by the auto-test on all map sizes.
-- `player_starts[]` — four corner slots (NW/SE/NE/SW). Join order assigns slot 0, 1, … Each slot lists armies with `{x, y, direction}`; optional `horse`/`spear`/`bow` for equipment.
+- `start_positions[]` — rally markers. Count = max players for that map. Join order assigns slot 0, 1, … At match start each player's armies spawn off the nearest map edge and march to that marker. The map editor **Start** tool places these.
+- `player_starts[]` — per-slot army **loadout** (`horse`/`spear`/`bow`, optional `soldiers`). Army `x,y` is ignored for spawn (kept for older maps). An empty `armies` list defaults to spear + horse. Legacy `corner` is unused; side is the nearest edge of that slot's start marker.
 - `lighting` (optional) — directional sun applied at runtime after terrain is built. [`World.gd`](../game_assets/World.gd) scales sun orbit and shadow distance from map size and final max terrain height.
   - `sun_azimuth_deg` — compass bearing where the sun sits: **0 = north (−Z)**, **90 = east (+X)**, **180 = south (+Z)**. Default **275**.
   - `sun_elevation_deg` — degrees above the horizon. Default **0** (low horizontal sun).
@@ -259,7 +267,8 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
   - Units auto-attack enemies within range (server-driven).
 
 ## Player sides
-- For 2 players: first connected = **West** (left), second = **East** (right). Drafted armies spawn from the player's side and walk in until fully visible (stop_when_visible).
+- Join order assigns `start_positions` slot 0, 1, … The lobby refuses extra players once that count is reached.
+- Each player's side (west/east/north/south) is the **nearest map edge** of their start marker. Starting armies and drafted armies spawn off that edge and walk onto the map.
 
 ## Army System (Total War Style)
 - On map **S** and **XL**, each player starts with **2 armies** (spear + horse). On **L**, each player starts with **1 club army** (no equipment).
@@ -271,7 +280,7 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
 ## Drafting
 - **Draft menu**: Lower-left of screen. Checkboxes **Horse**, **Spear**, and **Bow**, button **Create army**.
 - **Cost**: **10 villagers** for every army, plus **10** of each checked equipment type (horse / spear / bow). Player must have enough resources.
-- **Created army**: chosen soldier count (default 10), spawns off-screen on the player's side (West/East), walks in and **stops when fully visible**.
+- **Created army**: chosen soldier count (default 10), spawns off-screen on the nearest edge of that player's start marker, walks in and **stops when fully visible**.
 - **Unit types** (equipment priority): Horse+Bow → **bauer_horse_archer**; Bow → **bowman**; Horse → **knight**; Spear → **spearman**; none → **clubman**.
 - **Equipment effects**: Horse → mounted speed/HP. Spear → higher attack/melee range. Bow / bauer_horse_archer → ranged attack. Starting armies on map S and XL use spear/horse from JSON; L starts with clubmen.
 
@@ -279,7 +288,7 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
 - Map **S**: 1 Stables, 1 Blacksmith, 1 Village (3 CPs total). Map **L**: 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries (9 CPs). Map **XL**: mountainous (3 large peaks + 1 ridge), 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries (11 CPs), no dragons.
 - Capture points start **unowned**.
 - A capture point is captured when **only units from a single player** are within its capture radius (120 px). Contested (both players nearby) = no capture change.
-- Once captured, each type produces **1** resource every **2 seconds**: **Stables** → horses, **Blacksmith** → spears, **Village** → villagers, **Archery** → bows.
+- Once captured, each type produces **1** resource every **6 seconds**: **Stables** → horses, **Blacksmith** → spears, **Village** → villagers, **Archery** → bows.
 - Capture points can be **taken over** by the opposing player using the same proximity rule.
 - Each player starts with **10 horses, 10 spears, 10 bows, and 10 villagers** in inventory (`GameState.resources`).
 - Resources are displayed in the top-bar HUD (CP counts + inventory).
@@ -1891,6 +1900,8 @@ godot --rendering-driver opengl3 --path game_assets -- --map-editor
 ```
 
 Save writes `game_assets/maps/map_<Name>.json`. Those names appear in the lobby Map dropdown. `--map=Name` on the server/clients is still the default for auto-tests.
+
+**Start** places rally markers (`start_positions`). Their count is the map's max players. At match start, that slot's armies spawn off the nearest edge and walk to the marker. **Army** still sets per-slot loadout (`horse`/`spear`/`bow`); army `x,y` is not used for spawn.
 
 Headless checks (from `game_assets/`):
 

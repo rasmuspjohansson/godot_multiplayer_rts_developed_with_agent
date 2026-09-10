@@ -42,6 +42,12 @@ echo "=== Headless: test_map_lighting.gd (--map=XL) ==="
 echo "=== Headless: test_walkability.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_walkability.gd
 
+echo "=== Headless: test_walkability_mask.gd ==="
+"$GODOT_BIN" --headless --path . -s test_walkability_mask.gd
+
+echo "=== Headless: test_spawn_walkability.gd ==="
+"$GODOT_BIN" --headless --path . -s test_spawn_walkability.gd
+
 echo "=== Headless: test_vegetation.gd (--map=XL) ==="
 "$GODOT_BIN" --headless --path . --map=XL -s test_vegetation.gd
 
@@ -50,6 +56,9 @@ echo "=== Headless: test_spatial_hash.gd ==="
 
 echo "=== Headless: test_unit_sim.gd ==="
 "$GODOT_BIN" --headless --path . -s test_unit_sim.gd
+
+echo "=== Headless: test_facing_oscillation.gd ==="
+"$GODOT_BIN" --headless --path . -s test_facing_oscillation.gd
 
 echo "=== Headless: test_world3d_horse_speed.gd ==="
 "$GODOT_BIN" --headless --path . -s test_world3d_horse_speed.gd

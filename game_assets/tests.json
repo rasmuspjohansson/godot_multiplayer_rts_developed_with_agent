@@ -112,6 +112,14 @@
       "implementation": "godot --headless --path . -s test_unit_sim.gd 2>&1 | grep -q 'TEST_UNIT_SIM_OK'"
     },
     {
+      "description_of_test": "Move must not rubber-band: lockstep prediction stays quiet, and a client pulled 10 units ahead by snapshots must not reverse step direction more than 4 times in 2 seconds",
+      "implementation": "godot --headless --path . -s test_facing_oscillation.gd 2>&1 | grep -q 'TEST_MOVE_OSCILLATION_OK'"
+    },
+    {
+      "description_of_test": "Live clients never log TEST_MOVE_OSCILLATION_FAIL (any unit reversed step direction more than 4 times in 2 seconds)",
+      "implementation": "! grep -q 'TEST_MOVE_OSCILLATION_FAIL' ../logs/client_A.log ../logs/client_B.log"
+    },
+    {
       "description_of_test": "Headless server match: World as offline authority with two fake players, all armies aggressive, sim driven at 60 Hz until someone routs and a winner is announced (combat must not stall)",
       "implementation": "godot --headless --path . -s test_server_match.gd 2>&1 | grep -q 'TEST_SERVER_MATCH_OK'"
     },
@@ -128,7 +136,7 @@
       "implementation": "godot --headless --path . -s test_world3d_goal_arrival.gd 2>&1 | grep -q 'TEST_WORLD3D_GOALS_REACHED'"
     },
     {
-      "description_of_test": "Terrain feature types: hill, ridge, spline_ridge, plateau raise height; valley carves; heights stay >= 0",
+      "description_of_test": "Terrain feature types: hill, ridge, spline_ridge, plateau raise height; valley and crater carve below starting ground; no raised rims",
       "implementation": "godot --headless --path . -s test_terrain_feature_types.gd 2>&1 | grep -q 'TEST_TERRAIN_FEATURES_OK'"
     },
     {
@@ -166,6 +174,14 @@
     {
       "description_of_test": "XL walkability: water and steep slopes blocked; A* paths avoid lakes; steep_hills ground shader",
       "implementation": "godot --headless --path . --map=XL -s test_walkability.gd 2>&1 | grep -q 'TEST_WALKABILITY_OK'"
+    },
+    {
+      "description_of_test": "Walkability applies lake masks at global grid indices (not bbox-local), so steep texture stays on the water",
+      "implementation": "godot --headless --path . -s test_walkability_mask.gd 2>&1 | grep -q 'TEST_WALKABILITY_MASK_OK'"
+    },
+    {
+      "description_of_test": "Map start rally points sit on walkable terrain (match-start spawn is off-map and marches to these markers)",
+      "implementation": "godot --headless --path . -s test_spawn_walkability.gd 2>&1 | grep -q 'TEST_SPAWN_WALKABILITY_OK'"
     },
     {
       "description_of_test": "XL vegetation: ~30 decorative trees/spruce/bushes on walkable terrain",

@@ -181,6 +181,12 @@ func _is_color_available(color_index: int, except_peer_id: int = 0) -> bool:
 @rpc("any_peer", "reliable")
 func register_player(p_name: String, requested_color: int = -1):
 	var sender_id = multiplayer.get_remote_sender_id()
+	if sender_id == 0:
+		sender_id = 1
+	if not GameState.players.has(sender_id) and GameState.players.size() >= MapConfig.max_players():
+		print("Server: refused '%s' (id=%d) — map max_players=%d" % [p_name, sender_id, MapConfig.max_players()])
+		multiplayer.multiplayer_peer.disconnect_peer(sender_id)
+		return
 	var color_index = _get_first_available_color()
 	if _is_color_available(requested_color, sender_id):
 		color_index = requested_color

@@ -47,6 +47,11 @@ const RANGED_PURSUIT := 40.0
 const CAVALRY_PURSUIT := 100.0
 const NEUTRAL_OWNER := 0
 const MAP_MARGIN := 200.0
+## Fail if a living unit reverses its step direction more than this many times
+## inside MOVE_OSC_WINDOW_SEC (snapshot-vs-slot rubber-band).
+const MOVE_OSC_WINDOW_SEC := 2.0
+const MOVE_OSC_MAX_REVERSALS := 4
+const MOVE_OSC_MIN_DISP := 1.5
 
 var count: int = 0
 var pos_x := PackedFloat32Array()
@@ -96,6 +101,17 @@ var alive_count: int = 0
 ## displacement (should both stay 0 in a healthy run; see TEST_SIM_CLIENT).
 var snap_count: int = 0
 var walk_in_place_count: int = 0
+## Set when any living unit reverses its step more than MOVE_OSC_MAX_REVERSALS times
+## in MOVE_OSC_WINDOW_SEC. Peak is the worst window seen this sim.
+var move_oscillation := false
+var move_oscillation_id := -1
+var move_oscillation_count := 0
+var move_oscillation_peak := 0
+var _last_disp_x := PackedFloat32Array()
+var _last_disp_z := PackedFloat32Array()
+var _disp_seen := PackedByteArray()
+## Per-unit list of sim ticks when step direction reversed.
+var _reversal_ticks: Array = []
 
 var _unit_path_pts: Dictionary = {}
 var _unit_path_i: Dictionary = {}
@@ -216,6 +232,11 @@ func ensure_capacity(n: int) -> void:
 	flags.resize(n)
 	dirty_tick.resize(n)
 	_has_path.resize(n)
+	_last_disp_x.resize(n)
+	_last_disp_z.resize(n)
+	_disp_seen.resize(n)
+	while _reversal_ticks.size() < n:
+		_reversal_ticks.append([])
 	for i in range(old, n):
 		flags[i] = 0
 		target[i] = -1
@@ -450,6 +471,14 @@ func apply_correction(id: int, sx: float, sz: float, ignore_below: float, snap_a
 		corr_x[id] = 0.0
 		corr_z[id] = 0.0
 		return
+	# While the formation is marching, local slots are the dest. Blending a
+	# snapshot through those slots pulls soldiers backward then they walk
+	# forward again (the rubber-band). Keep hard snaps; skip the blend.
+	var ai: int = army[id]
+	if ai >= 0 and ai < armies.size() and armies[ai].moving:
+		corr_x[id] = 0.0
+		corr_z[id] = 0.0
+		return
 	corr_x[id] = dx
 	corr_z[id] = dz
 
@@ -485,13 +514,79 @@ func step(dt: float) -> void:
 	_step_units(dt)
 	_step_pending_arrows(dt)
 	_step_deaths()
+	_track_move_oscillation()
+
+func max_move_reversals_in_window() -> int:
+	var m := 0
+	for hist in _reversal_ticks:
+		m = maxi(m, hist.size())
+	return m
+
+func _ensure_move_track() -> void:
+	if _last_disp_x.size() < count:
+		_last_disp_x.resize(count)
+		_last_disp_z.resize(count)
+		_disp_seen.resize(count)
+	while _reversal_ticks.size() < count:
+		_reversal_ticks.append([])
+
+## Count step-direction reversals per living unit in a sliding 2s window.
+## Combat is skipped (closing on a target can legitimately reverse). A reversal
+## is two consecutive steps whose dots are negative and both longer than
+## MOVE_OSC_MIN_DISP — separation jitter is below that; snapshot rubber-band is not.
+func _track_move_oscillation() -> void:
+	_ensure_move_track()
+	var window := int(round(MOVE_OSC_WINDOW_SEC / SIM_DT))
+	var cut: int = tick - window
+	var min2 := MOVE_OSC_MIN_DISP * MOVE_OSC_MIN_DISP
+	for i in range(count):
+		if (flags[i] & F_ALIVE) == 0:
+			continue
+		if (flags[i] & F_IN_COMBAT) != 0:
+			_disp_seen[i] = 0
+			continue
+		var dx: float = pos_x[i] - prev_x[i]
+		var dz: float = pos_z[i] - prev_z[i]
+		var d2: float = dx * dx + dz * dz
+		if d2 < min2:
+			continue
+		if _disp_seen[i] == 0:
+			_last_disp_x[i] = dx
+			_last_disp_z[i] = dz
+			_disp_seen[i] = 1
+			continue
+		var dot: float = dx * _last_disp_x[i] + dz * _last_disp_z[i]
+		_last_disp_x[i] = dx
+		_last_disp_z[i] = dz
+		if dot < 0.0:
+			_reversal_ticks[i].append(tick)
+		var hist: Array = _reversal_ticks[i]
+		if hist.is_empty():
+			continue
+		var start := 0
+		while start < hist.size() and int(hist[start]) <= cut:
+			start += 1
+		if start > 0:
+			hist = hist.slice(start)
+			_reversal_ticks[i] = hist
+		var n: int = hist.size()
+		if n > move_oscillation_peak:
+			move_oscillation_peak = n
+		if n > MOVE_OSC_MAX_REVERSALS:
+			move_oscillation = true
+			move_oscillation_id = i
+			move_oscillation_count = n
 
 func _step_formations(dt: float) -> void:
 	for a in armies:
 		var ix: int = a.index
 		_army_moving[ix] = 1 if a.moving else 0
 		_army_attack_order[ix] = 1 if a.order_type == Formation.OrderType.ATTACK else 0
-		_army_offensive[ix] = 1 if (_army_attack_order[ix] != 0 or a.stance == Formation.Stance.AGGRESSIVE) else 0
+		_army_offensive[ix] = 1 if (
+			a.order_type == Formation.OrderType.ATTACK
+			or a.order_type == Formation.OrderType.ATTACK_MOVE
+			or a.stance == Formation.Stance.AGGRESSIVE
+		) else 0
 		if a.is_routed or a.members.is_empty():
 			continue
 		var alive: int = _army_alive[a.index]
@@ -685,10 +780,10 @@ func _step_units(dt: float) -> void:
 				_perform_attack(i, t)
 		atk_t[i] = at
 
-		# --- steering: melee closes on its target and then holds; otherwise toward slot ---
+		# --- steering: melee closes on its target unless a normal MOVE is in progress ---
 		var nx := x
 		var nz := z
-		if in_combat and (f & F_RANGED) == 0:
+		if in_combat and (f & F_RANGED) == 0 and (offensive or not army_moving):
 			var tdx3: float = px_arr[t] - x
 			var tdz3: float = pz_arr[t] - z
 			var td := sqrt(tdx3 * tdx3 + tdz3 * tdz3)

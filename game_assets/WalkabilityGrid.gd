@@ -139,16 +139,21 @@ func _apply_water_basin(basin: Dictionary) -> void:
 		return
 	var basin_cols: int = int(basin.get("cols", 0))
 	var basin_rows: int = int(basin.get("rows", 0))
-	var min_i: int = int(basin.get("min_i", 0))
-	var min_j: int = int(basin.get("min_j", 0))
-	for local_j in range(basin_rows):
-		for local_i in range(basin_cols):
-			if mask[local_j * basin_cols + local_i] == 0:
+	if basin_cols <= 0 or basin_rows <= 0:
+		return
+	# Mask is full-map, global (j * cols + i), matching WaterBuilder.
+	var max_i: int = mini(_cols, basin_cols) - 1
+	var max_j: int = mini(_rows, basin_rows) - 1
+	var min_i: int = clampi(int(basin.get("min_i", 0)), 0, max_i)
+	var min_j: int = clampi(int(basin.get("min_j", 0)), 0, max_j)
+	var end_i: int = clampi(int(basin.get("max_i", max_i)), min_i, max_i)
+	var end_j: int = clampi(int(basin.get("max_j", max_j)), min_j, max_j)
+	for j in range(min_j, end_j + 1):
+		for i in range(min_i, end_i + 1):
+			if mask[j * basin_cols + i] == 0:
 				continue
-			var gi: int = min_i + local_i
-			var gj: int = min_j + local_j
-			if gi >= 0 and gj >= 0 and gi < _cols and gj < _rows:
-				_walkable[gj * _cols + gi] = 0
+			if i < _cols and j < _rows:
+				_walkable[j * _cols + i] = 0
 
 func _apply_water_basin_polygon(basin: Dictionary) -> void:
 	var poly: PackedVector2Array = _WaterBuilder.build_polygon_from_basin(basin)

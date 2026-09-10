@@ -33,14 +33,14 @@ func _begin():
 		var mask: PackedByteArray = basin.get("mask", PackedByteArray())
 		var basin_cols: int = int(basin.get("cols", 0))
 		var min_i: int = int(basin.get("min_i", 0))
+		var max_i: int = int(basin.get("max_i", basin_cols - 1))
 		var min_j: int = int(basin.get("min_j", 0))
-		for local_j in range(int(basin.get("rows", 0))):
-			for local_i in range(basin_cols):
-				if mask[local_j * basin_cols + local_i] == 0:
+		var max_j: int = int(basin.get("max_j", int(basin.get("rows", 0)) - 1))
+		for j in range(min_j, max_j + 1):
+			for i in range(min_i, max_i + 1):
+				if mask[j * basin_cols + i] == 0:
 					continue
-				var gi: int = min_i + local_i
-				var gj: int = min_j + local_j
-				if not w._walkability.is_walkable_cell(gi, gj):
+				if not w._walkability.is_walkable_cell(i, j):
 					water_blocked = true
 					break
 			if water_blocked:
@@ -84,12 +84,8 @@ func _begin():
 			for basin in w._water_basins:
 				var mask: PackedByteArray = basin.get("mask", PackedByteArray())
 				var basin_cols: int = int(basin.get("cols", 0))
-				var min_i: int = int(basin.get("min_i", 0))
-				var min_j: int = int(basin.get("min_j", 0))
-				var li: int = i - min_i
-				var lj: int = j - min_j
-				if li >= 0 and lj >= 0 and li < basin_cols and lj < int(basin.get("rows", 0)):
-					if mask[lj * basin_cols + li] != 0:
+				if i >= 0 and j >= 0 and i < basin_cols and j < int(basin.get("rows", 0)):
+					if mask[j * basin_cols + i] != 0:
 						in_water = true
 						break
 			if not in_water:

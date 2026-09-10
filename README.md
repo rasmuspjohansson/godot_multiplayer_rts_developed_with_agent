@@ -55,6 +55,36 @@ Optional map: `./run_test.sh --map=XL`.
 
 ---
 
+## STRESS (≈2000 units)
+
+Spawns extra armies so each player has N soldiers, runs the auto-test match, then prints perf from the logs (server sim tick, client fps). Default is **1000 soldiers per player** on the XL map — about **2000 units** total.
+
+### Linux
+
+```bash
+./run_stress.sh
+```
+
+That is the same as `./run_stress.sh --units=1000 --map=XL --seconds=90`.
+
+Smaller / shorter:
+
+```bash
+./run_stress.sh --units=500 --map=L --seconds=60
+```
+
+Or skip the wrapper and keep the match running:
+
+```bash
+./run_test.sh --map=XL --stress-units=1000
+```
+
+### Windows
+
+Add `--stress-units=1000 --map=XL` to the server and both client commands in **TEST** above (three Command Prompt windows).
+
+---
+
 ## PLAY
 
 Join a host's server, or play two humans on this machine. In the lobby, pick a color if you want, then press **Ready**.
@@ -111,4 +141,30 @@ Optional map: `./run_test.sh --no_test --map=XL`.
 
 ---
 
-Design, maps, map editor, and agent test details: [documentation/documentation.md](documentation/documentation.md).
+## MAP EDITOR
+
+Standalone editor for terrain, capture points, start rally points, army loadouts, and map objects. Run from the repo root.
+
+### Windows
+
+```bat
+tools\godot\Godot_v4.6.1-stable_win64.exe --rendering-driver opengl3 --path game_assets -- --map-editor
+```
+
+### Linux
+
+```bash
+godot --rendering-driver opengl3 --path game_assets -- --map-editor
+```
+
+If `godot` is not on your PATH:
+
+```bash
+./tools/godot/Godot_v4.6.1-stable_linux.x86_64 --rendering-driver opengl3 --path game_assets -- --map-editor
+```
+
+Save writes `game_assets/maps/map_<Name>.json`. That name appears in the lobby Map dropdown. Start a match with `--map=Name` (e.g. `./run_test.sh --map=MyMap`).
+
+---
+
+Design, maps, and agent test details: [documentation/documentation.md](documentation/documentation.md).

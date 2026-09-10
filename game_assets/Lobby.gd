@@ -190,6 +190,7 @@ func _apply_selected_map(name_str: String) -> void:
 	if not allowed:
 		return
 	GameState.selected_map = name_str
+	MapConfig.reload(name_str)
 	for pid in GameState.players:
 		GameState.players[pid]["ready"] = false
 	print("TEST_MAP_SELECTED: %s" % name_str)

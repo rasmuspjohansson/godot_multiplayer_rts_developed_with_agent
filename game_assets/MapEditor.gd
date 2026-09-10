@@ -4,11 +4,13 @@ extends Control
 enum Tool {
 	SELECT,
 	HILL,
+	CRATER,
 	RIDGE,
 	PLATEAU,
 	VALLEY,
 	LAKE,
 	CAPTURE,
+	START,
 	ARMY,
 	DRAGON,
 	TREE,
@@ -41,12 +43,15 @@ var _tool: int = Tool.SELECT
 var _draft_points: Array = []
 var _selection: Dictionary = {}
 var _dragging := false
-var _undo: Array = []
-var _rebuild_timer: Timer
+var _history: Array = []
+var _history_index := -1
+var _terrain_dirty := false
 var _suppress_inspector := false
 
 var _hill_width := 300.0
 var _hill_height := 28.0
+var _crater_width := 300.0
+var _crater_depth := 28.0
 var _ridge_width := 400.0
 var _ridge_height := 80.0
 var _poly_height := 80.0
@@ -65,11 +70,6 @@ var _scatter_count := 0
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build_ui()
-	_rebuild_timer = Timer.new()
-	_rebuild_timer.one_shot = true
-	_rebuild_timer.wait_time = 0.2
-	_rebuild_timer.timeout.connect(_do_rebuild)
-	add_child(_rebuild_timer)
 	call_deferred("_boot_world")
 
 func _boot_world() -> void:
@@ -111,6 +111,8 @@ func _build_ui() -> void:
 	top_row.add_child(_open_option)
 	_add_btn(top_row, "Open", _on_open_clicked)
 	_add_btn(top_row, "Undo", undo)
+	_add_btn(top_row, "Redo", redo)
+	_add_btn(top_row, "Render", _do_rebuild)
 	top_row.add_child(_labeled_spin("W", 256, 8192, MapConfig.width, func(v): _set_map_size(v, MapConfig.height)))
 	top_row.add_child(_labeled_spin("H", 256, 8192, MapConfig.height, func(v): _set_map_size(MapConfig.width, v)))
 	_status = Label.new()
@@ -135,11 +137,13 @@ func _build_ui() -> void:
 	var tool_names := [
 		["Select", Tool.SELECT],
 		["Hill", Tool.HILL],
+		["Crater", Tool.CRATER],
 		["Ridge", Tool.RIDGE],
 		["Plateau", Tool.PLATEAU],
 		["Valley", Tool.VALLEY],
 		["Lake", Tool.LAKE],
 		["Capture", Tool.CAPTURE],
+		["Start", Tool.START],
 		["Army", Tool.ARMY],
 		["Dragon", Tool.DRAGON],
 		["Tree", Tool.TREE],
@@ -204,11 +208,25 @@ func _set_tool(t: int, label: String) -> void:
 	if t != Tool.SELECT:
 		_selection.clear()
 		_refresh_gizmos()
-	_set_status("Tool: %s. Left click to place. Enter/right-click finishes polygons." % label)
+	if t == Tool.VALLEY:
+		_set_status("Tool: Valley. 3+ clicks, Enter to finish, Render.")
+	elif t == Tool.CRATER:
+		_set_status("Tool: Crater. Left click to place, then Render.")
+	elif t == Tool.START:
+		_set_status("Tool: Start. Left click to place a player rally point. Count = max players.")
+	else:
+		_set_status("Tool: %s. Left click to place. Enter/right-click finishes polygons." % label)
 	_refresh_inspector()
 
 func _set_status(msg: String) -> void:
-	if _status:
+	if _status == null:
+		return
+	if _terrain_dirty:
+		if msg == "":
+			_status.text = "Terrain not rendered — press Render."
+		else:
+			_status.text = "%s  Terrain not rendered — press Render." % msg
+	else:
 		_status.text = msg
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -217,7 +235,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		var k := event as InputEventKey
 		if k.ctrl_pressed and k.keycode == KEY_Z:
-			undo()
+			if k.shift_pressed:
+				redo()
+			else:
+				undo()
+			get_viewport().set_input_as_handled()
+			return
+		if k.ctrl_pressed and k.keycode == KEY_Y:
+			redo()
 			get_viewport().set_input_as_handled()
 			return
 		if k.keycode == KEY_DELETE or k.keycode == KEY_BACKSPACE:
@@ -279,6 +304,13 @@ func _on_left_down(screen: Vector2) -> void:
 				"base_width": _hill_width, "height": _hill_height,
 			})
 			_schedule_rebuild()
+		Tool.CRATER:
+			_push_undo()
+			MapConfig.terrain_features.append({
+				"type": "crater", "x": xz.x, "y": xz.y,
+				"base_width": _crater_width, "depth": _crater_depth,
+			})
+			_schedule_rebuild()
 		Tool.RIDGE, Tool.PLATEAU, Tool.VALLEY:
 			_draft_points.append({"x": xz.x, "y": xz.y})
 			_refresh_gizmos()
@@ -295,6 +327,10 @@ func _on_left_down(screen: Vector2) -> void:
 				"x": xz.x,
 				"y": xz.y,
 			})
+			_refresh_gizmos()
+		Tool.START:
+			_push_undo()
+			MapConfig.start_positions.append({"x": xz.x, "y": xz.y})
 			_refresh_gizmos()
 		Tool.ARMY:
 			_push_undo()
@@ -364,7 +400,7 @@ func _pick_at(xz: Vector2) -> void:
 	for i in range(MapConfig.terrain_features.size()):
 		var f: Dictionary = MapConfig.terrain_features[i]
 		var ftype := str(f.get("type", ""))
-		if ftype == "hill":
+		if ftype == "hill" or ftype == "crater":
 			var d := xz.distance_to(Vector2(float(f.get("x", 0.0)), float(f.get("y", 0.0))))
 			if d < best_d:
 				best_d = d
@@ -389,6 +425,12 @@ func _pick_at(xz: Vector2) -> void:
 		if d < best_d:
 			best_d = d
 			best = {"kind": "capture", "index": i}
+	for i in range(MapConfig.start_positions.size()):
+		var sp: Dictionary = MapConfig.start_positions[i]
+		var d := xz.distance_to(Vector2(float(sp.get("x", 0.0)), float(sp.get("y", 0.0))))
+		if d < best_d:
+			best_d = d
+			best = {"kind": "start", "index": i}
 	for s in range(MapConfig.player_starts.size()):
 		var armies: Array = MapConfig.player_starts[s].get("armies", [])
 		for ai in range(armies.size()):
@@ -449,6 +491,12 @@ func _drag_selection(screen: Vector2) -> void:
 			cp["y"] = y
 			MapConfig.capture_points[int(_selection.index)] = cp
 			_refresh_gizmos()
+		"start":
+			var sp: Dictionary = MapConfig.start_positions[int(_selection.index)]
+			sp["x"] = x
+			sp["y"] = y
+			MapConfig.start_positions[int(_selection.index)] = sp
+			_refresh_gizmos()
 		"army":
 			var armies: Array = MapConfig.player_starts[int(_selection.slot)].get("armies", [])
 			var a: Dictionary = armies[int(_selection.index)]
@@ -488,6 +536,9 @@ func _delete_selection() -> void:
 		"capture":
 			if idx >= 0 and idx < MapConfig.capture_points.size():
 				MapConfig.capture_points.remove_at(idx)
+		"start":
+			if idx >= 0 and idx < MapConfig.start_positions.size():
+				MapConfig.start_positions.remove_at(idx)
 		"army":
 			var slot: int = int(_selection.get("slot", 0))
 			var armies: Array = MapConfig.player_starts[slot].get("armies", [])
@@ -507,10 +558,12 @@ func _delete_selection() -> void:
 
 func _schedule_rebuild() -> void:
 	MapConfig.load_from_dict(MapConfig.to_dict())
-	_rebuild_timer.start()
+	_terrain_dirty = true
 	_refresh_gizmos()
+	_set_status("")
 
 func _do_rebuild() -> void:
+	_terrain_dirty = false
 	if _world and _world.has_method("rebuild_from_mapconfig"):
 		_world.rebuild_from_mapconfig()
 	if _gizmos and not _gizmos.is_inside_tree() and _world:
@@ -518,17 +571,21 @@ func _do_rebuild() -> void:
 		_gizmos.name = "EditorGizmos"
 		_world.add_child(_gizmos)
 	_refresh_gizmos()
+	_set_status("Rendered.")
 
 func _push_undo() -> void:
-	_undo.append(JSON.stringify(MapConfig.to_dict()))
-	if _undo.size() > 40:
-		_undo.pop_front()
+	var snap := JSON.stringify(MapConfig.to_dict())
+	if _history_index >= 0 and _history_index < _history.size() - 1:
+		_history.resize(_history_index + 1)
+	if _history.is_empty() or _history[_history_index] != snap:
+		_history.append(snap)
+		_history_index = _history.size() - 1
+	while _history.size() > 40:
+		_history.pop_front()
+		_history_index -= 1
+	_history_index = maxi(_history_index, 0)
 
-func undo() -> void:
-	if _undo.size() < 2:
-		return
-	_undo.pop_back()
-	var raw: String = _undo.back()
+func _restore_history(raw: String) -> void:
 	var parsed = JSON.parse_string(raw)
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return
@@ -536,8 +593,33 @@ func undo() -> void:
 	_draft_points.clear()
 	MapConfig.load_from_dict(parsed)
 	_sync_size_spins()
-	_do_rebuild()
+	if _name_edit:
+		_name_edit.text = MapConfig.name_
+	_schedule_rebuild()
 	_refresh_inspector()
+
+func undo() -> void:
+	if _history_index < 0 or _history.is_empty():
+		return
+	var live := JSON.stringify(MapConfig.to_dict())
+	if live != _history[_history_index]:
+		if _history_index < _history.size() - 1:
+			_history.resize(_history_index + 1)
+		_history.append(live)
+		_history_index = _history.size() - 1
+		while _history.size() > 40:
+			_history.pop_front()
+			_history_index -= 1
+	if _history_index <= 0:
+		return
+	_history_index -= 1
+	_restore_history(_history[_history_index])
+
+func redo() -> void:
+	if _history_index < 0 or _history_index >= _history.size() - 1:
+		return
+	_history_index += 1
+	_restore_history(_history[_history_index])
 
 func _on_new() -> void:
 	_push_undo()
@@ -566,6 +648,7 @@ func _blank_map() -> Dictionary:
 		"lakes": [],
 		"props": [],
 		"capture_points": [],
+		"start_positions": [],
 		"player_starts": starts,
 		"neutral_dragons": [],
 	}
@@ -685,6 +768,8 @@ func _refresh_gizmos() -> void:
 		var selected: bool = str(_selection.get("kind", "")) in ["feature", "feature_vertex"] and int(_selection.get("index", -1)) == i
 		if ftype == "hill":
 			_add_marker(Vector2(float(f.get("x", 0.0)), float(f.get("y", 0.0))), Color(0.6, 0.4, 0.2), selected, "Hill")
+		elif ftype == "crater":
+			_add_marker(Vector2(float(f.get("x", 0.0)), float(f.get("y", 0.0))), Color(0.45, 0.28, 0.55), selected, "Crater")
 		elif f.has("points"):
 			var pts: Array = f.get("points", [])
 			var col := Color(0.9, 0.7, 0.2) if ftype == "plateau_polygon" else Color(0.55, 0.3, 0.8)
@@ -701,6 +786,11 @@ func _refresh_gizmos() -> void:
 		var cp: Dictionary = MapConfig.capture_points[i]
 		var sel: bool = str(_selection.get("kind", "")) == "capture" and int(_selection.get("index", -1)) == i
 		_add_marker(Vector2(float(cp.get("x", 0.0)), float(cp.get("y", 0.0))), Color(0.95, 0.85, 0.2), sel, str(cp.get("id", "CP")))
+	for i in range(MapConfig.start_positions.size()):
+		var sp: Dictionary = MapConfig.start_positions[i]
+		var sel: bool = str(_selection.get("kind", "")) == "start" and int(_selection.get("index", -1)) == i
+		var col: Color = SLOT_COLORS[i % SLOT_COLORS.size()]
+		_add_marker(Vector2(float(sp.get("x", 0.0)), float(sp.get("y", 0.0))), col, sel, "Start %d" % i)
 	for s in range(MapConfig.player_starts.size()):
 		var armies: Array = MapConfig.player_starts[s].get("armies", [])
 		var col: Color = SLOT_COLORS[s % SLOT_COLORS.size()]
@@ -777,6 +867,8 @@ func _refresh_inspector() -> void:
 	_inspector.add_child(head)
 	_inspector.add_child(_spin_row("Hill width", 20, 4000, _hill_width, func(v): _hill_width = v))
 	_inspector.add_child(_spin_row("Hill height", 1, 800, _hill_height, func(v): _hill_height = v))
+	_inspector.add_child(_spin_row("Crater width", 20, 4000, _crater_width, func(v): _crater_width = v))
+	_inspector.add_child(_spin_row("Crater depth", 1, 800, _crater_depth, func(v): _crater_depth = v))
 	_inspector.add_child(_spin_row("Ridge width", 20, 4000, _ridge_width, func(v): _ridge_width = v))
 	_inspector.add_child(_spin_row("Ridge height", 1, 800, _ridge_height, func(v): _ridge_height = v))
 	_inspector.add_child(_spin_row("Plateau height", 1, 800, _poly_height, func(v): _poly_height = v))
@@ -821,6 +913,13 @@ func _add_selection_fields() -> void:
 				))
 				_inspector.add_child(_spin_row("height", 1, 800, float(f.get("height", 0.0)), func(v):
 					_set_feature_key("height", v)
+				))
+			elif ftype == "crater":
+				_inspector.add_child(_spin_row("base_width", 20, 4000, float(f.get("base_width", 0.0)), func(v):
+					_set_feature_key("base_width", v)
+				))
+				_inspector.add_child(_spin_row("depth", 1, 800, float(f.get("depth", 0.0)), func(v):
+					_set_feature_key("depth", v)
 				))
 			elif ftype == "spline_ridge":
 				_inspector.add_child(_spin_row("width", 20, 4000, float(f.get("width", 0.0)), func(v):

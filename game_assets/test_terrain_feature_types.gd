@@ -101,14 +101,47 @@ func _begin():
 		quit(1)
 		return
 
-	for j in range(0, 11):
-		for i in range(0, 11):
-			var px: float = float(i) * 100.0
-			var pz: float = float(j) * 40.0
-			if map_cfg.sample_height(px, pz) < 0.0:
-				print("TEST_TERRAIN_FEATURES_FAIL: negative height at (%.1f, %.1f)" % [px, pz])
-				quit(1)
-				return
+	var flat_valley_cfg: Node = _MapConfigScript.new()
+	flat_valley_cfg.terrain_features = [
+		{
+			"type": "valley_polygon",
+			"depth": 40.0,
+			"falloff": 40.0,
+			"points": [
+				{"x": 100.0, "y": 100.0},
+				{"x": 300.0, "y": 100.0},
+				{"x": 300.0, "y": 300.0},
+				{"x": 100.0, "y": 300.0},
+			],
+		},
+	]
+	flat_valley_cfg._precompute_terrain_features()
+	var basin_center: float = flat_valley_cfg.sample_height(200.0, 200.0)
+	if basin_center >= 5.0:
+		print("TEST_TERRAIN_FEATURES_FAIL: flat valley_polygon center height=%.3f" % basin_center)
+		quit(1)
+		return
+	var basin_outside: float = flat_valley_cfg.sample_height(50.0, 200.0)
+	if absf(basin_outside - 5.0) > 0.5:
+		print("TEST_TERRAIN_FEATURES_FAIL: flat valley_polygon outside height=%.3f" % basin_outside)
+		quit(1)
+		return
+
+	var crater_cfg: Node = _MapConfigScript.new()
+	crater_cfg.terrain_features = [
+		{"type": "crater", "x": 200.0, "y": 200.0, "base_width": 120.0, "depth": 28.0},
+	]
+	crater_cfg._precompute_terrain_features()
+	var crater_center: float = crater_cfg.sample_height(200.0, 200.0)
+	if absf(crater_center - (5.0 - 28.0)) > 0.5:
+		print("TEST_TERRAIN_FEATURES_FAIL: crater center height=%.3f" % crater_center)
+		quit(1)
+		return
+	var crater_far: float = crater_cfg.sample_height(800.0, 800.0)
+	if absf(crater_far - 5.0) > 0.5:
+		print("TEST_TERRAIN_FEATURES_FAIL: crater far height=%.3f" % crater_far)
+		quit(1)
+		return
 
 	print("TEST_TERRAIN_FEATURES_OK")
 	quit(0)

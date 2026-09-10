@@ -97,6 +97,10 @@ func _collect_exclusions(map_cfg: Node) -> Array:
 			if typeof(ac) != TYPE_DICTIONARY:
 				continue
 			out.append(Vector2(float(ac.get("x", 0.0)), float(ac.get("y", 0.0))))
+	for sp in map_cfg.start_positions:
+		if typeof(sp) != TYPE_DICTIONARY:
+			continue
+		out.append(Vector2(float(sp.get("x", 0.0)), float(sp.get("y", 0.0))))
 	return out
 
 func _pick_center(

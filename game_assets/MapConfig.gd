@@ -1,6 +1,6 @@
 extends Node
 ## Parses map JSON once at startup and exposes the map description
-## (size, terrain, capture points, per-slot player starting positions).
+## (size, terrain, capture points, start rally points, per-slot army loadouts).
 ## Every map-dependent constant in World.gd / Army3D.gd resolves through here.
 ##
 ## Map file is selected via --map=NAME (default S) → res://maps/map_{NAME}.json
@@ -23,6 +23,7 @@ var terrain_type: String = "flat"
 var terrain_features: Array = []
 var capture_points: Array = []
 var player_starts: Array = []
+var start_positions: Array = []
 var neutral_dragon: Dictionary = {}
 var neutral_dragons: Array = []
 var lighting: Dictionary = {}
@@ -45,10 +46,14 @@ var _spline_ridges: Array = []
 var _plateaus: Array = []
 ## Each valley entry: {cx, cz, sigma, depth}.
 var _valleys: Array = []
+## Each crater entry: {cx, cz, sigma, depth}. Inverse of a hill (Gaussian carve).
+var _craters: Array = []
 ## Each valley_polygon entry: {points, depth, rim, sigma}.
 var _valley_polygons: Array = []
 ## Each plateau_polygon entry: {points, peak, sigma}.
 var _plateau_polygons: Array = []
+
+const GROUND_HEIGHT := 5.0
 
 const _SPLINE_RIDGE_SAMPLES := 20
 
@@ -134,10 +139,11 @@ func reload(size_name: String) -> bool:
 		return false
 	map_size = wanted
 	load_from_dict(parsed)
-	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons, %d dragons, %d lakes, %d props)" % [
-		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(), _hills.size(),
+	print("MapConfig: loaded '%s' from %s (%dx%d, terrain=%s, %d capture_points, %d player_starts, %d start_positions, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d craters, %d valley_polygons, %d dragons, %d lakes, %d props)" % [
+		name_, path, int(width), int(height), terrain_type, capture_points.size(), player_starts.size(),
+		start_positions.size(), _hills.size(),
 		_ridges.size(), _spline_ridges.size(), _plateaus.size(), _plateau_polygons.size(), _valleys.size(),
-		_valley_polygons.size(), get_neutral_dragons().size(), lakes.size(), props.size()
+		_craters.size(), _valley_polygons.size(), get_neutral_dragons().size(), lakes.size(), props.size()
 	])
 	return true
 
@@ -173,6 +179,13 @@ func load_from_dict(parsed: Dictionary) -> void:
 		player_starts = []
 	if player_starts.is_empty():
 		_apply_fallback_player_starts()
+	if parsed.has("start_positions"):
+		start_positions = parsed.get("start_positions", [])
+		if typeof(start_positions) != TYPE_ARRAY:
+			start_positions = []
+	else:
+		start_positions = []
+		_derive_start_positions_if_empty()
 	var lighting_raw = parsed.get("lighting", {})
 	lighting = lighting_raw if lighting_raw is Dictionary else {}
 	var walkability_raw = parsed.get("walkability", {})
@@ -193,6 +206,7 @@ func to_dict() -> Dictionary:
 		out["terrain"] = {"type": terrain_type, "features": terrain_features}
 		out["capture_points"] = capture_points
 		out["player_starts"] = player_starts
+		out["start_positions"] = start_positions
 		out["lighting"] = lighting
 		out["walkability"] = walkability
 		out["vegetation"] = vegetation
@@ -210,6 +224,7 @@ func to_dict() -> Dictionary:
 		"terrain": {"type": terrain_type, "features": terrain_features},
 		"capture_points": capture_points,
 		"player_starts": player_starts,
+		"start_positions": start_positions,
 		"lighting": lighting,
 		"walkability": walkability,
 		"vegetation": vegetation,
@@ -271,7 +286,44 @@ func max_armies_per_player() -> int:
 			continue
 		var armies: Array = start.get("armies", [])
 		max_count = maxi(max_count, armies.size())
-	return max_count
+	return maxi(max_count, 2)
+
+func max_players() -> int:
+	if start_positions.size() > 0:
+		return start_positions.size()
+	return maxi(player_starts.size(), 2)
+
+func get_start_position(slot: int) -> Vector2:
+	if slot >= 0 and slot < start_positions.size():
+		var p = start_positions[slot]
+		if typeof(p) == TYPE_DICTIONARY:
+			return Vector2(float(p.get("x", 0.0)), float(p.get("y", 0.0)))
+	var start: Dictionary = get_player_start(slot)
+	var armies: Array = start.get("armies", [])
+	if not armies.is_empty() and typeof(armies[0]) == TYPE_DICTIONARY:
+		return Vector2(float(armies[0].get("x", width * 0.2)), float(armies[0].get("y", height * 0.5)))
+	return Vector2(width * 0.2, height * 0.5)
+
+func _derive_start_positions_if_empty() -> void:
+	if not start_positions.is_empty():
+		return
+	for start in player_starts:
+		if typeof(start) != TYPE_DICTIONARY:
+			continue
+		var armies: Array = start.get("armies", [])
+		if armies.is_empty() or typeof(armies[0]) != TYPE_DICTIONARY:
+			continue
+		start_positions.append({
+			"x": float(armies[0].get("x", 0.0)),
+			"y": float(armies[0].get("y", 0.0)),
+		})
+	if start_positions.is_empty():
+		start_positions = [
+			{"x": width * 0.16, "y": height * 0.25},
+			{"x": width - 230.0, "y": height * 0.75},
+			{"x": width - 230.0, "y": height * 0.25},
+			{"x": width * 0.16, "y": height * 0.75},
+		]
 
 func _precompute_terrain_features() -> void:
 	_hills.clear()
@@ -279,6 +331,7 @@ func _precompute_terrain_features() -> void:
 	_spline_ridges.clear()
 	_plateaus.clear()
 	_valleys.clear()
+	_craters.clear()
 	_valley_polygons.clear()
 	_plateau_polygons.clear()
 	for f in terrain_features:
@@ -353,6 +406,17 @@ func _precompute_terrain_features() -> void:
 				"cz": float(f.get("y", 0.0)),
 				"sigma": vbw / 6.0,
 				"depth": depth,
+			})
+		elif ftype == "crater":
+			var cbw := float(f.get("base_width", 0.0))
+			var cdepth := float(f.get("depth", 0.0))
+			if cbw <= 0.0 or cdepth <= 0.0:
+				continue
+			_craters.append({
+				"cx": float(f.get("x", 0.0)),
+				"cz": float(f.get("y", 0.0)),
+				"sigma": cbw / 6.0,
+				"depth": cdepth,
 			})
 		elif ftype == "valley_polygon":
 			var points := _parse_feature_points(f)
@@ -508,9 +572,11 @@ func sample_height(x: float, z: float) -> float:
 	var carve := 0.0
 	for valley in _valleys:
 		carve = maxf(carve, _valley_depth_at(x, z, valley))
+	for crater in _craters:
+		carve = maxf(carve, _valley_depth_at(x, z, crater))
 	for valley in _valley_polygons:
 		carve = maxf(carve, _polygon_valley_depth_at(x, z, valley))
-	return maxf(5.0, positive - carve)
+	return maxf(positive, GROUND_HEIGHT) - carve
 
 func _apply_fallback_player_starts() -> void:
 	# Four corners matching today's hardcoded spawn layout.

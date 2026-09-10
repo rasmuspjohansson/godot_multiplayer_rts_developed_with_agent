@@ -11,6 +11,8 @@ var _cursor: int = 0
 var _waiting: bool = false       # timers/async gate
 var _world = null
 var _lobby = null
+var _spawn_wait_msec: int = 0
+const SPAWN_MARCH_WAIT_MS := 45000
 
 func _ready():
 	print("MockPlayer: Automated testing active for '%s'" % GameState.local_player_name)
@@ -138,14 +140,41 @@ func _my_armies() -> Array:
 		return []
 	return _world.get_my_armies()
 
+func _spawn_march_done(idx: int) -> bool:
+	var armies := _my_armies()
+	if idx >= armies.size():
+		return false
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.fc == null:
+			return false
+		if a.fc.moving:
+			return false
+	return true
+
+func _wait_for_spawn_march(idx: int) -> bool:
+	if _spawn_march_done(idx):
+		_spawn_wait_msec = 0
+		return false
+	if _spawn_wait_msec == 0:
+		_spawn_wait_msec = Time.get_ticks_msec()
+		print("TEST_MOCKPLAYER_WAIT_SPAWN_MARCH: waiting for army %d to arrive" % idx)
+	if Time.get_ticks_msec() - _spawn_wait_msec >= SPAWN_MARCH_WAIT_MS:
+		print("TEST_MOCKPLAYER_WAIT_SPAWN_MARCH: timeout, proceeding anyway")
+		_spawn_wait_msec = 0
+		return false
+	_waiting = true
+	get_tree().create_timer(0.3).timeout.connect(_resume)
+	return true
+
 func _do_select_army(entry: Dictionary) -> void:
 	var act: Dictionary = entry["action"]
 	var idx: int = int(act.get("army_index", 0))
 	var armies := _my_armies()
 	if idx >= armies.size():
-		# Retry shortly; armies may still be spawning.
 		_waiting = true
 		get_tree().create_timer(0.3).timeout.connect(_resume)
+		return
+	if _wait_for_spawn_march(idx):
 		return
 	# Deselect all first.
 	for a in armies:
@@ -176,10 +205,10 @@ func _do_move_army_to_cp(entry: Dictionary) -> void:
 	var target: Vector2 = _cp_position(cp_id)
 	var armies := _my_armies()
 	if target == Vector2.INF or idx >= armies.size():
-		# Either CP not yet spawned on this client or army list not ready —
-		# poll again. Same pattern as select_army.
 		_waiting = true
 		get_tree().create_timer(0.3).timeout.connect(_resume)
+		return
+	if _wait_for_spawn_march(idx):
 		return
 	var aid: String = armies[idx].army_id
 	_world.rpc_id(1, "_server_move_army", aid, target)

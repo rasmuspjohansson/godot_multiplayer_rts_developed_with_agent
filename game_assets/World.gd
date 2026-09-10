@@ -20,6 +20,7 @@ const MAX_SOLDIERS_PER_ARMY := 200
 const STRESS_SOLDIERS_PER_ARMY := 50
 ## Default armies per player when map JSON is unavailable (see MapConfig.max_armies_per_player()).
 const ARMIES_PER_PLAYER_FALLBACK := 2
+const OFFMAP_SPAWN_MARGIN := 120.0
 ## Map width/height come from `MapConfig` (maps/map_{S|L|XL}.json). Access via
 ## `MapConfig.width` / `MapConfig.height` elsewhere in this file.
 const DRAFT_COST_PER_EQUIPMENT := 10
@@ -50,7 +51,7 @@ var SOUTH_SPAWN: Vector2 = Vector2.ZERO
 var NORTH_STOP_Y: float = 80.0
 var SOUTH_STOP_Y: float = 0.0
 const CP_CAPTURE_RADIUS := 120.0
-const CP_RESOURCE_INTERVAL := 2.0
+const CP_RESOURCE_INTERVAL := 6.0
 # Terrain height sampling: unit origin y = ground_height + UNIT_HALF_HEIGHT (box is 22 tall)
 const UNIT_HALF_HEIGHT := 11.0
 ## Zoomed out: bird's-eye; zoomed in: pitch approaches horizontal + look-at near soldier head height.
@@ -99,7 +100,7 @@ var _last_sent_cp_owner: Dictionary = {}
 var _last_sent_resources: Dictionary = {}
 var _capture_hud_sent := false
 var player_side := {}  # pid -> "west" | "east" | ... (legacy draft path)
-var player_slot := {}  # pid -> int (index into MapConfig.player_starts)
+var player_slot := {}  # pid -> int (index into MapConfig.start_positions)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
 var _server_captures: Array = []
@@ -140,6 +141,10 @@ var _ghost_root_3d: Node3D
 var _ghost_marker_mat: StandardMaterial3D
 var _ghost_marker_invalid_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
+var _move_goal_slot_mat: StandardMaterial3D
+var _move_goal_ring_mesh: ArrayMesh
+var _pending_client_orders: Array = []
+var _move_osc_logged := false
 var _show_unit_range: bool = false
 var _show_range_cb: CheckBox = null
 var _draft_size_spin: SpinBox = null
@@ -511,6 +516,11 @@ func _sim_health_stats() -> String:
 	var s := "snaps=%d walk_in_place=%d" % [_sim.snap_count, _sim.walk_in_place_count]
 	if not multiplayer.is_server():
 		print("TEST_SIM_CLIENT %s units=%d" % [s, _sim.alive_count])
+		if _sim.move_oscillation and not _move_osc_logged:
+			_move_osc_logged = true
+			print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s" % [
+				_sim.move_oscillation_id, _sim.move_oscillation_count
+			])
 	_sim.snap_count = 0
 	_sim.walk_in_place_count = 0
 	return s
@@ -775,10 +785,10 @@ func _build_terrain() -> void:
 			shape_node.transform = Transform3D.IDENTITY
 	_recompute_max_terrain_height()
 	_configure_map_lighting()
-	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d valley_polygons" % [
+	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d craters, %d valley_polygons" % [
 		cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size(),
 		MapConfig._spline_ridges.size(), MapConfig._plateaus.size(), MapConfig._plateau_polygons.size(),
-		MapConfig._valleys.size(), MapConfig._valley_polygons.size()
+		MapConfig._valleys.size(), MapConfig._craters.size(), MapConfig._valley_polygons.size()
 	])
 
 func _load_ground_texture() -> Texture2D:
@@ -1451,16 +1461,30 @@ func _preview_camera_process(delta: float) -> void:
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 	_update_camera_position(delta)
 
-## Move-goal markers: one per selected army that has a destination (pooled meshes).
+## Move-goal markers: one range-style ring per soldier slot at the local player's final dest.
 func _update_move_goal_markers_3d():
 	if _move_goal_markers_3d == null:
 		_move_goal_markers_3d = Node3D.new()
 		_move_goal_markers_3d.name = "MoveGoalMarkers3D"
 		add_child(_move_goal_markers_3d)
+	if _move_goal_slot_mat == null:
+		_move_goal_slot_mat = StandardMaterial3D.new()
+		_move_goal_slot_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.4)
+		_move_goal_slot_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_move_goal_slot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_move_goal_slot_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_move_goal_slot_mat.no_depth_test = true
+	if _move_goal_ring_mesh == null:
+		_move_goal_ring_mesh = _make_range_ring_mesh(6.0)
 	var used := 0
 	var pool: Array = _move_goal_markers_3d.get_children()
-	for a in selected_armies:
+	var my_id := multiplayer.get_unique_id()
+	for a in armies:
+		if used >= MAX_GHOST_MARKERS:
+			break
 		if a == null or not is_instance_valid(a) or a.fc == null or a.is_routed:
+			continue
+		if a.owner_id != my_id:
 			continue
 		var fc = a.fc
 		if not fc.moving:
@@ -1468,32 +1492,32 @@ func _update_move_goal_markers_3d():
 		var d: Vector2 = fc.dest
 		if d.distance_to(fc.anchor) <= MOVE_GOAL_MARKER_HIDE_DIST:
 			continue
-		var mi: MeshInstance3D
-		if used < pool.size():
-			mi = pool[used]
-		else:
-			mi = MeshInstance3D.new()
-			var cm := CylinderMesh.new()
-			cm.top_radius = 5.0
-			cm.bottom_radius = 5.0
-			cm.height = 0.25
-			mi.mesh = cm
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = Color(1.0, 0.52, 0.08, 0.7)
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-			mi.material_override = mat
-			_move_goal_markers_3d.add_child(mi)
-			pool.append(mi)
-		mi.visible = true
-		mi.position = Vector3(d.x, get_ground_height_at(d.x, d.y) + 0.2, d.y)
-		var hw: float = fc.half_width()
-		var cm2 := mi.mesh as CylinderMesh
-		if cm2 != null:
-			cm2.top_radius = maxf(5.0, hw)
-			cm2.bottom_radius = maxf(5.0, hw)
-		used += 1
+		var n_alive: int = _sim.army_alive_count(fc) if _sim != null else fc.members.size()
+		if n_alive <= 0:
+			continue
+		var offs: PackedVector2Array = fc.slot_offsets(maxi(fc.packed_count, 1))
+		var cs := cos(fc.direction)
+		var sn := sin(fc.direction)
+		for k in range(n_alive):
+			if used >= MAX_GHOST_MARKERS:
+				break
+			var o: Vector2 = offs[mini(k, offs.size() - 1)]
+			var gx: float = d.x + o.x * cs - o.y * sn
+			var gz: float = d.y + o.x * sn + o.y * cs
+			var snapped := snap_move_goal_xz(Vector2(gx, gz))
+			var mi: MeshInstance3D
+			if used < pool.size():
+				mi = pool[used]
+			else:
+				mi = MeshInstance3D.new()
+				mi.material_override = _move_goal_slot_mat
+				_move_goal_markers_3d.add_child(mi)
+				pool.append(mi)
+			if mi.mesh != _move_goal_ring_mesh:
+				mi.mesh = _move_goal_ring_mesh
+			mi.visible = true
+			mi.position = Vector3(snapped.x, get_ground_height_at(snapped.x, snapped.y) + 0.25, snapped.y)
+			used += 1
 	for i in range(used, pool.size()):
 		pool[i].visible = false
 
@@ -1807,10 +1831,6 @@ func _server_armies_order_attack(army_ids: Array, target_army_id: String, target
 	else:
 		print("TEST_ARMY_ATTACK: %s -> unit %d" % [",".join(ids), target_unit])
 
-@rpc("authority", "reliable")
-func _client_order_attack(_seq: int, _tick: int, army_ids: Array, target_army_id: String, target_unit: int):
-	_apply_attack_order(army_ids, target_army_id, target_unit)
-
 @rpc("any_peer", "reliable")
 func _server_armies_order_attack_move(army_ids: Array, dest_x: float, dest_y: float):
 	if not multiplayer.is_server():
@@ -1878,6 +1898,12 @@ func _server_broadcast_move(ids: Array, dests: PackedFloat32Array, facings: Pack
 @rpc("authority", "reliable")
 func _client_order_move(_seq: int, _tick: int, army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool):
 	_apply_move_orders(army_ids, dests, facings, widths, attack_move)
+	_queue_unresolved_client_move(army_ids, dests, facings, widths, attack_move)
+
+@rpc("authority", "reliable")
+func _client_order_attack(_seq: int, _tick: int, army_ids: Array, target_army_id: String, target_unit: int):
+	_apply_attack_order(army_ids, target_army_id, target_unit)
+	_queue_unresolved_client_attack(army_ids, target_army_id, target_unit)
 
 @rpc("any_peer", "reliable")
 func _server_rotate_army(aid: String, delta_angle: float):
@@ -1935,51 +1961,83 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var idx = army_index_per_player.get(pid, 3)
 	army_index_per_player[pid] = idx + 1
 	var aid = "P%d_%d" % [pid, idx]
-	var side = player_side.get(pid, "west")
-	var spawn_pos: Vector2
-	var stop_pos: Vector2
-	var dir: float
-	if side == "west":
-		spawn_pos = WEST_SPAWN
-		stop_pos = Vector2(WEST_STOP_X, WEST_SPAWN.y)
-		dir = 0.0
-	elif side == "east":
-		spawn_pos = EAST_SPAWN
-		stop_pos = Vector2(EAST_STOP_X, EAST_SPAWN.y)
-		dir = PI
-	elif side == "north":
-		spawn_pos = NORTH_SPAWN
-		stop_pos = Vector2(NORTH_SPAWN.x, NORTH_STOP_Y)
-		dir = PI / 2.0
-	else:
-		spawn_pos = SOUTH_SPAWN
-		stop_pos = Vector2(SOUTH_SPAWN.x, SOUTH_STOP_Y)
-		dir = -PI / 2.0
+	var slot: int = int(player_slot.get(pid, 0))
+	var dest: Vector2 = MapConfig.get_start_position(slot)
+	var edge: Dictionary = _offmap_spawn_for(dest)
+	var spawn_pos: Vector2 = edge.get("spawn", WEST_SPAWN)
+	var dir: float = float(edge.get("dir", 0.0))
+	var side: String = _nearest_edge_side(dest)
+	var stop_pos: Vector2 = _onmap_entry_for(spawn_pos, side)
 	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow, "soldiers": soldier_count}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
 	var data = _serialize_one_army(army)
 	data["stop_x"] = stop_pos.x
 	data["stop_y"] = stop_pos.y
+	data["stop_dir"] = dir
 	rpc("_client_spawn_drafted_army", data)
 	_server_broadcast_move([aid], PackedFloat32Array([stop_pos.x, stop_pos.y]), PackedFloat32Array([dir]), PackedFloat32Array(), false)
 	_sync_capture_state()
 	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s soldiers=%d)" % [aid, use_horse, use_spear, use_bow, soldier_count])
 
 func _set_player_sides():
-	# Assign each player a map-slot (index into MapConfig.player_starts) by
-	# join order. Also populate legacy `player_side` (west/east/...) from the
-	# slot's `corner` so the draft-army path keeps working.
-	var corner_to_side := {"NW": "west", "SW": "west", "NE": "east", "SE": "east"}
+	# Assign each player a start-position index by join order. Draft still uses
+	# west/east/north/south from the nearest map edge of that start marker.
 	var player_ids = GameState.players.keys()
 	for i in range(player_ids.size()):
 		var pid = player_ids[i]
 		player_slot[pid] = i
-		var start: Dictionary = MapConfig.get_player_start(i)
-		var corner := str(start.get("corner", ""))
-		player_side[pid] = corner_to_side.get(corner, "west" if i % 2 == 0 else "east")
+		var dest: Vector2 = MapConfig.get_start_position(i)
+		player_side[pid] = _nearest_edge_side(dest)
 	for pid in player_ids:
 		army_index_per_player[pid] = MapConfig.max_armies_per_player() + 1
+
+func _nearest_edge_side(dest: Vector2) -> String:
+	var w: float = MapConfig.width
+	var h: float = MapConfig.height
+	var d_w: float = dest.x
+	var d_e: float = w - dest.x
+	var d_n: float = dest.y
+	var d_s: float = h - dest.y
+	if d_w <= d_e and d_w <= d_n and d_w <= d_s:
+		return "west"
+	if d_e <= d_n and d_e <= d_s:
+		return "east"
+	if d_n <= d_s:
+		return "north"
+	return "south"
+
+func _offmap_spawn_for(dest: Vector2) -> Dictionary:
+	var w: float = MapConfig.width
+	var h: float = MapConfig.height
+	var m := OFFMAP_SPAWN_MARGIN
+	var side := _nearest_edge_side(dest)
+	match side:
+		"west":
+			return {"spawn": Vector2(-m, clampf(dest.y, 0.0, h)), "dir": 0.0}
+		"east":
+			return {"spawn": Vector2(w + m, clampf(dest.y, 0.0, h)), "dir": PI}
+		"north":
+			return {"spawn": Vector2(clampf(dest.x, 0.0, w), -m), "dir": PI / 2.0}
+		_:
+			return {"spawn": Vector2(clampf(dest.x, 0.0, w), h + m), "dir": -PI / 2.0}
+
+func _onmap_entry_for(spawn: Vector2, side: String) -> Vector2:
+	match side:
+		"west":
+			return Vector2(WEST_STOP_X, spawn.y)
+		"east":
+			return Vector2(EAST_STOP_X, spawn.y)
+		"north":
+			return Vector2(spawn.x, NORTH_STOP_Y)
+		_:
+			return Vector2(spawn.x, SOUTH_STOP_Y)
+
+func _default_start_armies() -> Array:
+	return [
+		{"spear": true},
+		{"horse": true},
+	]
 
 func _soldiers_for_army_cfg(ac: Dictionary) -> int:
 	return clampi(int(ac.get("soldiers", DEFAULT_SOLDIERS_PER_ARMY)), MIN_SOLDIERS_PER_ARMY, MAX_SOLDIERS_PER_ARMY)
@@ -1989,18 +2047,30 @@ func _spawn_armies():
 	if player_ids.size() < 2:
 		print("ERROR: Need at least 2 players to spawn armies")
 		return
-	# Spawn armies from MapConfig.player_starts[slot].armies (slot assigned by join order).
+	var max_p: int = MapConfig.max_players()
 	var total_soldiers := 0
-	for p in range(player_ids.size()):
+	var march_ids: Array = []
+	var march_dests := PackedFloat32Array()
+	var march_dirs := PackedFloat32Array()
+	for p in range(mini(player_ids.size(), max_p)):
 		var pid = player_ids[p]
 		var pname = GameState.players[pid]["name"]
 		var slot: int = player_slot.get(pid, p)
+		var dest: Vector2 = MapConfig.get_start_position(slot)
+		var edge: Dictionary = _offmap_spawn_for(dest)
+		var spawn_pos: Vector2 = edge.get("spawn", Vector2.ZERO)
+		var dir: float = float(edge.get("dir", 0.0))
+		var perp := Vector2(-sin(dir), cos(dir))
 		var start: Dictionary = MapConfig.get_player_start(slot)
 		var start_armies: Array = start.get("armies", [])
-		for i in range(start_armies.size()):
+		if start_armies.is_empty():
+			start_armies = _default_start_armies()
+		var n_armies: int = start_armies.size()
+		for i in range(n_armies):
 			var ac: Dictionary = start_armies[i]
-			var pos := Vector2(float(ac.get("x", 0.0)), float(ac.get("y", 0.0)))
-			var dir := float(ac.get("direction", 0.0))
+			var spread: float = (float(i) - float(n_armies - 1) * 0.5) * 80.0
+			var spawn_i: Vector2 = spawn_pos + perp * spread
+			var dest_i: Vector2 = dest + perp * spread
 			var army_id = "P%d_%d" % [pid, i + 1]
 			var equipment = {
 				"horse": ac.get("horse", false),
@@ -2008,10 +2078,14 @@ func _spawn_armies():
 				"bow": ac.get("bow", false),
 				"soldiers": _soldiers_for_army_cfg(ac),
 			}
-			var army = _create_army(army_id, pid, pname, pos, dir, equipment)
+			var army = _create_army(army_id, pid, pname, spawn_i, dir, equipment)
 			armies.append(army)
 			total_soldiers += army.soldier_count()
-		total_soldiers += _spawn_stress_armies(pid, pname, start_armies)
+			march_ids.append(army_id)
+			march_dests.append(dest_i.x)
+			march_dests.append(dest_i.y)
+			march_dirs.append(dir)
+		total_soldiers += _spawn_stress_armies(pid, pname, start_armies, dest, dir, perp)
 	var armies_per_player := MapConfig.max_armies_per_player()
 	print("TEST_ARMIES_SPAWNED: %d armies spawned (%d per player, %d soldiers total)" % [armies.size(), armies_per_player, total_soldiers])
 	_match_started = true
@@ -2019,14 +2093,16 @@ func _spawn_armies():
 	for a in armies:
 		var axz: Vector2 = a.anchor()
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s soldiers=%d" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name, a.soldier_count()])
-	rpc("_client_spawn_armies", _serialize_armies())
+	rpc("_client_spawn_armies", _serialize_armies_with_march(march_ids, march_dests, march_dirs))
+	if not march_ids.is_empty():
+		_server_broadcast_move(march_ids, march_dests, march_dirs, PackedFloat32Array(), false)
 	_spawn_map_dragons()
 
-## `--stress-units=N`: top up each player with extra armies laid out in a grid behind the
-## player's first map army until N soldiers exist. Returns the number of soldiers added.
-func _spawn_stress_armies(pid: int, pname: String, start_armies: Array) -> int:
+## `--stress-units=N`: top up each player with extra armies laid out in a grid around
+## that player's start marker until N soldiers exist. Returns the number of soldiers added.
+func _spawn_stress_armies(pid: int, pname: String, start_armies: Array, dest: Vector2, dir: float, perp: Vector2) -> int:
 	var want: int = GameState.stress_units_per_player
-	if want <= 0 or start_armies.is_empty():
+	if want <= 0:
 		return 0
 	var have := 0
 	for ac in start_armies:
@@ -2035,9 +2111,7 @@ func _spawn_stress_armies(pid: int, pname: String, start_armies: Array) -> int:
 	var extra_armies: int = ceili(float(want - have) / float(per_army))
 	if extra_armies <= 0:
 		return 0
-	var ac0: Dictionary = start_armies[0]
-	var base := Vector2(float(ac0.get("x", 0.0)), float(ac0.get("y", 0.0)))
-	var dir := float(ac0.get("direction", 0.0))
+	var back := Vector2(-cos(dir), -sin(dir))
 	var per_row: int = maxi(1, int(sqrt(float(extra_armies))))
 	var pitch := 140.0
 	var equipment_cycle: Array = [
@@ -2047,11 +2121,8 @@ func _spawn_stress_armies(pid: int, pname: String, start_armies: Array) -> int:
 	for k in range(extra_armies):
 		var row: int = k / per_row
 		var col: int = k % per_row
-		var offset := Vector2(float(col - per_row / 2) * pitch, float(row + 1) * pitch)
-		# Push away from map centre so the grid grows toward the player's own edge.
-		if base.y > MapConfig.height * 0.5:
-			offset.y = -offset.y
-		var pos := _clamp_map_v2(snap_move_goal_xz(base + offset))
+		var offset: Vector2 = perp * (float(col - per_row / 2) * pitch) + back * float(row + 1) * pitch
+		var pos := _clamp_map_v2(snap_move_goal_xz(dest + offset))
 		var eq: Dictionary = equipment_cycle[k % equipment_cycle.size()]
 		var army_id := "P%d_S%d" % [pid, k + 1]
 		var army = _create_army(army_id, pid, pname, pos, dir, {
@@ -2133,6 +2204,68 @@ func _client_order_clear(aid: String) -> void:
 	var army = _find_army(aid)
 	if army != null and army.fc != null:
 		army.fc.clear_order()
+		return
+	if multiplayer.is_server():
+		return
+	_pending_client_orders.append({"kind": "clear", "aid": aid})
+
+func _queue_unresolved_client_move(army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> void:
+	if multiplayer.is_server():
+		return
+	for aid in army_ids:
+		if _find_army(str(aid)) == null:
+			_pending_client_orders.append({
+				"kind": "move",
+				"ids": army_ids.duplicate(),
+				"dests": dests.duplicate(),
+				"facings": facings.duplicate(),
+				"widths": widths.duplicate(),
+				"attack_move": attack_move,
+			})
+			return
+
+func _queue_unresolved_client_attack(army_ids: Array, target_army_id: String, target_unit: int) -> void:
+	if multiplayer.is_server():
+		return
+	for aid in army_ids:
+		if _find_army(str(aid)) == null:
+			_pending_client_orders.append({
+				"kind": "attack",
+				"ids": army_ids.duplicate(),
+				"target_army_id": target_army_id,
+				"target_unit": target_unit,
+			})
+			return
+
+func _flush_pending_client_orders() -> void:
+	if _pending_client_orders.is_empty():
+		return
+	var pending: Array = _pending_client_orders
+	_pending_client_orders = []
+	for o in pending:
+		var kind := str(o.get("kind", ""))
+		if kind == "move":
+			_apply_move_orders(o["ids"], o["dests"], o["facings"], o["widths"], bool(o.get("attack_move", false)))
+			_queue_unresolved_client_move(o["ids"], o["dests"], o["facings"], o["widths"], bool(o.get("attack_move", false)))
+		elif kind == "attack":
+			_apply_attack_order(o["ids"], str(o.get("target_army_id", "")), int(o.get("target_unit", -1)))
+			_queue_unresolved_client_attack(o["ids"], str(o.get("target_army_id", "")), int(o.get("target_unit", -1)))
+		elif kind == "clear":
+			var army = _find_army(str(o.get("aid", "")))
+			if army != null and army.fc != null:
+				army.fc.clear_order()
+			elif not multiplayer.is_server():
+				_pending_client_orders.append(o)
+
+func _apply_spawn_march(ad: Dictionary, fc) -> void:
+	if not ad.has("stop_x") or not ad.has("stop_y"):
+		return
+	var dest := snap_move_goal_xz(_clamp_map_v2(Vector2(float(ad.get("stop_x", 0.0)), float(ad.get("stop_y", 0.0)))))
+	var facing: float = float(ad.get("stop_dir", ad.get("dir", -999.0)))
+	var line_dir := -999.0
+	if facing > -100.0:
+		line_dir = _Formation.line_direction_for_front(facing)
+	fc.issue_move(dest, line_dir, false)
 
 ## Server: create an army (FormationController in the sim + thin Army3D handle) with `soldiers`
 ## units at `pos` facing `dir` (front angle). Unit ids are allocated sequentially by the server.
@@ -2187,6 +2320,23 @@ func _serialize_armies() -> Array:
 	var data := []
 	for army in armies:
 		data.append(_serialize_one_army(army))
+	return data
+
+func _serialize_armies_with_march(march_ids: Array, march_dests: PackedFloat32Array, march_dirs: PackedFloat32Array) -> Array:
+	var data: Array = _serialize_armies()
+	var dest_by_id := {}
+	for k in range(march_ids.size()):
+		dest_by_id[str(march_ids[k])] = k
+	for payload in data:
+		if typeof(payload) != TYPE_DICTIONARY:
+			continue
+		var k = dest_by_id.get(str(payload.get("army_id", "")), -1)
+		if k < 0 or k * 2 + 1 >= march_dests.size():
+			continue
+		payload["stop_x"] = march_dests[k * 2]
+		payload["stop_y"] = march_dests[k * 2 + 1]
+		if k < march_dirs.size():
+			payload["stop_dir"] = march_dirs[k]
 	return data
 
 ## Compact spawn payload: ids are contiguous from `first_id`; positions as packed arrays.
@@ -2459,6 +2609,11 @@ func _client_after_tick() -> void:
 		# Local (non-authoritative) sims never kill units; this only fires for reconciled deaths.
 		_sim.died_ids.clear()
 	_sim.routed_armies.clear()
+	if _sim.move_oscillation and not _move_osc_logged:
+		_move_osc_logged = true
+		print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s" % [
+			_sim.move_oscillation_id, _sim.move_oscillation_count
+		])
 	if _unit_renderer != null:
 		_unit_renderer.write_tick()
 	if _unit_audio != null:
@@ -3088,6 +3243,7 @@ func _client_spawn_armies_impl(data: Array):
 		if typeof(ad) != TYPE_DICTIONARY:
 			continue
 		_client_spawn_one_army(ad, "")
+	_flush_pending_client_orders()
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
 	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [_alive_unit_count(), armies.size()])
 	_schedule_visibility_checks()
@@ -3113,8 +3269,10 @@ func _client_spawn_one_army(ad: Dictionary, color: String) -> Node:
 	fc.stance = int(ad.get("stance", fc.stance))
 	_sim.spawn_army_units(fc, first_id, n, utype, xs, zs)
 	_next_unit_id = maxi(_next_unit_id, first_id + n)
+	_apply_spawn_march(ad, fc)
 	var army = _make_army_handle(aid, pid, pname, fc, color)
 	armies.append(army)
+	_flush_pending_client_orders()
 	return army
 
 @rpc("authority", "reliable")

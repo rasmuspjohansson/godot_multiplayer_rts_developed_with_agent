@@ -92,6 +92,12 @@
     {"id": "Archery",      "type": "Archery",    "x": 1920.0, "y": 270.0},
     {"id": "Archery_2",    "type": "Archery",    "x": 2400.0, "y": 1720.0}
   ],
+  "start_positions": [
+    {"x": 599.04, "y": 540.0},
+    {"x": 3150.0, "y": 1620.0},
+    {"x": 3150.0, "y": 540.0},
+    {"x": 599.04, "y": 1520.0}
+  ],
   "player_starts": [
     {"slot": 0, "corner": "NW", "armies": [
       {"x": 599.04, "y": 540.0, "direction": 0.0, "spear": true},
