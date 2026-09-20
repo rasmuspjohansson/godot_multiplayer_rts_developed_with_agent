@@ -5,7 +5,12 @@
 #   ./run_stress.sh                      # 1000 soldiers/player on XL, 90 s
 #   ./run_stress.sh --units=500 --map=L --seconds=60
 #
+# --seconds sets how long this script waits before killing Godot and summarising logs,
+# and (via --match-timeout) the in-game auto-test match cap so long runs are not forced
+# to a draw at 120s.
+#
 # Pass/fail thresholds (override via env): SERVER_TICK_MS_MAX (25), CLIENT_FPS_MIN (45).
+# Optional --dragons is forwarded to run_test.sh (use with a map that has dragons, e.g. --map=S).
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,17 +19,19 @@ cd "$SCRIPT_DIR"
 UNITS=1000
 MAP="XL"
 SECONDS_TO_RUN=90
+EXTRA_TEST_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --units=*) UNITS="${arg#*=}" ;;
     --map=*) MAP="${arg#*=}" ;;
     --seconds=*) SECONDS_TO_RUN="${arg#*=}" ;;
+    --dragons) EXTRA_TEST_ARGS+=("--dragons") ;;
   esac
 done
 SERVER_TICK_MS_MAX="${SERVER_TICK_MS_MAX:-25}"
 CLIENT_FPS_MIN="${CLIENT_FPS_MIN:-45}"
 
-./run_test.sh --map="$MAP" --stress-units="$UNITS" || exit 1
+./run_test.sh --map="$MAP" --stress-units="$UNITS" --match-timeout="$SECONDS_TO_RUN" "${EXTRA_TEST_ARGS[@]}" || exit 1
 echo "Stress run: units/player=$UNITS map=$MAP; sampling for ${SECONDS_TO_RUN}s..."
 sleep "$SECONDS_TO_RUN"
 

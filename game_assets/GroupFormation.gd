@@ -5,46 +5,83 @@ extends RefCounted
 const _Formation := preload("res://sim/FormationController.gd")
 const FORMATION_SPACING := _Formation.MOUNTED_SPACING
 const FOOT_FORMATION_SPACING := _Formation.FOOT_SPACING
-## Along-drag gap between adjacent armies' segments so two formations do not share one goal point.
-const ARMY_SEGMENT_GAP := FORMATION_SPACING * 0.5
+const MIN_DRAG_LENGTH := 0.01
+## Min center distance between last front file of one army and first of the next (~2× foot radius).
+const ARMY_BOUNDARY_RADIUS_CLEAR := 9.0
 
 static func spacing_for(has_horse: bool) -> float:
 	return FORMATION_SPACING if has_horse else FOOT_FORMATION_SPACING
 
-## Drag from line_start (RMB press) to line_end (cursor / release). The first rank is laid **on that segment**:
-## soldiers are spread evenly from line_start to line_end (index 0 at press, last in-row at the far end).
-## How many fit on one row is limited by segment length vs spacing; overflow forms deeper ranks along -perp.
+## Along-drag clearance between adjacent armies' front ranks (after corner placement).
+static func boundary_gap(spacing_a: float, spacing_b: float) -> float:
+	return maxf(spacing_a, spacing_b) + ARMY_BOUNDARY_RADIUS_CLEAR
+
+## Single source of truth for RMB drag: press = front rank file 1, release = last front file,
+## depth behind. Returns world positions plus sim metadata (rows, direction along drag, anchor).
+static func drag_layout(
+	line_start: Vector2,
+	line_end: Vector2,
+	soldier_count: int,
+	spacing: float = FOOT_FORMATION_SPACING,
+) -> Dictionary:
+	var positions: Array[Vector2] = []
+	if soldier_count <= 0:
+		return {
+			"positions": positions,
+			"rows": 1,
+			"cols": 0,
+			"direction": 0.0,
+			"front_angle": -PI * 0.5,
+			"anchor": line_start,
+			"front_span": 0.0,
+		}
+	var delta := line_end - line_start
+	var length := delta.length()
+	var direction := delta.angle() if length >= MIN_DRAG_LENGTH else 0.0
+	var n_wide: int = 1
+	var front_span := 0.0
+	if length >= MIN_DRAG_LENGTH:
+		n_wide = mini(soldier_count, maxi(1, int(floor(length / spacing)) + 1))
+		front_span = length
+	var rows: int = ceili(float(soldier_count) / float(n_wide))
+	for i in range(soldier_count):
+		var depth_rank: int = i / n_wide
+		var j: int = i % n_wide
+		var lx := 0.0
+		if n_wide > 1:
+			lx = front_span * float(j) / float(n_wide - 1)
+		var ly := float(depth_rank) * spacing
+		positions.append(line_start + Vector2(lx, ly).rotated(direction))
+	return {
+		"positions": positions,
+		"rows": rows,
+		"cols": n_wide,
+		"direction": direction,
+		"front_angle": direction + PI * 0.5,
+		"anchor": line_start,
+		"front_span": front_span,
+	}
+
+## Drag from line_start (RMB press) to line_end (cursor / release). Delegates to drag_layout.
 static func compute_line_formation(
 	line_start: Vector2,
 	line_end: Vector2,
 	soldier_count: int,
 	spacing: float = FOOT_FORMATION_SPACING,
 ) -> Array[Vector2]:
-	var out: Array[Vector2] = []
-	if soldier_count <= 0:
-		return out
-	var delta := line_end - line_start
-	var length := delta.length()
-	var forward := Vector2(1, 0)
-	if length >= 0.01:
-		forward = delta / length
-	var perp := Vector2(-forward.y, forward.x)
-	var n_wide: int = mini(soldier_count, maxi(1, int(floor(length / spacing)) + 1))
-	for i in range(soldier_count):
-		var depth_rank: int = i / n_wide
-		var j: int = i % n_wide
-		var along_t := 0.0
-		if n_wide > 1:
-			along_t = length * float(j) / float(n_wide - 1)
-		var base := line_start + forward * along_t
-		var depth_off := -perp * (float(depth_rank) * spacing)
-		out.append(base + depth_off)
-	return out
+	var layout: Dictionary = drag_layout(line_start, line_end, soldier_count, spacing)
+	return layout["positions"]
 
 ## Splits the drag segment into one sub-segment per army (in selection order) with a gap between
-## them. If the drag is too short to fit K segments every army gets the whole segment.
+## them. `spacings` = per-army formation pitch (mounted/foot); gaps scale so bodies do not overlap.
+## If the drag is too short to fit K segments every army gets the whole segment.
 ## Returns an Array of {"start": Vector2, "end": Vector2}.
-static func split_segments(line_start: Vector2, line_end: Vector2, army_count: int) -> Array:
+static func split_segments(
+	line_start: Vector2,
+	line_end: Vector2,
+	army_count: int,
+	spacings: Array = [],
+) -> Array:
 	var out: Array = []
 	if army_count <= 0:
 		return out
@@ -54,43 +91,60 @@ static func split_segments(line_start: Vector2, line_end: Vector2, army_count: i
 	var delta := line_end - line_start
 	var length := delta.length()
 	var forward := Vector2(1, 0)
-	if length >= 0.01:
+	if length >= MIN_DRAG_LENGTH:
 		forward = delta / length
-	var usable: float = length - float(army_count - 1) * ARMY_SEGMENT_GAP
+	var default_sp := FOOT_FORMATION_SPACING
+	var gap_total := 0.0
+	for i in range(army_count - 1):
+		var sa: float = default_sp
+		var sb: float = default_sp
+		if i < spacings.size():
+			sa = float(spacings[i])
+		if i + 1 < spacings.size():
+			sb = float(spacings[i + 1])
+		gap_total += boundary_gap(sa, sb)
+	var usable: float = length - gap_total
 	if usable <= 1.0:
 		for _k in range(army_count):
 			out.append({"start": line_start, "end": line_end})
 		return out
 	var seg_len: float = usable / float(army_count)
+	var t_along := 0.0
 	for k in range(army_count):
-		var t0: float = float(k) * (seg_len + ARMY_SEGMENT_GAP)
-		var sub_start: Vector2 = line_start + forward * t0
+		var sub_start: Vector2 = line_start + forward * t_along
 		out.append({"start": sub_start, "end": sub_start + forward * seg_len})
+		t_along += seg_len
+		if k < army_count - 1:
+			var sa: float = default_sp
+			var sb: float = default_sp
+			if k < spacings.size():
+				sa = float(spacings[k])
+			if k + 1 < spacings.size():
+				sb = float(spacings[k + 1])
+			t_along += boundary_gap(sa, sb)
 	return out
 
 ## Facing of a formation whose first rank lies on the drag segment (front toward +perp).
 static func front_angle_for_segment(line_start: Vector2, line_end: Vector2) -> float:
 	var delta := line_end - line_start
-	if delta.length() < 0.01:
+	if delta.length() < MIN_DRAG_LENGTH:
 		return -PI * 0.5
 	return delta.angle() + PI * 0.5
 
-## Ghost preview positions for the given per-army (count, has_horse) pairs. Each army gets
-## exactly the grid the sim will march in: fixed pitch, ranks from
-## FormationController.rows_for_width(count, segment length), centred on its segment and
-## rotated so the first rank lies on the drag line (what you preview is what you get).
+## Ghost preview positions — same corner-anchored layout the sim uses after a drag order.
 static func preview_positions(line_start: Vector2, line_end: Vector2, counts: Array, mounted: Array) -> Array[Vector2]:
 	var out: Array[Vector2] = []
-	var segs := split_segments(line_start, line_end, counts.size())
-	var line_dir := _Formation.line_direction_for_front(front_angle_for_segment(line_start, line_end))
+	var spacings: Array = []
+	for k in range(counts.size()):
+		spacings.append(spacing_for(bool(mounted[k])))
+	var segs := split_segments(line_start, line_end, counts.size(), spacings)
 	for k in range(counts.size()):
 		var seg: Dictionary = segs[k]
 		var s: Vector2 = seg["start"]
 		var e: Vector2 = seg["end"]
 		var sp := spacing_for(bool(mounted[k]))
 		var n := int(counts[k])
-		var rows := _Formation.rows_for_width(n, s.distance_to(e), sp)
-		var mid := (s + e) * 0.5
-		for o in _Formation.grid_offsets(n, rows, sp):
-			out.append(mid + o.rotated(line_dir))
+		var layout: Dictionary = drag_layout(s, e, n, sp)
+		for p in layout["positions"]:
+			out.append(p)
 	return out

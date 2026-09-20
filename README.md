@@ -53,6 +53,8 @@ Optional map: add `--map=XL` to each command.
 
 Optional map: `./run_test.sh --map=XL`.
 
+Auto-test skips neutral map dragons by default; add **`--dragons`** to spawn them when the map JSON defines any (e.g. `./run_test.sh --map=S --dragons`).
+
 ---
 
 ## STRESS (≈2000 units)
@@ -66,6 +68,8 @@ Spawns extra armies so each player has N soldiers, runs the auto-test match, the
 ```
 
 That is the same as `./run_stress.sh --units=1000 --map=XL --seconds=90`.
+
+`--seconds` controls how long the stress driver waits before stopping Godot and printing perf summaries, and it sets the auto-test **match timeout** (so a long run is not capped at 120s). Plain `./run_test.sh` still uses a **120s** match cap unless you pass `--match-timeout=N`.
 
 Smaller / shorter:
 
@@ -89,7 +93,7 @@ Add `--stress-units=1000 --map=XL` to the server and both client commands in **T
 
 Join a host's server, or play two humans on this machine. In the lobby, pick a color if you want, then press **Ready**.
 
-In a match, use the **bottom selection bar** (Total War–style): order mode (Move / Attack / Attack-Move), stance buttons, **portraits** for each selected army (with soldier count), Show range, and Draft. Click a portrait to select only that army; **Shift+click** a portrait or an army on the map to add or remove it from the selection. **Shift+drag** a marquee to add armies to the selection. Keyboard shortcuts **M** / **A** / **G** still set move / attack / attack-move.
+In a match, open **Menu** (top-right) for music/SFX volume, sun lighting, and sprite animation speed. **Move** orders: **RMB drag** on the ground draws the front rank from press (first file) to release (last file on that rank); a tiny drag stacks depth on one file. Use the **bottom selection bar** (Total War–style): order mode (Move / Attack / Attack-Move), stance buttons, **portraits for all your armies** (gold border = selected), Show range, and Draft. **Click a portrait** to add or remove that army from the selection. On the map, click an army to select it alone; **Shift+click** or **Shift+drag** a marquee to add to the selection. Keyboard shortcuts **M** / **A** / **G** still set move / attack / attack-move.
 
 ### Windows
 

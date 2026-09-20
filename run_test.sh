@@ -30,7 +30,7 @@ REMOTE_DEBUG=false
 REMOTE_DEBUG_URI="tcp://127.0.0.1:6007"
 SERVER_WINDOW=false
 MAP_SIZE="S"
-# Forwarded to server and clients (e.g. --stress-units=1000).
+# Forwarded to server and clients (e.g. --stress-units=1000, --match-timeout=300, --dragons).
 PASSTHROUGH_ARGS=()
 
 args=("$@")
@@ -46,6 +46,12 @@ while [ $i -lt ${#args[@]} ]; do
       MAP_SIZE="${arg#*=}"
       ;;
     --stress-units=*)
+      PASSTHROUGH_ARGS+=("$arg")
+      ;;
+    --match-timeout=*)
+      PASSTHROUGH_ARGS+=("$arg")
+      ;;
+    --dragons)
       PASSTHROUGH_ARGS+=("$arg")
       ;;
     --map)

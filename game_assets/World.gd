@@ -289,35 +289,25 @@ func _on_anim_speed_changed(value: float) -> void:
 	if _anim_speed_value_label != null:
 		_anim_speed_value_label.text = "%.2f" % value
 
-func _setup_lighting_tuning_panel() -> void:
-	var layer := CanvasLayer.new()
-	layer.name = "LightingTuningLayer"
-	layer.layer = 50
-	add_child(layer)
+## Audio, sun lighting and sprite anim speed live in the top-right Menu fold-out (TopBar).
+func _setup_settings_menu() -> void:
+	if top_bar == null or not top_bar.has_method("settings_vbox"):
+		return
+	var vbox: VBoxContainer = top_bar.settings_vbox()
+	if vbox == null:
+		return
 
-	var panel := PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	panel.offset_left = -300.0
-	panel.offset_top = 40.0
-	panel.offset_right = -10.0
-	panel.offset_bottom = 310.0
-	layer.add_child(panel)
+	var audio_title := Label.new()
+	audio_title.text = "Audio"
+	audio_title.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(audio_title)
+	var volume: Node = (load("res://VolumePanel.tscn") as PackedScene).instantiate()
+	vbox.add_child(volume)
 
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 8)
-	margin.add_theme_constant_override("margin_top", 6)
-	margin.add_theme_constant_override("margin_right", 8)
-	margin.add_theme_constant_override("margin_bottom", 6)
-	panel.add_child(margin)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
-	margin.add_child(vbox)
-
-	var title := Label.new()
-	title.text = "Sun lighting"
-	title.add_theme_font_size_override("font_size", 14)
-	vbox.add_child(title)
+	var light_title := Label.new()
+	light_title.text = "Sun lighting"
+	light_title.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(light_title)
 
 	_add_lighting_slider_row(vbox, "Azimuth", 0.0, 360.0, 1.0, _sun_azimuth_deg, _on_lighting_azimuth_changed, "azimuth")
 	_add_lighting_slider_row(vbox, "Elevation", 0.0, 90.0, 1.0, _sun_elevation_deg, _on_lighting_elevation_changed, "elevation")
@@ -489,7 +479,7 @@ func _ready():
 		_setup_selection_overlay()
 		_setup_background_music()
 	_setup_topbar()
-	_setup_lighting_tuning_panel()
+	_setup_settings_menu()
 	if not multiplayer.is_server():
 		_setup_selection_bar()
 	_add_play_boundary_line()
@@ -2028,7 +2018,7 @@ func _owned_live_armies(sender: int, army_ids: Array) -> Array:
 
 ## Shared by server and clients: apply a batch of MOVE / ATTACK_MOVE orders to the sim.
 ## `dests` = [x0, z0, x1, z1, ...], `facings` front angle per army (< -100 keeps travel
-## direction), `widths` desired line width per army (<= 0 keeps the current rows).
+## direction), `widths` drag segment length per army (<= 0 click move; > 0 corner-anchored drag).
 func _apply_move_orders(army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> int:
 	var n := 0
 	for k in range(army_ids.size()):
@@ -2039,17 +2029,22 @@ func _apply_move_orders(army_ids: Array, dests: PackedFloat32Array, facings: Pac
 		var dest := snap_move_goal_xz(_clamp_map_v2(Vector2(dests[k * 2], dests[k * 2 + 1])))
 		var facing: float = facings[k] if k < facings.size() else -999.0
 		var width: float = widths[k] if k < widths.size() else 0.0
-		# A click never rebuilds the grid: the anchor is re-fitted to the existing slots and
-		# the soldiers keep their neighbours. Only a drag (explicit width) re-ranks the block,
-		# which compacts it first so the preview grid and the marching grid are the same.
 		if width > 0.0:
+			# Drag: anchor = front-rank file 1 at dest (press); width = segment length to release.
 			_sim.repack_army(fc)
-			fc.fit_rows_to_width(fc.packed_count, width)
-		_sim.recentre_anchor(fc)
-		var line_dir := -999.0
-		if facing > -100.0:
-			line_dir = _Formation.line_direction_for_front(facing)
-		fc.issue_move(dest, line_dir, attack_move)
+			var line_dir: float = (facing - PI * 0.5) if facing > -100.0 else fc.direction
+			var line_end := dest + Vector2.from_angle(line_dir) * width
+			var layout: Dictionary = _GroupFormation.drag_layout(dest, line_end, fc.packed_count, fc.spacing)
+			fc.set_drag_layout(true, layout["front_span"], int(layout["cols"]))
+			fc.set_rows(layout["rows"])
+			fc.issue_move(dest, line_dir, attack_move)
+		else:
+			fc.end_drag_layout()
+			_sim.recentre_anchor(fc)
+			var line_dir := -999.0
+			if facing > -100.0:
+				line_dir = _Formation.line_direction_for_front(facing)
+			fc.issue_move(dest, line_dir, attack_move)
 		n += 1
 	return n
 
@@ -2539,9 +2534,8 @@ func _spawn_map_dragons() -> Array:
 	var dragon_data: Array = []
 	if not multiplayer.is_server():
 		return dragon_data
-	# Auto-test is player-vs-player; the S-map dragon sits on the path between
-	# Stables and Blacksmith and stalls combat past the 120s match cap.
-	if GameState.is_auto_test:
+	# Auto-test skips dragons by default (S-map dragon can stall the match cap); use CLI --dragons.
+	if GameState.is_auto_test and not GameState.spawn_map_dragons:
 		return dragon_data
 	var cfgs: Array = MapConfig.get_neutral_dragons()
 	if cfgs.is_empty():
@@ -3121,10 +3115,11 @@ func _check_match_timeout(delta: float) -> void:
 	if not GameState.is_auto_test:
 		return
 	_match_elapsed += delta
-	if _match_elapsed < MATCH_TIMEOUT_SECONDS:
+	var cap: float = GameState.match_timeout_seconds if GameState.match_timeout_seconds > 0.0 else MATCH_TIMEOUT_SECONDS
+	if _match_elapsed < cap:
 		return
 	game_over = true
-	print("TEST_GAME_OVER_TIMEOUT: match exceeded %.0f seconds, forcing game over" % MATCH_TIMEOUT_SECONDS)
+	print("TEST_GAME_OVER_TIMEOUT: match exceeded %.0f seconds, forcing game over" % cap)
 	# Pick whichever side has more non-routed armies as the winner; tie → draw.
 	var counts := {}
 	var names := {}
@@ -3293,14 +3288,11 @@ func _toggle_selection(army) -> void:
 
 func _refresh_selection_bar() -> void:
 	if _selection_bar != null:
-		_selection_bar.set_armies(selected_armies)
+		_selection_bar.set_roster(get_my_armies(), selected_armies)
 
-## Bar portrait clicked: plain click selects only that army, Shift + click toggles it.
-func _on_selection_bar_army_pressed(army, shift: bool) -> void:
-	if shift:
-		_toggle_selection(army)
-	else:
-		_set_selection([army])
+## Bar portrait clicked: toggle this army in the selection.
+func _on_selection_bar_army_pressed(army, _shift: bool) -> void:
+	_toggle_selection(army)
 
 func _get_selected_non_routed() -> Array:
 	var out := []
@@ -3457,13 +3449,15 @@ func _clear_formation_ghosts_3d():
 		for c in _ghost_root_3d.get_children():
 			c.visible = false
 
-## RMB drag: each selected army gets its own sub-segment of the drag line; the formation is
-## centred on the segment, as wide as the segment allows, facing away from the drag rear.
+## RMB drag: each army gets a sub-segment; dest = segment start (file 1), width = segment length.
 func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
-	var segs: Array = _GroupFormation.split_segments(line_start, line_end, sel.size())
+	var spacings: Array = []
+	for a in sel:
+		spacings.append(_GroupFormation.spacing_for(a.has_horse))
+	var segs: Array = _GroupFormation.split_segments(line_start, line_end, sel.size(), spacings)
 	var ids: Array = []
 	var dests := PackedFloat32Array()
 	var facings := PackedFloat32Array()
@@ -3471,12 +3465,11 @@ func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	var front := _GroupFormation.front_angle_for_segment(line_start, line_end)
 	for k in range(sel.size()):
 		var seg: Dictionary = segs[k]
-		var s: Vector2 = seg["start"]
+		var s: Vector2 = _clamp_map_v2(seg["start"])
 		var e: Vector2 = seg["end"]
-		var mid := _clamp_map_v2((s + e) * 0.5)
 		ids.append(sel[k].army_id)
-		dests.append(mid.x)
-		dests.append(mid.y)
+		dests.append(s.x)
+		dests.append(s.y)
 		facings.append(front)
 		widths.append(s.distance_to(e))
 	_show_click_marker((line_start + line_end) * 0.5)
@@ -3755,6 +3748,7 @@ func _client_spawn_armies_impl(data: Array, server_tick: int = -1):
 		_client_spawn_one_army(ad, "")
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
 	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [_alive_unit_count(), armies.size()])
+	_refresh_selection_bar()
 	_schedule_visibility_checks()
 	_notify_client_armies_ready()
 
@@ -3956,6 +3950,7 @@ func _client_spawn_drafted_army(army_data: Dictionary, server_tick: int = -1):
 	if army == null:
 		return
 	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s' (soldiers=%d)" % [army.army_id, army.soldier_count()])
+	_refresh_selection_bar()
 
 @rpc("authority", "reliable")
 func _client_army_routed(army_id: String):

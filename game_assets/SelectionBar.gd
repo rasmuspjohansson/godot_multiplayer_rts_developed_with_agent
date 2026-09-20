@@ -2,10 +2,10 @@ extends CanvasLayer
 ## Bottom command bar (Total War / Age of Empires style). One dark strip across the bottom
 ## of the screen with three blocks:
 ##   left   - order mode (Move / Attack / Attack-Move) and stance toggles for the selection
-##   centre - one portrait button per selected army (unit sprite, soldier count, stance)
+##   centre - one portrait per local army (gold border when selected)
 ##   right  - Show range toggle and a Draft button that pops the draft panel above the bar
-## World owns the selection model; the bar only mirrors `selected_armies` (see set_armies)
-## and reports clicks (army_pressed with the Shift state) so World can replace or toggle.
+## World owns the selection model; the bar lists all local armies (set_roster) and reports
+## portrait clicks (army_pressed) so World can toggle selection.
 
 signal order_mode_changed(mode: int)
 signal stance_pressed(stance: int)
@@ -26,6 +26,7 @@ const STANCE_LABELS := ["Aggressive", "Defensive", "Hold", "Passive"]
 const STANCE_GLYPHS := ["AGG", "DEF", "HLD", "PAS"]
 const BAR_COLOR := Color(0.0, 0.0, 0.0, 0.6)
 const SELECTED_BORDER := Color(0.95, 0.85, 0.35, 1.0)
+const UNSELECTED_BORDER := Color(0.35, 0.35, 0.38, 0.85)
 
 var _root: Control
 var _order_buttons: Array[Button] = []
@@ -37,7 +38,8 @@ var _hint: Label
 var _draft_button: Button
 var _draft_panel: PanelContainer
 var _show_range_cb: CheckBox
-var _armies: Array = []
+var _roster: Array = []
+var _selected: Array = []
 var sim = null
 
 func _ready() -> void:
@@ -81,7 +83,7 @@ func _ready() -> void:
 	row.add_child(_make_vsep())
 	row.add_child(_build_right_block())
 	_build_draft_panel()
-	set_armies([])
+	set_roster([], [])
 
 func _make_vsep() -> VSeparator:
 	var s := VSeparator.new()
@@ -130,12 +132,12 @@ func _build_orders_block() -> Control:
 		_stance_buttons.append(btn)
 	return box
 
-## Centre block: portraits of the selected armies, or a hint when nothing is selected.
+## Centre block: portraits of all local armies; click toggles selection.
 func _build_centre_block() -> Control:
 	var box := VBoxContainer.new()
 	box.name = "Selection"
 	box.add_theme_constant_override("separation", 4)
-	box.add_child(_section_label("SELECTED ARMIES   (click: select only  |  Shift+click: add / remove)"))
+	box.add_child(_section_label("YOUR ARMIES   (click portrait: add / remove from selection)"))
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -147,7 +149,7 @@ func _build_centre_block() -> Control:
 	_portraits.add_theme_constant_override("separation", 6)
 	scroll.add_child(_portraits)
 	_hint = Label.new()
-	_hint.text = "No army selected — left-click or drag a box over your soldiers."
+	_hint.text = "No armies — draft from capture points."
 	_hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_hint.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -214,19 +216,28 @@ func _set_orders_enabled(enabled: bool) -> void:
 	for b in _stance_buttons:
 		b.disabled = not enabled
 
-## Mirror the selection: one portrait per army, in selection order.
-func set_armies(armies: Array) -> void:
-	_armies = []
-	for a in armies:
+## All local armies in roster order; `selected` marks which portraits get the gold border.
+func set_roster(all_armies: Array, selected: Array) -> void:
+	_roster = []
+	for a in all_armies:
 		if a != null and is_instance_valid(a) and not a.is_routed:
-			_armies.append(a)
+			_roster.append(a)
+	_selected = []
+	for a in selected:
+		if a != null and is_instance_valid(a) and not a.is_routed:
+			_selected.append(a)
 	for c in _portraits.get_children():
 		if c != _hint:
 			c.queue_free()
-	_hint.visible = _armies.is_empty()
-	_set_orders_enabled(not _armies.is_empty())
-	for a in _armies:
-		_portraits.add_child(_make_portrait(a))
+	_hint.visible = _roster.is_empty()
+	var has_selection := false
+	for a in _selected:
+		if a in _roster:
+			has_selection = true
+			break
+	_set_orders_enabled(has_selection)
+	for a in _roster:
+		_portraits.add_child(_make_portrait(a, a in _selected))
 
 ## Cheap periodic refresh of counts / stance glyphs without rebuilding buttons.
 func refresh_counts() -> void:
@@ -242,13 +253,24 @@ func refresh_counts() -> void:
 		var stance_label: Label = c.get_node_or_null("Stance")
 		if stance_label != null:
 			stance_label.text = STANCE_GLYPHS[clampi(a.stance, 0, STANCE_GLYPHS.size() - 1)]
+		var plate: Panel = c.get_node_or_null("Plate")
+		if plate != null:
+			_apply_portrait_border(plate, a in _selected)
 
 func _alive_count(a) -> int:
 	if sim != null and a.fc != null:
 		return sim.army_alive_count(a.fc)
 	return a.soldier_count()
 
-func _make_portrait(a) -> Control:
+func _apply_portrait_border(plate: Panel, is_selected: bool) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.12, 0.12, 0.14, 0.9)
+	sb.border_color = SELECTED_BORDER if is_selected else UNSELECTED_BORDER
+	sb.set_border_width_all(2 if is_selected else 1)
+	sb.set_corner_radius_all(4)
+	plate.add_theme_stylebox_override("panel", sb)
+
+func _make_portrait(a, is_selected: bool) -> Control:
 	var btn := TextureButton.new()
 	btn.name = "Army_" + a.army_id
 	btn.custom_minimum_size = Vector2(PORTRAIT_PX, PORTRAIT_PX)
@@ -256,7 +278,7 @@ func _make_portrait(a) -> Control:
 	btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 	btn.texture_normal = _portrait_texture(a)
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.tooltip_text = "%s — %d soldiers\nClick: select only this army\nShift+click: remove from selection" % [a.army_id, _alive_count(a)]
+	btn.tooltip_text = "%s — %d soldiers\nClick: add / remove from selection" % [a.army_id, _alive_count(a)]
 	btn.set_meta("army", a)
 	var army = a
 	btn.gui_input.connect(func(ev: InputEvent):
@@ -264,18 +286,12 @@ func _make_portrait(a) -> Control:
 			army_pressed.emit(army, ev.shift_pressed)
 			btn.accept_event()
 	)
-	# Frame: dark plate behind the sprite, gold border marks it as part of the selection.
 	var plate := Panel.new()
 	plate.name = "Plate"
 	plate.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.show_behind_parent = true
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.12, 0.12, 0.14, 0.9)
-	sb.border_color = SELECTED_BORDER
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(4)
-	plate.add_theme_stylebox_override("panel", sb)
+	_apply_portrait_border(plate, is_selected)
 	btn.add_child(plate)
 	var count := Label.new()
 	count.name = "Count"

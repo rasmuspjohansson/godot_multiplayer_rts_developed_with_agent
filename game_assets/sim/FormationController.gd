@@ -72,6 +72,10 @@ var _offset_cache: Dictionary = {}
 var has_horse: bool = false
 var has_spear: bool = false
 var has_bow: bool = false
+## When true, slot grid is anchored at front-rank file 1 (RMB drag); see grid_offsets_leading.
+var leading_layout: bool = false
+var leading_front_span: float = 0.0
+var leading_cols: int = 1
 
 func default_rows_for(count: int) -> int:
 	return clampi(ceili(float(count) / 12.0), 2, 6)
@@ -97,6 +101,27 @@ static func grid_offsets(count: int, p_rows: int, p_spacing: float) -> PackedVec
 			idx += 1
 	return out
 
+## Local (0,0) = front rank file 1; +x along the drag; +y toward the rear. `front_span` is the
+## distance from first to last front-rank slot (drag segment length when cols > 1).
+static func grid_offsets_leading(count: int, p_cols: int, front_span: float, p_spacing: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if count <= 0:
+		return out
+	var c: int = maxi(1, p_cols)
+	var r: int = ceili(float(count) / float(c))
+	var idx := 0
+	for row in range(r):
+		for col in range(c):
+			if idx >= count:
+				break
+			var lx := 0.0
+			if c > 1:
+				lx = front_span * float(col) / float(c - 1)
+			var ly := float(row) * p_spacing
+			out.append(Vector2(lx, ly))
+			idx += 1
+	return out
+
 ## Rows needed so `count` soldiers at `p_spacing` fit inside `width`.
 static func rows_for_width(count: int, width: float, p_spacing: float) -> int:
 	var cols: int = maxi(1, int(floor(width / maxf(p_spacing, 0.01))) + 1)
@@ -104,11 +129,25 @@ static func rows_for_width(count: int, width: float, p_spacing: float) -> int:
 
 ## Slot offsets (local space, +x along the line, +y toward the rear) for `count` soldiers.
 func slot_offsets(count: int) -> PackedVector2Array:
-	if _offset_cache.has(count):
-		return _offset_cache[count]
-	var out := grid_offsets(count, rows, spacing)
-	_offset_cache[count] = out
+	var cache_key: String = str(count)
+	if leading_layout:
+		cache_key = "L_%d_%d_%d_%s" % [count, rows, leading_cols, leading_front_span]
+	if _offset_cache.has(cache_key):
+		return _offset_cache[cache_key]
+	var out: PackedVector2Array
+	if leading_layout:
+		out = grid_offsets_leading(count, leading_cols, leading_front_span, spacing)
+	else:
+		out = grid_offsets(count, rows, spacing)
+	_offset_cache[cache_key] = out
 	return out
+
+func set_drag_layout(active: bool, front_span: float = 0.0, cols: int = 1) -> void:
+	leading_layout = active
+	leading_front_span = maxf(0.0, front_span)
+	leading_cols = maxi(1, cols)
+	_offset_cache.clear()
+	slots_dirty = true
 
 func set_rows(r: int) -> void:
 	r = clampi(r, 1, 12)
@@ -142,6 +181,10 @@ func clear_order() -> void:
 	moving = false
 	path = PackedVector2Array()
 	path_i = 0
+
+func end_drag_layout() -> void:
+	if leading_layout:
+		set_drag_layout(false, 0.0)
 
 func set_stance(s: int) -> void:
 	stance = s

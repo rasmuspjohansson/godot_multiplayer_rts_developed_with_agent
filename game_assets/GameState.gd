@@ -26,6 +26,10 @@ var last_combat_time: float = -999.0
 var selected_map := ""
 ## CLI `--stress-units=N`: soldiers per player to spawn (0 = use map defaults).
 var stress_units_per_player: int = 0
+## Auto-test match cap (seconds). Default 120; overridden by CLI `--match-timeout=N`.
+var match_timeout_seconds: float = 120.0
+## CLI `--dragons`: spawn map dragons even during auto-test (default off for stable CI).
+var spawn_map_dragons: bool = false
 
 static func default_resources() -> Dictionary:
 	return STARTING_RESOURCES.duplicate()

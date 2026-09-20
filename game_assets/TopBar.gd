@@ -1,9 +1,13 @@
 extends CanvasLayer
 
 var label_left: Label = null
-var label_right: Label = null
+var _player_label: Label = null
+var _menu_button: Button = null
+var _settings_panel: PanelContainer = null
+var _settings_vbox: VBoxContainer = null
 
-func _ready():
+func _ready() -> void:
+	layer = 55
 	var bg = ColorRect.new()
 	bg.name = "TopBarBG"
 	bg.offset_left = 0
@@ -14,7 +18,6 @@ func _ready():
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bg.show_behind_parent = true
 	add_child(bg)
-	# bg is first so it stays behind the labels
 
 	label_left = Label.new()
 	label_left.name = "TopBarLabelLeft"
@@ -26,19 +29,61 @@ func _ready():
 	label_left.add_theme_color_override("font_color", Color.WHITE)
 	add_child(label_left)
 
-	label_right = Label.new()
-	label_right.name = "TopBarLabelRight"
-	label_right.offset_left = 950
-	label_right.offset_top = 5
-	label_right.offset_right = 1270
-	label_right.offset_bottom = 30
-	label_right.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	label_right.add_theme_font_size_override("font_size", 18)
-	label_right.add_theme_color_override("font_color", Color.WHITE)
-	add_child(label_right)
+	var right_box := HBoxContainer.new()
+	right_box.name = "TopBarRight"
+	right_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	right_box.offset_left = -320.0
+	right_box.offset_top = 4.0
+	right_box.offset_right = -10.0
+	right_box.offset_bottom = 32.0
+	right_box.add_theme_constant_override("separation", 12)
+	right_box.alignment = BoxContainer.ALIGNMENT_END
+	add_child(right_box)
+
+	_player_label = Label.new()
+	_player_label.name = "TopBarLabelRight"
+	_player_label.add_theme_font_size_override("font_size", 18)
+	_player_label.add_theme_color_override("font_color", Color.WHITE)
+	right_box.add_child(_player_label)
+
+	_menu_button = Button.new()
+	_menu_button.name = "MenuButton"
+	_menu_button.text = "Menu"
+	_menu_button.focus_mode = Control.FOCUS_NONE
+	_menu_button.pressed.connect(_on_menu_pressed)
+	right_box.add_child(_menu_button)
+
+	_settings_panel = PanelContainer.new()
+	_settings_panel.name = "SettingsPanel"
+	_settings_panel.visible = false
+	_settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_settings_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_settings_panel.offset_left = -320.0
+	_settings_panel.offset_top = 38.0
+	_settings_panel.offset_right = -10.0
+	_settings_panel.offset_bottom = 420.0
+	add_child(_settings_panel)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 8)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 8)
+	_settings_panel.add_child(margin)
+
+	_settings_vbox = VBoxContainer.new()
+	_settings_vbox.add_theme_constant_override("separation", 8)
+	margin.add_child(_settings_vbox)
 
 	label_left.move_to_front()
-	label_right.move_to_front()
+	right_box.move_to_front()
+
+func settings_vbox() -> VBoxContainer:
+	return _settings_vbox
+
+func _on_menu_pressed() -> void:
+	if _settings_panel != null:
+		_settings_panel.visible = not _settings_panel.visible
 
 func update_display(
 	stables_count: int,
@@ -57,6 +102,6 @@ func update_display(
 			"Stab:%d Blk:%d Vill:%d Arch:%d  H:%d S:%d B:%d V:%d"
 			% [stables_count, blacksmith_count, village_count, archery_count, horses, spears, bows, villagers]
 		)
-	if label_right:
-		label_right.text = "Player: %s" % player_name
-		label_right.add_theme_color_override("font_color", player_color)
+	if _player_label:
+		_player_label.text = "Player: %s" % player_name
+		_player_label.add_theme_color_override("font_color", player_color)

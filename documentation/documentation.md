@@ -296,11 +296,12 @@ Use **Debugger → session** and **Scene → Remote** in the editor to inspect a
 
 ## Army orders and stances
 
-Army-level control (select with LMB / marquee). Command bar appears when an army is selected.
+Army-level control (select with LMB / marquee, or click portraits on the bottom bar). The bar lists **all your armies**; click a portrait to toggle it in the selection (gold border = selected). Order/stance buttons apply to the current selection.
 
 | Control | Action |
 |---------|--------|
-| **Move** (default, `M`) | RMB on ground: move formation. RMB drag: line formation. |
+| **Bottom bar portraits** | Click: add/remove army from selection. |
+| **Move** (default, `M`) | RMB on ground: move formation. RMB drag: front rank from press (file 1) to release (last front file); depth behind. |
 | **Attack-Move** (`G`) | Same as Move but units engage enemies along the way. |
 | **Attack** (`A`) | LMB on enemy army or dragon: pursue and attack that target. |
 | **Aggressive / Defensive / Hold / Passive** | Stance buttons on command bar. Aggressive with no order auto-chases nearest enemy. |

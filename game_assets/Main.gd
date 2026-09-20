@@ -25,9 +25,12 @@ func _ready():
 	var args = OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
+	GameState.spawn_map_dragons = "--dragons" in args
 	for a in args:
 		if str(a).begins_with("--stress-units="):
 			GameState.stress_units_per_player = maxi(0, int(str(a).split("=")[1]))
+		elif str(a).begins_with("--match-timeout="):
+			GameState.match_timeout_seconds = maxf(0.0, float(str(a).split("=")[1]))
 	if GameState.selected_map == "":
 		GameState.selected_map = MapConfig.map_size
 
@@ -236,11 +239,17 @@ func _start_map_editor() -> void:
 	print("TEST_MAP_EDITOR_START: Map editor ready")
 
 func _load_lobby():
+	var vol := get_node_or_null("AudioUI/VolumePanel")
+	if vol:
+		vol.visible = true
 	var lobby = load("res://Lobby.tscn").instantiate()
 	$UI.add_child(lobby)
 
 func load_world():
 	_clear_scenes()
+	var vol := get_node_or_null("AudioUI/VolumePanel")
+	if vol:
+		vol.visible = false
 	var scene_path = "res://World.tscn"
 	#region agent log
 	GameState.agent_debug_log("H2", "Main.gd:load_world", "scene_path_selection", {
