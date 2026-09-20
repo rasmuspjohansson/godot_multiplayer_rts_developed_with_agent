@@ -163,6 +163,7 @@ func apply_snapshot(sim: RefCounted, snap: Dictionary) -> int:
 		if last_applied_tick[id] > tick:
 			continue
 		last_applied_tick[id] = tick
-		sim.reconcile(id, xs[k], zs[k], float(hp[k]) * 0.01, fl[k])
+		# The record is compared with the local position *at the same tick* (see UnitSim.reconcile).
+		sim.reconcile(id, xs[k], zs[k], float(hp[k]) * 0.01, fl[k], tick)
 		applied += 1
 	return applied

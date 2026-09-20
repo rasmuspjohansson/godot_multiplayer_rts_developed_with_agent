@@ -225,7 +225,7 @@ grep "TEST_" logs/server.log logs/client_A.log logs/client_B.log
 
 - Dedicated **headless** server (authoritative for combat, deaths, routs, capture points, resources and the aggressive-seek logic) and two **3D** clients on port 8910.
 - **Data-oriented unit simulation** (`game_assets/sim/`): units are integer ids into `PackedFloat32Array`/`PackedByteArray` columns in `UnitSim.gd`; there are no unit nodes, no `CharacterBody3D` and no physics bodies for units anywhere. The sim runs at a fixed **20 Hz** on server and clients from an accumulator in `World._physics_process`.
-- **Formation-level orders**: a `FormationController` per army owns the order, one A* path per order and an anchor that advances along it; soldiers steer to slots (anchor + rotated offset). Orders are tiny reliable RPCs; the server validates, stamps and echoes them to every client, which then runs the same movement sim locally.
+- **Formation-level orders**: a `FormationController` per army owns the order, one A* path per order and an anchor that advances along it; soldiers steer to fixed slots (`slot_index`, anchor + rotated offset). Spacing is rigid while marching (slots every tick, anchor-speed in-rank movement, cohesion crawl when stragglers exceed 25 %). Orders are tick-scheduled reliable RPCs; server and clients apply them at the same `exec_tick` and run the same movement sim locally.
 - **Snapshots are corrections, not movement**: the server sends packed 8-byte unit records (`NetSync.gd`) on `unreliable_ordered`, prioritising units that changed; clients blend small errors and snap only on real desync.
 - **GPU instancing**: clients draw all units with one `MultiMeshInstance3D` per (team colour, unit type) (`UnitRenderer.gd` + `shaders/unit_billboard.gdshader`); the shader does billboarding, spritesheet frame selection, flip, selection tint and interpolation between sim ticks. Audio is a 16-player pool parked at army clusters (`UnitAudio.gd`).
 - Map sizes S/L/XL (`maps/map_*.json`); terrain height is a bilinear grid lookup (`_terrain_grid_height_at`), never a per-unit raycast. 3D camera pitches from bird's-eye to near-horizontal as you zoom in.
@@ -507,27 +507,47 @@ Client                                 Server                              Other
 
 ---
 
-## Orders (client -> server -> everyone)
+## Orders (client -> server -> tick-scheduled on everyone)
 
 All orders are **formation level**: they carry army ids, not unit goals. Sizes are a few dozen
 bytes regardless of army size, and the client does **no** pathfinding work before sending.
 
-| RPC (client -> server) | Payload | Server does | Echo to all clients |
+| RPC (client -> server) | Payload | Server does | Broadcast |
 |---|---|---|---|
-| `_server_order_move(army_ids, dests, facings, widths, attack_move)` | `Array` of ids + `PackedFloat32Array`s | ownership check, clamp to map, `FormationController.issue_move` per army | `_client_order_move(seq, tick, ...)` |
-| `_server_move_army(aid, target)` (MockPlayer / legacy) | id + Vector2 | same as above for one army | `_client_order_move` |
-| `_server_armies_order_attack(army_ids, target_army_id, target_unit)` | ids | `issue_attack_army/unit` | `_client_order_attack(seq, tick, ...)` |
-| `_server_armies_order_attack_move(army_ids, dest_x, dest_y)` | ids + 2 floats | attack-move | `_client_order_move(..., attack_move=true)` |
-| `_server_armies_set_stance(army_ids, stance)` | ids + int | `set_stance` | `_client_sync_army_stance` |
-| `_server_rotate_army(aid, delta_angle)` | id + float | rotate formation | `_client_rotate_army(aid, new_line_dir)` |
-| `_server_set_all_armies_aggressive()` | none | stance for all of the sender's armies | `_client_sync_army_stance` |
-| `request_draft_army(use_horse, use_spear, use_bow, soldier_count)` | 3 bools + int | resources, `_create_army` | `_client_spawn_drafted_army` |
+| `_server_order_move(army_ids, dests, facings, widths, attack_move)` | ids + `PackedFloat32Array`s | ownership check, schedule at `exec_tick` | `_client_order(seq, exec, MOVE, …)` |
+| `_server_move_army(aid, target)` (MockPlayer / legacy) | id + Vector2 | same for one army | `_client_order` |
+| `_server_armies_order_attack(…)` | ids + target | schedule ATTACK | `_client_order` |
+| `_server_armies_order_attack_move(…)` | ids + point | schedule MOVE with `attack_move` | `_client_order` |
+| `_server_armies_set_stance(…)` | ids + int | schedule STANCE | `_client_order` |
+| `_server_rotate_army(aid, delta)` | id + float | schedule ROTATE | `_client_order` |
+| `_server_set_all_armies_aggressive()` | none | STANCE for sender's armies | `_client_order` |
+| `request_draft_army(…)` | equipment + count | resources, `_create_army` | `_client_spawn_drafted_army` |
 
-`seq` is a per-server monotonically increasing order counter (`_order_seq`) so a client can
-detect reordering; clients apply orders **on echo** (one round trip, the standard RTS model) and
-show an immediate local click marker for perceived responsiveness. Both sides then run
-`FormationController` + `UnitSim` from the same order, so the client's units start walking the
-same path the server's do. A move order is never re-sent per soldier: A* runs once per army.
+**Scheduling.** The server does not apply a player order when the RPC lands. It enqueues
+`exec_tick = sim.tick + ORDER_DELAY` (minimum 4 ticks, raised from the slowest peer's RTT) and
+sends `(seq, exec_tick, kind, payload)` reliably to every peer. Both sides pop due orders in
+`_run_due_orders()` immediately before `_sim.step()` for that tick, so the order hits identical
+sim state on server and clients (same anchor recentre, same A* path, same movement).
+
+**Anchor confirmation.** After the server applies a MOVE at `exec_tick` it sends
+`_client_order_applied(seq, [aid, anchor_x, anchor_z, …])`. If a client's anchor differs by
+more than `ANCHOR_CONFIRM_TOLERANCE` (2 units) it adopts the server's anchor and replays elapsed
+time via `FormationController.repath_from`.
+
+**Army sync.** Every 10 ticks the server sends each army's anchor, dest, moving and
+`paused_for_contact` (`_client_army_sync`, unreliable). Clients fold this through
+`FormationController.sync_from_server` (anchor blended via `anchor_corr`) so combat-driven
+discrete decisions (contact pause, attack re-path, arrival) stay server-owned without slot drift.
+
+**Match start.** Armies spawn idle; the server waits for every client to report World ready, sends
+the spawn payload, then waits for every client to report armies built (`_client_match_barrier`).
+While that barrier is up the server sim is paused, the client sim and clock are frozen, and
+player move/attack RPCs are deferred until the opening spawn march is scheduled so test/player
+orders cannot overwrite it at the same exec tick. Then `_client_clock_reseed`, a full snapshot,
+and the spawn march as a normal scheduled order.
+
+`seq` is a per-server monotonically increasing counter. A move order is never re-sent per
+soldier: A* runs once per army.
 
 ---
 
@@ -553,10 +573,17 @@ almost nothing.
 
 **Reconciliation (client).** For each record: drop it if `last_applied_tick[id]` is newer;
 otherwise `UnitSim.reconcile` sets hp from the percentage, kills the unit if the server says
-dead, and corrects the position: error < 2 units is ignored, < 60 units is blended (35 % of the
-remaining error per tick, so ~0.25 s), larger errors snap. **A snapshot never triggers a repath**;
-paths come from orders. Hard snaps are counted (`TEST_SIM_CLIENT snaps=`) and must stay 0 in
-tests: they were the old "teleport A -> B -> A" symptom.
+dead, and corrects the position against the **historical** position at the snapshot tick when
+known (ring buffer `HIST_TICKS`), so latency does not pull soldiers backwards. Error &lt; 2 units
+is ignored (widened if the snapshot tick is ahead of the local tick), &lt; 60 units is blended
+direction-safely (35 % per tick; components opposing the soldier's steering or the army heading
+are dropped), larger errors snap. **A snapshot never triggers a repath**; paths come from orders.
+Hard snaps are counted (`TEST_SIM_CLIENT snaps=`) and must stay 0 in tests.
+
+**Client clock.** After spawn, the client sim tick is slaved to the server via snapshot ticks and
+periodic `_client_tick_sync`. `_step_sim_slaved` steps until `sim.tick == target_tick` with a
+per-frame wall-time budget; backlog beyond `SIM_RESYNC_TICKS` fast-forwards once
+(`TEST_SIM_RESYNC`). `TEST_SIM_CLIENT` reports `tick_drift`, `corr`, and `late_orders`.
 
 **Bandwidth.** 2040 units on XL with every army parked: ~1 KB/s. Everything marching or
 fighting: the budget caps at 450 records/tick = 3.6 KB/tick = **~72 KB/s per client** worst case;
@@ -669,12 +696,13 @@ Reference: `Main.gd` PORT (line 3), `create_client("localhost", PORT)` (line 70)
 
 ## Phase D: Movement sync (implement last)
 
-- [x] **D1 – "You are HERE, on your way to THERE"** (superseded)  
-  The first version sent per-unit HERE/THERE pairs round-robin. It was replaced by the
-  order-echo + packed-snapshot model described in *Network activity*: clients run the same
-  20 Hz `UnitSim` from echoed formation orders and only receive 8-byte corrections with a sim
-  tick, which removed the teleport-back and walking-in-place symptoms of the old scheme.  
-  **Verification:** Events 1 and 2, `TEST_SIM_CLIENT snaps=0 walk_in_place=0`, `./run_stress.sh`.
+- [x] **D1 – Tick-scheduled orders + slaved client clock**  
+  Formation orders execute at the same `exec_tick` on server and clients; anchor confirmation,
+  army sync, direction-safe snapshot blend, and a start barrier (server pause + client freeze
+  until units are built) keep march and combat from diverging. Fixed slot indices and rigid
+  march (anchor-speed slots, cohesion crawl) keep formation pitch stable.  
+  **Verification:** `test_move_sync.gd`, `test_sim_determinism.gd`, `test_formation_rigidity.gd`,
+  events 1 and 2, `TEST_SIM_CLIENT` (`tick_drift`, `corr`, `late_orders`, `snaps=0`), `./run_stress.sh`.
 
 
 ---

@@ -104,6 +104,26 @@
       "implementation": "! grep 'TEST_SIM_CLIENT' ../logs/client_A.log ../logs/client_B.log | grep -qv 'walk_in_place=0 '"
     },
     {
+      "description_of_test": "Client sim clock stays slaved to the server (TEST_SIM_CLIENT tick_drift= must be <= 2 ticks in every report; larger drift means orders execute on different ticks on server and client)",
+      "implementation": "! grep -h 'TEST_SIM_CLIENT' ../logs/client_A.log ../logs/client_B.log | grep -oE 'tick_drift=[0-9]+' | grep -qvE 'tick_drift=[012]$'"
+    },
+    {
+      "description_of_test": "Scheduled orders never arrive after their execution tick (TEST_SIM_CLIENT late_orders= must stay 0; the order delay is derived from the slowest peer's RTT)",
+      "implementation": "! grep 'TEST_SIM_CLIENT' ../logs/client_A.log ../logs/client_B.log | grep -qv 'late_orders=0 '"
+    },
+    {
+      "description_of_test": "Marching is prediction-exact: no medium snapshot corrections (corr=) on either client before the armies are set aggressive; corrections during melee reflect server-owned combat, not movement drift",
+      "implementation": "for f in ../logs/client_A.log ../logs/client_B.log; do awk '/TEST_A_AGGRESSIVE|TEST_B_AGGRESSIVE/{exit} /TEST_SIM_CLIENT/{n++; if(n>1 && !/corr=0 /) bad=1} END{exit bad+0}' \"$f\" || exit 1; done"
+    },
+    {
+      "description_of_test": "Sim determinism (headless): two UnitSims with 2000 soldiers fed identical scheduled orders for 600 ticks of marching and melee end bitwise-equal in positions, hp, flags, targets and army state",
+      "implementation": "godot --headless --path . -s test_sim_determinism.gd 2>&1 | grep -q 'TEST_SIM_DETERMINISM_OK'"
+    },
+    {
+      "description_of_test": "Formation rigidity (headless): a 50-man block ordered 400 units away forms up and then marches with every rank neighbour within 15% of the pitch, no stragglers, unchanged slot indices and an anchor that never crawls",
+      "implementation": "godot --headless --path . -s test_formation_rigidity.gd 2>&1 | grep -q 'TEST_FORMATION_RIGIDITY_OK'"
+    },
+    {
       "description_of_test": "SpatialHash: counting-sort grid radius/nearest queries match brute force on 3000 random points, and a 2000-unit rebuild + queries stay within budget",
       "implementation": "godot --headless --path . -s test_spatial_hash.gd 2>&1 | grep -q 'TEST_SPATIAL_HASH_OK'"
     },
@@ -112,8 +132,8 @@
       "implementation": "godot --headless --path . -s test_unit_sim.gd 2>&1 | grep -q 'TEST_UNIT_SIM_OK'"
     },
     {
-      "description_of_test": "Move must not rubber-band: lockstep prediction stays quiet, and a client pulled 10 units ahead by snapshots must not reverse step direction more than 4 times in 2 seconds",
-      "implementation": "godot --headless --path . -s test_facing_oscillation.gd 2>&1 | grep -q 'TEST_MOVE_OSCILLATION_OK'"
+      "description_of_test": "Move sync (headless, two UnitSims on the scheduled-order pipeline): lockstep stays bitwise equal; a client applying the order 2 ticks late and a client army knocked 10 units off (behind and ahead of the server) reconverge through anchor confirmation, army sync and direction-safe snapshot blends without a single backward step, step reversal or hard snap",
+      "implementation": "godot --headless --path . -s test_move_sync.gd 2>&1 | grep -q 'TEST_MOVE_SYNC_OK'"
     },
     {
       "description_of_test": "Live clients never log TEST_MOVE_OSCILLATION_FAIL (any unit reversed step direction more than 4 times in 2 seconds)",

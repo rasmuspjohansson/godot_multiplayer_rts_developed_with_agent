@@ -9,9 +9,14 @@ enum OrderType { NONE, MOVE, ATTACK, ATTACK_MOVE }
 const FOOT_SPACING := 10.0
 const MOUNTED_SPACING := 15.0
 const ROUT_THRESHOLD := 0.3
-## Anchor speed relative to the slowest soldier; soldiers catch up at CATCH_UP_SPEED.
-const ANCHOR_SPEED_SCALE := 0.9
+## Anchor moves at the real speed of the slowest soldier: a soldier standing in its slot
+## follows the block exactly; soldiers behind their slot catch up at up to CATCH_UP_SPEED.
+const ANCHOR_SPEED_SCALE := 1.0
 const CATCH_UP_SPEED := 1.35
+## Cohesion: while more than this fraction of soldiers is farther than UnitSim.CATCH_UP_DIST
+## from their slot the anchor crawls at COHESION_CRAWL_SPEED so the block never stretches.
+const COHESION_STRAGGLER_FRACTION := 0.25
+const COHESION_CRAWL_SPEED := 0.25
 ## Anchor slows to a press while this fraction of soldiers is fighting (formation holds the line).
 const CONTACT_PAUSE_FRACTION := 0.35
 const CONTACT_RESUME_FRACTION := 0.15
@@ -29,6 +34,12 @@ var owner_pid: int = 0
 var owner_name: String = ""
 var is_npc: bool = false
 var members: PackedInt32Array = PackedInt32Array()
+## Fixed grid slot per member (parallel to `members`). Assigned at spawn and only rewritten
+## by a scheduled repack while the army is idle, so deaths leave a gap instead of shuffling
+## every soldier one slot over mid-march.
+var slot_index: PackedInt32Array = PackedInt32Array()
+## Server: a repack has been scheduled and not yet applied (avoid scheduling twice).
+var repack_pending: bool = false
 var initial_count: int = 0
 var is_routed: bool = false
 
@@ -45,6 +56,9 @@ var order_target_unit: int = -1
 var hold_position: Vector2 = Vector2.ZERO
 
 var anchor: Vector2 = Vector2.ZERO
+## Client only: pending anchor correction from the server's army sync, blended in over a few
+## ticks by UnitSim._step_formations so slots glide instead of jumping. Always zero on the server.
+var anchor_corr: Vector2 = Vector2.ZERO
 var dest: Vector2 = Vector2.ZERO
 var path: PackedVector2Array = PackedVector2Array()
 var path_i: int = 0
@@ -62,24 +76,37 @@ var has_bow: bool = false
 func default_rows_for(count: int) -> int:
 	return clampi(ceili(float(count) / 12.0), 2, 6)
 
+## Grid of `count` slots in `p_rows` ranks at `p_spacing` pitch, centred on the origin
+## (local space, +x along the line, +y toward the rear). Shared by the sim and the drag
+## preview so what the player sees is exactly the grid the soldiers will occupy.
+static func grid_offsets(count: int, p_rows: int, p_spacing: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if count <= 0:
+		return out
+	var r: int = maxi(1, p_rows)
+	var c: int = maxi(1, ceili(float(count) / float(r)))
+	var idx := 0
+	for row in range(r):
+		for col in range(c):
+			if idx >= count:
+				break
+			out.append(Vector2(
+				(float(col) - float(c - 1) * 0.5) * p_spacing,
+				(float(row) - float(r - 1) * 0.5) * p_spacing
+			))
+			idx += 1
+	return out
+
+## Rows needed so `count` soldiers at `p_spacing` fit inside `width`.
+static func rows_for_width(count: int, width: float, p_spacing: float) -> int:
+	var cols: int = maxi(1, int(floor(width / maxf(p_spacing, 0.01))) + 1)
+	return clampi(ceili(float(maxi(count, 1)) / float(cols)), 1, 12)
+
 ## Slot offsets (local space, +x along the line, +y toward the rear) for `count` soldiers.
 func slot_offsets(count: int) -> PackedVector2Array:
 	if _offset_cache.has(count):
 		return _offset_cache[count]
-	var out := PackedVector2Array()
-	if count > 0:
-		var r: int = maxi(1, rows)
-		var c: int = maxi(1, ceili(float(count) / float(r)))
-		var idx := 0
-		for row in range(r):
-			for col in range(c):
-				if idx >= count:
-					break
-				out.append(Vector2(
-					(float(col) - float(c - 1) * 0.5) * spacing,
-					(float(row) - float(r - 1) * 0.5) * spacing
-				))
-				idx += 1
+	var out := grid_offsets(count, rows, spacing)
 	_offset_cache[count] = out
 	return out
 
@@ -178,14 +205,69 @@ func front_angle() -> float:
 
 ## Choose the number of rows so the line is at most `width` wide.
 func fit_rows_to_width(count: int, width: float) -> void:
-	var cols: int = maxi(1, int(floor(width / maxf(spacing, 0.01))) + 1)
-	set_rows(clampi(ceili(float(maxi(count, 1)) / float(cols)), 1, 12))
+	set_rows(rows_for_width(count, width, spacing))
+
+## Client: fold the server's periodic army state in. Combat (damage, deaths, target choice)
+## is server-owned, so the discrete decisions that hang off it — contact pause, attack
+## re-path, arrival — are adopted from the server; the anchor position itself is blended
+## through `anchor_corr`. Returns true if anything was corrected.
+func sync_from_server(srv_anchor: Vector2, srv_dest: Vector2, srv_moving: bool, srv_paused: bool, tolerance: float) -> bool:
+	if is_routed:
+		return false
+	var changed := false
+	var same_dest := srv_dest.distance_to(dest) <= tolerance
+	if srv_moving and not moving and same_dest and anchor.distance_to(dest) <= tolerance:
+		# Parked at the destination the server is still marching to: it will arrive here, so
+		# wait instead of being pulled back toward its anchor (that walk-back is the classic
+		# rubber-band). Only the pause flag is worth mirroring.
+		if srv_paused != paused_for_contact:
+			paused_for_contact = srv_paused
+			changed = true
+		return changed
+	var da := srv_anchor - (anchor + anchor_corr)
+	if da.length() > tolerance:
+		anchor_corr += da
+		changed = true
+	if srv_moving:
+		if not moving or not same_dest:
+			# Server is (still) marching toward srv_dest: follow the same destination.
+			var keep_type := order_type
+			_start_path_to(srv_dest, direction)
+			order_type = keep_type
+			changed = true
+	elif moving:
+		# Server has arrived / stopped: stop here as well (MOVE completes like advance_anchor).
+		moving = false
+		path_i = path.size()
+		if order_type == OrderType.MOVE:
+			order_type = OrderType.NONE
+		changed = true
+	if srv_paused != paused_for_contact:
+		paused_for_contact = srv_paused
+		changed = true
+	if changed:
+		slots_dirty = true
+	return changed
+
+## Anchor confirmation: adopt the server's anchor for the current move and rebuild the path
+## to the same destination with the same facing. `elapsed` seconds are replayed so the
+## anchor lands where the server's is *now*, never behind the soldiers.
+func repath_from(new_anchor: Vector2, elapsed: float) -> void:
+	anchor = new_anchor
+	if order_type != OrderType.MOVE and order_type != OrderType.ATTACK_MOVE:
+		slots_dirty = true
+		return
+	_start_path_to(dest, direction)
+	if elapsed > 0.0:
+		advance_anchor(elapsed, 0.0)
+	slots_dirty = true
 
 ## Advance the anchor one tick along the path. Returns true if the anchor moved.
-func advance_anchor(dt: float, contact_fraction: float) -> bool:
+## `cohesion_scale` < 1 slows the block while too many soldiers are straggling.
+func advance_anchor(dt: float, contact_fraction: float, cohesion_scale: float = 1.0) -> bool:
 	if not moving:
 		return false
-	var budget := anchor_speed * dt
+	var budget := anchor_speed * dt * cohesion_scale
 	if paused_for_contact:
 		if contact_fraction < CONTACT_RESUME_FRACTION:
 			paused_for_contact = false

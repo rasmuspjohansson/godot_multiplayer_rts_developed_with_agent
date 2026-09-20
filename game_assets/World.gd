@@ -4,7 +4,7 @@ extends Node3D
 const _Army3D = preload("res://Army3D.gd")
 const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
-const _ArmyCommandBar = preload("res://ArmyCommandBar.gd")
+const _SelectionBar = preload("res://SelectionBar.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
 ## Data-oriented simulation core (see documentation.md "Architecture").
 const _UnitSim = preload("res://sim/UnitSim.gd")
@@ -125,8 +125,9 @@ var _dragon_ai_timer: float = 0.0
 const DRAGON_AI_TICK := 0.5
 var capture_points: Array = []
 var top_bar = null
-var draft_menu = null
-var _army_command_bar: Control = null
+## Bottom SelectionBar (clients only): order mode, stance, selected-army portraits, tools.
+var _selection_bar = null
+var _selection_bar_refresh_t := 0.0
 var game_over := false
 var selected_armies: Array = []
 var _marquee_start_screen: Vector2 = Vector2.ZERO
@@ -142,11 +143,12 @@ var _ghost_marker_mat: StandardMaterial3D
 var _ghost_marker_invalid_mat: StandardMaterial3D
 var _move_goal_markers_3d: Node3D
 var _move_goal_slot_mat: StandardMaterial3D
-var _move_goal_ring_mesh: ArrayMesh
+var _move_goal_dot_mesh: Mesh
+const MOVE_GOAL_DOT_RADIUS := 1.2
+const MOVE_GOAL_DOT_LIFT := 0.08
 var _pending_client_orders: Array = []
 var _move_osc_logged := false
 var _show_unit_range: bool = false
-var _show_range_cb: CheckBox = null
 var _draft_size_spin: SpinBox = null
 var _range_markers_3d: Node3D
 var _sun_azimuth_deg: float = 275.0
@@ -487,10 +489,9 @@ func _ready():
 		_setup_selection_overlay()
 		_setup_background_music()
 	_setup_topbar()
-	_setup_draft_menu()
 	_setup_lighting_tuning_panel()
 	if not multiplayer.is_server():
-		_setup_army_command_bar()
+		_setup_selection_bar()
 	_add_play_boundary_line()
 	_setup_perf_monitor()
 	call_deferred("_agent_debug_log_world_ready")
@@ -508,21 +509,29 @@ func _setup_perf_monitor() -> void:
 	_perf_monitor.set_extra_stats_callback(_sim_health_stats)
 	add_child(_perf_monitor)
 
-## Anti-regression counters for the two old bugs: hard position snaps (A->B->A teleports) and
-## units animated as walking without displacement. Reset after every report.
+## Anti-regression counters: hard position snaps (A->B->A teleports), units animated as
+## walking without displacement, client tick drift against the server clock, medium
+## (blended) corrections and orders that arrived after their execution tick. Reset after
+## every report; see tests.json for the asserted bounds.
 func _sim_health_stats() -> String:
 	if _sim == null:
 		return ""
-	var s := "snaps=%d walk_in_place=%d" % [_sim.snap_count, _sim.walk_in_place_count]
+	var s := "snaps=%d walk_in_place=%d tick_drift=%d corr=%d late_orders=%d" % [
+		_sim.snap_count, _sim.walk_in_place_count, absi(_tick_drift), _sim.corr_count, _late_orders
+	]
 	if not multiplayer.is_server():
-		print("TEST_SIM_CLIENT %s units=%d" % [s, _sim.alive_count])
+		print("TEST_SIM_CLIENT %s army_corr=%d repaths=%d units=%d" % [s, _army_sync_corrections, _anchor_repaths, _sim.alive_count])
 		if _sim.move_oscillation and not _move_osc_logged:
 			_move_osc_logged = true
-			print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s" % [
-				_sim.move_oscillation_id, _sim.move_oscillation_count
+			print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s %s" % [
+				_sim.move_oscillation_id, _sim.move_oscillation_count, _sim.move_oscillation_info
 			])
+	_army_sync_corrections = 0
 	_sim.snap_count = 0
 	_sim.walk_in_place_count = 0
+	_sim.corr_count = 0
+	_late_orders = 0
+	_anchor_repaths = 0
 	return s
 
 func _alive_unit_count() -> int:
@@ -556,26 +565,121 @@ func _setup_sim() -> void:
 		_unit_audio.ground_height_fn = get_ground_height_at
 		add_child(_unit_audio)
 
-## Fixed-step sim driven from _physics_process on both peers.
+## ---------------------------------------------------------------------------------------------
+## Shared tick. The server is the tick master and runs a plain fixed-step accumulator. A
+## client slaves its sim tick to the server's: the spawn payload seeds the tick, every
+## snapshot header / _client_tick_sync refines a wall-clock -> server-tick offset, and the
+## client steps until its sim reaches the estimated server tick (wall-time budgeted per
+## frame, never dropping time). Orders carry the tick they execute on, so both sims apply
+## them to identical state.
+## ---------------------------------------------------------------------------------------------
+
+## Max sim steps per physics frame on the server before the remainder is carried over.
+const SERVER_MAX_STEPS_PER_FRAME := 8
+## Client catch-up budget per physics frame (ms); leftover ticks are run next frame.
+const CLIENT_STEP_BUDGET_MS := 12.0
+## Backlog beyond which a client fast-forwards its tick instead of simulating every step.
+const SIM_RESYNC_TICKS := 20
+## Server sends _client_tick_sync every this many ticks (snapshots carry the tick as well).
+const TICK_SYNC_PERIOD := 10
+
+var _clock_offset_ticks: float = 0.0
+var _clock_synced := false
+var _tick_drift := 0
+var _late_orders := 0
+var _anchor_repaths := 0
+## Client: sim and clock frozen from spawn payload until _client_clock_reseed (server start
+## barrier while units/meshes are built). Stepping or accepting tick_sync during this window
+## is what produced TEST_SIM_RESYNC and late_orders at match start under stress.
+var _client_match_barrier := false
+
+func _local_wall_ticks() -> float:
+	return float(Time.get_ticks_usec()) / (_UnitSim.SIM_DT * 1000000.0)
+
+func _half_rtt_ticks() -> float:
+	var mp = multiplayer.multiplayer_peer
+	if mp is ENetMultiplayerPeer and _multiplayer_active():
+		var p = mp.get_peer(1)
+		if p != null:
+			return float(p.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)) * 0.5 / (_UnitSim.SIM_DT * 1000.0)
+	return 0.0
+
+## Client: fold a server tick observation into the clock estimate. `hard` re-seeds it.
+func _note_server_tick(server_tick: int, hard: bool = false) -> void:
+	if multiplayer.is_server():
+		return
+	var est := float(server_tick) + _half_rtt_ticks() - _local_wall_ticks()
+	if hard or not _clock_synced:
+		_clock_offset_ticks = est
+		_clock_synced = true
+		return
+	# Packets that were delayed in flight only look "older" (lower estimate); follow those
+	# slowly, follow fresher ones faster so the estimate hugs the true clock.
+	_clock_offset_ticks = lerpf(_clock_offset_ticks, est, 0.3 if est > _clock_offset_ticks else 0.05)
+
+func _client_target_tick() -> int:
+	return int(floor(_local_wall_ticks() + _clock_offset_ticks))
+
+@rpc("authority", "unreliable")
+func _client_tick_sync(server_tick: int) -> void:
+	if _client_match_barrier:
+		return
+	_note_server_tick(server_tick)
+
 func _step_sim(delta: float) -> void:
 	if _sim == null:
 		return
+	if not multiplayer.is_server() and _client_match_barrier:
+		return
+	if multiplayer.is_server() or not _clock_synced:
+		_step_sim_fixed(delta)
+	else:
+		_step_sim_slaved()
+
+## Server (and clients with no server clock yet, e.g. headless tests): fixed accumulator,
+## remainder always carried, backlog capped so a long stall cannot spiral.
+func _step_sim_fixed(delta: float) -> void:
 	_sim_accum += delta
 	var steps := 0
-	while _sim_accum >= _UnitSim.SIM_DT and steps < 4:
+	while _sim_accum >= _UnitSim.SIM_DT and steps < SERVER_MAX_STEPS_PER_FRAME:
 		_sim_accum -= _UnitSim.SIM_DT
-		var t0 := Time.get_ticks_usec()
-		_sim.step(_UnitSim.SIM_DT)
-		if _perf_monitor != null:
-			_perf_monitor.record_sim_step_ms(float(Time.get_ticks_usec() - t0) / 1000.0)
-		_after_sim_tick()
+		_run_one_tick()
 		steps += 1
-	if _sim_accum > _UnitSim.SIM_DT * 4.0:
-		_sim_accum = 0.0
+	var cap := _UnitSim.SIM_DT * float(SIM_RESYNC_TICKS)
+	if _sim_accum > cap:
+		_sim_accum = cap
+
+## Client: step until the sim tick reaches the estimated server tick.
+func _step_sim_slaved() -> void:
+	var target := _client_target_tick()
+	var backlog: int = target - _sim.tick
+	if backlog > SIM_RESYNC_TICKS:
+		print("TEST_SIM_RESYNC: backlog=%d ticks, fast-forwarding sim tick %d -> %d" % [backlog, _sim.tick, target - 1])
+		_sim.time += float(target - 1 - _sim.tick) * _UnitSim.SIM_DT
+		_sim.tick = target - 1
+		_run_due_orders()
+	var t_start := Time.get_ticks_usec()
+	var budget_usec := int(CLIENT_STEP_BUDGET_MS * 1000.0)
+	while _sim.tick < target:
+		_run_one_tick()
+		if Time.get_ticks_usec() - t_start > budget_usec:
+			break
+	_tick_drift = target - _sim.tick
+
+func _run_one_tick() -> void:
+	_run_due_orders()
+	var t0 := Time.get_ticks_usec()
+	_sim.step(_UnitSim.SIM_DT)
+	if _perf_monitor != null:
+		_perf_monitor.record_sim_step_ms(float(Time.get_ticks_usec() - t0) / 1000.0)
+	_after_sim_tick()
+
+var _last_combat_sim_time: float = -999.0
 
 func _after_sim_tick() -> void:
 	if _sim.combat_hits > 0:
 		GameState.last_combat_time = Time.get_ticks_msec() / 1000.0
+		_last_combat_sim_time = _sim.time
 	if multiplayer.is_server():
 		_server_after_tick()
 	else:
@@ -1422,6 +1526,10 @@ func _process(delta: float):
 		_update_move_goal_markers_3d()
 		_update_unit_range_markers_3d()
 		_update_click_marker(delta)
+		_selection_bar_refresh_t += delta
+		if _selection_bar_refresh_t >= 0.5 and _selection_bar != null:
+			_selection_bar_refresh_t = 0.0
+			_selection_bar.refresh_counts()
 	if _camera_pivot == null:
 		return
 	if multiplayer.is_server():
@@ -1461,7 +1569,9 @@ func _preview_camera_process(delta: float) -> void:
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 	_update_camera_position(delta)
 
-## Move-goal markers: one range-style ring per soldier slot at the local player's final dest.
+## Move-goal markers: one small flat dot per soldier slot at the local player's final dest.
+## The dot sits on the exact terrain triangle (see _terrain_grid_height_at) with depth
+## testing on, so it reads as painted on the ground rather than floating.
 func _update_move_goal_markers_3d():
 	if _move_goal_markers_3d == null:
 		_move_goal_markers_3d = Node3D.new()
@@ -1469,13 +1579,13 @@ func _update_move_goal_markers_3d():
 		add_child(_move_goal_markers_3d)
 	if _move_goal_slot_mat == null:
 		_move_goal_slot_mat = StandardMaterial3D.new()
-		_move_goal_slot_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.4)
+		_move_goal_slot_mat.albedo_color = Color(0.35, 0.85, 0.45, 0.85)
 		_move_goal_slot_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		_move_goal_slot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_move_goal_slot_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		_move_goal_slot_mat.no_depth_test = true
-	if _move_goal_ring_mesh == null:
-		_move_goal_ring_mesh = _make_range_ring_mesh(6.0)
+		_move_goal_slot_mat.no_depth_test = false
+	if _move_goal_dot_mesh == null:
+		_move_goal_dot_mesh = _make_ground_dot_mesh(MOVE_GOAL_DOT_RADIUS)
 	var used := 0
 	var pool: Array = _move_goal_markers_3d.get_children()
 	var my_id := multiplayer.get_unique_id()
@@ -1513,10 +1623,10 @@ func _update_move_goal_markers_3d():
 				mi.material_override = _move_goal_slot_mat
 				_move_goal_markers_3d.add_child(mi)
 				pool.append(mi)
-			if mi.mesh != _move_goal_ring_mesh:
-				mi.mesh = _move_goal_ring_mesh
+			if mi.mesh != _move_goal_dot_mesh:
+				mi.mesh = _move_goal_dot_mesh
 			mi.visible = true
-			mi.position = Vector3(snapped.x, get_ground_height_at(snapped.x, snapped.y) + 0.25, snapped.y)
+			mi.position = Vector3(snapped.x, get_ground_height_at(snapped.x, snapped.y) + MOVE_GOAL_DOT_LIFT, snapped.y)
 			used += 1
 	for i in range(used, pool.size()):
 		pool[i].visible = false
@@ -1539,6 +1649,16 @@ func _range_color_for_owner(owner_pid: int) -> Color:
 	if UNIT_SPRITE_PATHS.is_neutral_owner(owner_pid):
 		return Color(1.0, 0.55, 0.1, 0.55)
 	return Color(0.9, 0.25, 0.25, 0.55)
+
+## Flat disc lying in the XZ plane, used for the small ground-hugging goal dots.
+func _make_ground_dot_mesh(radius: float) -> Mesh:
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = radius
+	cyl.bottom_radius = radius
+	cyl.height = 0.05
+	cyl.radial_segments = 16
+	cyl.rings = 0
+	return cyl
 
 func _make_range_ring_mesh(radius: float) -> ArrayMesh:
 	var segments := 64
@@ -1637,19 +1757,27 @@ func _setup_topbar():
 	top_bar.layer = 10
 	add_child(top_bar)
 
-func _setup_draft_menu():
-	draft_menu = CanvasLayer.new()
-	draft_menu.name = "DraftMenu"
-	draft_menu.layer = 12
-	add_child(draft_menu)
-	var panel = PanelContainer.new()
-	panel.offset_left = 10
-	panel.offset_top = 590
-	panel.offset_right = 220
-	panel.offset_bottom = 760
-	draft_menu.add_child(panel)
+## Clients: the bottom bar hosts order mode / stance, the selected-army portraits and the
+## tools block (range toggle + draft popup). The draft controls live in the bar's popup panel
+## instead of a fixed bottom-left panel so nothing collides with the bar.
+func _setup_selection_bar() -> void:
+	_selection_bar = _SelectionBar.new()
+	_selection_bar.name = "SelectionBar"
+	_selection_bar.sim = _sim
+	add_child(_selection_bar)
+	_selection_bar.stance_pressed.connect(_on_command_bar_stance)
+	_selection_bar.army_pressed.connect(_on_selection_bar_army_pressed)
+	_selection_bar.show_range_toggled.connect(_on_show_range_toggled)
+	_build_draft_controls(_selection_bar.draft_panel())
+
+func _build_draft_controls(panel: PanelContainer) -> void:
 	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
 	panel.add_child(vbox)
+	var title := Label.new()
+	title.text = "Draft a new army"
+	title.add_theme_font_size_override("font_size", 14)
+	vbox.add_child(title)
 	var horse_cb = CheckBox.new()
 	horse_cb.name = "HorseCheck"
 	horse_cb.text = "Horse"
@@ -1662,11 +1790,6 @@ func _setup_draft_menu():
 	bow_cb.name = "BowCheck"
 	bow_cb.text = "Bow"
 	vbox.add_child(bow_cb)
-	_show_range_cb = CheckBox.new()
-	_show_range_cb.name = "ShowRangeCheck"
-	_show_range_cb.text = "Show range"
-	_show_range_cb.toggled.connect(_on_show_range_toggled)
-	vbox.add_child(_show_range_cb)
 	var size_row := HBoxContainer.new()
 	var size_label := Label.new()
 	size_label.text = "Soldiers"
@@ -1685,20 +1808,6 @@ func _setup_draft_menu():
 	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb, bow_cb))
 	vbox.add_child(create_btn)
 
-func _setup_army_command_bar() -> void:
-	var layer := CanvasLayer.new()
-	layer.layer = 45
-	layer.name = "ArmyCommandLayer"
-	add_child(layer)
-	_army_command_bar = _ArmyCommandBar.new()
-	_army_command_bar.name = "ArmyCommandBar"
-	_army_command_bar.offset_left = 10
-	_army_command_bar.offset_top = 400
-	_army_command_bar.offset_right = 520
-	_army_command_bar.offset_bottom = 480
-	layer.add_child(_army_command_bar)
-	_army_command_bar.stance_pressed.connect(_on_command_bar_stance)
-
 func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox):
 	var use_horse = horse_cb.button_pressed
 	var use_spear = spear_cb.button_pressed
@@ -1707,19 +1816,206 @@ func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: Ch
 	if _draft_size_spin != null:
 		count = int(_draft_size_spin.value)
 	_request_draft(use_horse, use_spear, use_bow, count)
+	if _selection_bar != null:
+		_selection_bar.hide_draft_panel()
 
 func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
 	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow, soldier_count)
 
 ## ---------------------------------------------------------------------------------------------
-## Orders: formation-level, tiny and reliable. Client -> server request, server validates
-## ownership, stamps (order_seq, sim_tick), applies to its sim and echoes reliably to every
-## peer (including the sender). Clients apply on echo; both sims then run the same movement.
+## Orders: formation-level, tiny and reliable, tick-scheduled. Client -> server request, server
+## validates ownership and *schedules* the order at exec_tick = tick + ORDER_DELAY (raised
+## from the slowest peer's RTT), then sends (seq, exec_tick, kind, payload) reliably to every
+## peer. Both server and clients pop due orders right before the sim step for that tick, so
+## the order is applied to identical state -> same anchor, same A* path, same movement.
+## After the server applies a MOVE it confirms the anchors (_client_order_applied); a client
+## whose anchor differs by more than ANCHOR_CONFIRM_TOLERANCE adopts the server's and re-paths.
 ## ---------------------------------------------------------------------------------------------
+
+const ORDER_DELAY_TICKS_MIN := 4
+const ANCHOR_CONFIRM_TOLERANCE := 2.0
+enum OrderKind { MOVE, ATTACK, CLEAR, STANCE, ROTATE, REPACK, DEATHS }
+
+## Sorted by (exec, seq): [{"exec": int, "seq": int, "kind": int, "p": Dictionary}, ...]
+var _order_queue: Array = []
+## Client: seq -> {"tick": exec_tick, "anchors": {aid: Vector2}} for moves it applied.
+var _my_anchor_by_seq: Dictionary = {}
+## Client: seq -> {aid: Vector2} confirmations that arrived before the order executed.
+var _srv_anchor_by_seq: Dictionary = {}
 
 func _stamp_order() -> int:
 	_order_seq += 1
 	return _order_seq
+
+## Server: ticks between scheduling and execution — enough for the order to reach the
+## slowest peer before its sim gets there.
+func _order_delay_ticks() -> int:
+	var delay := ORDER_DELAY_TICKS_MIN
+	var mp = multiplayer.multiplayer_peer
+	if mp is ENetMultiplayerPeer:
+		for pid in multiplayer.get_peers():
+			var p = mp.get_peer(pid)
+			if p == null:
+				continue
+			var rtt_ms := float(p.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME))
+			delay = maxi(delay, ceili(rtt_ms / (_UnitSim.SIM_DT * 1000.0)) + 2)
+	return delay
+
+func _enqueue_order(exec: int, seq: int, kind: int, payload: Dictionary) -> void:
+	var o := {"exec": exec, "seq": seq, "kind": kind, "p": payload}
+	var i := _order_queue.size()
+	while i > 0:
+		var prev: Dictionary = _order_queue[i - 1]
+		if prev["exec"] < exec or (prev["exec"] == exec and prev["seq"] <= seq):
+			break
+		i -= 1
+	_order_queue.insert(i, o)
+
+## Server: schedule `kind` for both peers. Returns the order seq.
+func _schedule_order(kind: int, payload: Dictionary) -> int:
+	if multiplayer.is_server() and not _pending_march.is_empty():
+		match kind:
+			OrderKind.MOVE, OrderKind.ATTACK:
+				_deferred_march_orders.append({"kind": kind, "p": payload})
+				return 0
+	var seq := _stamp_order()
+	var exec: int = _sim.tick + _order_delay_ticks()
+	_enqueue_order(exec, seq, kind, payload)
+	rpc("_client_order", seq, exec, kind, payload)
+	return seq
+
+@rpc("authority", "reliable")
+func _client_order(seq: int, exec: int, kind: int, payload: Dictionary) -> void:
+	if multiplayer.is_server():
+		return
+	if _client_match_barrier:
+		_enqueue_order(exec, seq, kind, payload)
+		return
+	if _clock_synced and exec < _sim.tick:
+		# Arrived after its tick: apply now and count it (should stay 0; see TEST_SIM_CLIENT).
+		_late_orders += 1
+		_execute_order({"exec": exec, "seq": seq, "kind": kind, "p": payload})
+		return
+	_enqueue_order(exec, seq, kind, payload)
+
+## Both peers: apply every order whose exec tick has been reached (called before each step).
+func _run_due_orders() -> void:
+	while not _order_queue.is_empty():
+		var o: Dictionary = _order_queue[0]
+		if int(o["exec"]) > _sim.tick:
+			break
+		_order_queue.pop_front()
+		_execute_order(o)
+
+func _execute_order(o: Dictionary) -> void:
+	var p: Dictionary = o["p"]
+	var seq: int = o["seq"]
+	if not multiplayer.is_server():
+		if p.has("aid"):
+			_army_last_order_tick[str(p["aid"])] = int(o["exec"])
+		if p.has("ids"):
+			for x in p["ids"]:
+				_army_last_order_tick[str(x)] = int(o["exec"])
+	match int(o["kind"]):
+		OrderKind.MOVE:
+			var ids: Array = p["ids"]
+			var n := _apply_move_orders(ids, p["dests"], p["facings"], p["widths"], bool(p.get("attack_move", false)))
+			if n > 0:
+				_after_move_applied(seq, int(o["exec"]), ids)
+			_queue_unresolved_client_move(ids, p["dests"], p["facings"], p["widths"], bool(p.get("attack_move", false)))
+		OrderKind.ATTACK:
+			_apply_attack_order(p["ids"], str(p.get("target_army_id", "")), int(p.get("target_unit", -1)))
+			_queue_unresolved_client_attack(p["ids"], str(p.get("target_army_id", "")), int(p.get("target_unit", -1)))
+		OrderKind.CLEAR:
+			var army = _find_army(str(p.get("aid", "")))
+			if army != null and army.fc != null:
+				army.fc.clear_order()
+			elif not multiplayer.is_server():
+				_pending_client_orders.append({"kind": "clear", "aid": str(p.get("aid", ""))})
+		OrderKind.STANCE:
+			var stance: int = int(p.get("stance", _Formation.Stance.DEFENSIVE))
+			for aid in p["ids"]:
+				var army = _find_army(str(aid))
+				if army == null or army.fc == null:
+					continue
+				army.fc.set_stance(stance)
+				if stance == _Formation.Stance.AGGRESSIVE:
+					army.fc.clear_order()
+		OrderKind.ROTATE:
+			var army = _find_army(str(p.get("aid", "")))
+			if army != null and army.fc != null:
+				army.fc.rotate(float(p.get("delta", 0.0)))
+		OrderKind.REPACK:
+			var army = _find_army(str(p.get("aid", "")))
+			if army != null and army.fc != null:
+				_sim.repack_army(army.fc)
+		OrderKind.DEATHS:
+			if not multiplayer.is_server():
+				_apply_client_deaths(p["ids"])
+
+## MOVE applied at its exec tick: server confirms anchors, client records its own.
+func _after_move_applied(seq: int, exec: int, ids: Array) -> void:
+	var anchors := {}
+	var flat: Array = []
+	for aid in ids:
+		var army = _find_army(str(aid))
+		if army == null or army.fc == null:
+			continue
+		anchors[army.army_id] = army.fc.anchor
+		flat.append(army.army_id)
+		flat.append(army.fc.anchor.x)
+		flat.append(army.fc.anchor.y)
+	if multiplayer.is_server():
+		if not flat.is_empty():
+			rpc("_client_order_applied", seq, flat)
+		return
+	_my_anchor_by_seq[seq] = {"tick": exec, "anchors": anchors}
+	if _srv_anchor_by_seq.has(seq):
+		_check_anchor_confirm(seq, _srv_anchor_by_seq[seq])
+	# Bound the bookkeeping: confirmations older than 200 orders are never going to arrive.
+	for k in _my_anchor_by_seq.keys():
+		if int(k) < seq - 200:
+			_my_anchor_by_seq.erase(k)
+	for k in _srv_anchor_by_seq.keys():
+		if int(k) < seq - 200:
+			_srv_anchor_by_seq.erase(k)
+
+## `flat` = [aid, anchor_x, anchor_y, ...] as the server computed them at the exec tick.
+@rpc("authority", "reliable")
+func _client_order_applied(seq: int, flat: Array) -> void:
+	if multiplayer.is_server():
+		return
+	var srv := {}
+	var k := 0
+	while k + 2 < flat.size():
+		srv[str(flat[k])] = Vector2(float(flat[k + 1]), float(flat[k + 2]))
+		k += 3
+	if _my_anchor_by_seq.has(seq):
+		_check_anchor_confirm(seq, srv)
+	else:
+		_srv_anchor_by_seq[seq] = srv
+
+func _check_anchor_confirm(seq: int, srv: Dictionary) -> void:
+	var mine: Dictionary = _my_anchor_by_seq[seq]
+	_my_anchor_by_seq.erase(seq)
+	_srv_anchor_by_seq.erase(seq)
+	var exec: int = int(mine["tick"])
+	var anchors: Dictionary = mine["anchors"]
+	for aid in srv.keys():
+		if not anchors.has(aid):
+			continue
+		var sa: Vector2 = srv[aid]
+		var ma: Vector2 = anchors[aid]
+		if sa.distance_to(ma) <= ANCHOR_CONFIRM_TOLERANCE:
+			continue
+		var army = _find_army(str(aid))
+		if army == null or army.fc == null or army.is_routed:
+			continue
+		# Replay the ticks since exec so the adopted anchor is where the server's is now.
+		var elapsed := float(maxi(_sim.tick - exec, 0)) * _UnitSim.SIM_DT
+		army.fc.repath_from(sa, elapsed)
+		_anchor_repaths += 1
+		print("TEST_ANCHOR_REPATH: army=%s seq=%d off=%.1f" % [aid, seq, sa.distance_to(ma)])
 
 func _owned_live_armies(sender: int, army_ids: Array) -> Array:
 	var out: Array = []
@@ -1743,9 +2039,13 @@ func _apply_move_orders(army_ids: Array, dests: PackedFloat32Array, facings: Pac
 		var dest := snap_move_goal_xz(_clamp_map_v2(Vector2(dests[k * 2], dests[k * 2 + 1])))
 		var facing: float = facings[k] if k < facings.size() else -999.0
 		var width: float = widths[k] if k < widths.size() else 0.0
-		_sim.recentre_anchor(fc)
+		# A click never rebuilds the grid: the anchor is re-fitted to the existing slots and
+		# the soldiers keep their neighbours. Only a drag (explicit width) re-ranks the block,
+		# which compacts it first so the preview grid and the marching grid are the same.
 		if width > 0.0:
-			fc.fit_rows_to_width(_sim.army_alive_count(fc), width)
+			_sim.repack_army(fc)
+			fc.fit_rows_to_width(fc.packed_count, width)
+		_sim.recentre_anchor(fc)
 		var line_dir := -999.0
 		if facing > -100.0:
 			line_dir = _Formation.line_direction_for_front(facing)
@@ -1781,35 +2081,22 @@ func _server_set_all_armies_aggressive():
 	for a in armies:
 		if a == null or not is_instance_valid(a) or a.is_routed or a.owner_id != sender:
 			continue
-		a.fc.set_stance(_Formation.Stance.AGGRESSIVE)
-		a.fc.clear_order()
 		ids.append(a.army_id)
-	rpc("_client_sync_army_stance", ids, _Formation.Stance.AGGRESSIVE)
+	if not ids.is_empty():
+		_schedule_order(OrderKind.STANCE, {"ids": ids, "stance": _Formation.Stance.AGGRESSIVE})
 	var marker = "TEST_A_AGGRESSIVE" if pname == "A" else "TEST_B_AGGRESSIVE"
 	print("%s: Player '%s' set %d armies to aggressive" % [marker, pname, ids.size()])
-
-@rpc("authority", "reliable")
-func _client_sync_army_stance(army_ids: Array, new_stance: int):
-	for aid in army_ids:
-		var army = _find_army(str(aid))
-		if army != null and army.fc != null:
-			army.fc.set_stance(new_stance)
-			if new_stance == _Formation.Stance.AGGRESSIVE:
-				army.fc.clear_order()
 
 @rpc("any_peer", "reliable")
 func _server_armies_set_stance(army_ids: Array, stance: int):
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	var synced: Array = []
+	var ids: Array = []
 	for army in _owned_live_armies(sender, army_ids):
-		army.fc.set_stance(stance)
-		if stance == _Formation.Stance.AGGRESSIVE:
-			army.fc.clear_order()
-		synced.append(army.army_id)
-	if not synced.is_empty():
-		rpc("_client_sync_army_stance", synced, stance)
+		ids.append(army.army_id)
+	if not ids.is_empty():
+		_schedule_order(OrderKind.STANCE, {"ids": ids, "stance": stance})
 
 @rpc("any_peer", "reliable")
 func _server_armies_order_attack(army_ids: Array, target_army_id: String, target_unit: int):
@@ -1822,10 +2109,11 @@ func _server_armies_order_attack(army_ids: Array, target_army_id: String, target
 	var ids: Array = []
 	for a in owned:
 		ids.append(a.army_id)
-	if _apply_attack_order(ids, target_army_id, target_unit) == 0:
+	var target_army = _find_army(target_army_id) if target_army_id != "" else null
+	var valid_army: bool = target_army != null and target_army.fc != null and not target_army.is_routed
+	if not valid_army and not (target_unit >= 0 and _sim.is_alive(target_unit)):
 		return
-	var seq := _stamp_order()
-	rpc("_client_order_attack", seq, _sim.tick, ids, target_army_id, target_unit)
+	_schedule_order(OrderKind.ATTACK, {"ids": ids, "target_army_id": target_army_id, "target_unit": target_unit})
 	if target_army_id != "":
 		print("TEST_ARMY_ATTACK: %s -> army %s" % [",".join(ids), target_army_id])
 	else:
@@ -1889,21 +2177,26 @@ func _server_order_move(army_ids: Array, dests: PackedFloat32Array, facings: Pac
 	_server_broadcast_move(ids, d2, f2, w2, attack_move)
 	print("TEST_GROUP_FORMATION: server armies=%d sender=%d attack_move=%s" % [ids.size(), sender, attack_move])
 
-func _server_broadcast_move(ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> void:
-	if _apply_move_orders(ids, dests, facings, widths, attack_move) == 0:
-		return
-	var seq := _stamp_order()
-	rpc("_client_order_move", seq, _sim.tick, ids, dests, facings, widths, attack_move)
-
-@rpc("authority", "reliable")
-func _client_order_move(_seq: int, _tick: int, army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool):
-	_apply_move_orders(army_ids, dests, facings, widths, attack_move)
-	_queue_unresolved_client_move(army_ids, dests, facings, widths, attack_move)
-
-@rpc("authority", "reliable")
-func _client_order_attack(_seq: int, _tick: int, army_ids: Array, target_army_id: String, target_unit: int):
-	_apply_attack_order(army_ids, target_army_id, target_unit)
-	_queue_unresolved_client_attack(army_ids, target_army_id, target_unit)
+## Server: schedule a MOVE / ATTACK_MOVE for both peers. Returns the order seq (0 = nothing).
+func _server_broadcast_move(ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> int:
+	var live: Array = []
+	var d2 := PackedFloat32Array()
+	var f2 := PackedFloat32Array()
+	var w2 := PackedFloat32Array()
+	for k in range(ids.size()):
+		var army = _find_army(str(ids[k]))
+		if army == null or army.fc == null or army.is_routed:
+			continue
+		live.append(army.army_id)
+		d2.append(dests[k * 2])
+		d2.append(dests[k * 2 + 1])
+		f2.append(facings[k] if k < facings.size() else -999.0)
+		w2.append(widths[k] if k < widths.size() else 0.0)
+	if live.is_empty():
+		return 0
+	return _schedule_order(OrderKind.MOVE, {
+		"ids": live, "dests": d2, "facings": f2, "widths": w2, "attack_move": attack_move,
+	})
 
 @rpc("any_peer", "reliable")
 func _server_rotate_army(aid: String, delta_angle: float):
@@ -1915,15 +2208,7 @@ func _server_rotate_army(aid: String, delta_angle: float):
 	var sender = multiplayer.get_remote_sender_id()
 	if sender != army.owner_id:
 		return
-	army.fc.rotate(delta_angle)
-	rpc("_client_rotate_army", aid, army.fc.direction)
-
-@rpc("authority", "reliable")
-func _client_rotate_army(aid: String, new_line_dir: float):
-	var army = _find_army(aid)
-	if army != null and army.fc != null:
-		army.fc.direction = new_line_dir
-		army.fc.slots_dirty = true
+	_schedule_order(OrderKind.ROTATE, {"aid": aid, "delta": delta_angle})
 
 @rpc("any_peer", "reliable")
 func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
@@ -1971,11 +2256,9 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow, "soldiers": soldier_count}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
-	var data = _serialize_one_army(army)
-	data["stop_x"] = stop_pos.x
-	data["stop_y"] = stop_pos.y
-	data["stop_dir"] = dir
-	rpc("_client_spawn_drafted_army", data)
+	# Spawn idle (reliable, ordered) and march via a normal scheduled order: the client has
+	# the army by the time the exec tick arrives, and both sims start the march on that tick.
+	rpc("_client_spawn_drafted_army", _serialize_one_army(army), _sim.tick)
 	_server_broadcast_move([aid], PackedFloat32Array([stop_pos.x, stop_pos.y]), PackedFloat32Array([dir]), PackedFloat32Array(), false)
 	_sync_capture_state()
 	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s soldiers=%d)" % [aid, use_horse, use_spear, use_bow, soldier_count])
@@ -2093,10 +2376,124 @@ func _spawn_armies():
 	for a in armies:
 		var axz: Vector2 = a.anchor()
 		print("  Army '%s' at (%d,%d) dir=%.1f owner=%s soldiers=%d" % [a.army_id, int(axz.x), int(axz.y), a.direction, a.owner_name, a.soldier_count()])
-	rpc("_client_spawn_armies", _serialize_armies_with_march(march_ids, march_dests, march_dirs))
+	# Armies stand idle until every client has loaded World (see _flush_pending_spawn): then
+	# the spawn payload (a full snapshot in itself) goes out and the march is scheduled like
+	# any other order, so it starts on the same tick everywhere.
+	_pending_spawn = {
+		"march_ids": march_ids,
+		"march_dests": march_dests,
+		"march_dirs": march_dirs,
+		"dragons": _spawn_map_dragons(),
+		"since_msec": Time.get_ticks_msec(),
+	}
+
+## Server: once every connected client reports World ready (or SPAWN_READY_TIMEOUT_MS passed),
+## send armies + dragons, a full snapshot of every unit, and schedule the opening march.
+const SPAWN_READY_TIMEOUT_MS := 15000
+var _pending_spawn: Dictionary = {}
+
+func _flush_pending_spawn() -> void:
+	if _pending_spawn.is_empty():
+		return
+	if not _all_clients_world_ready():
+		if Time.get_ticks_msec() - int(_pending_spawn.get("since_msec", 0)) < SPAWN_READY_TIMEOUT_MS:
+			return
+		print("TEST_SPAWN_READY_TIMEOUT: not every client reported World ready; spawning anyway")
+	var ps: Dictionary = _pending_spawn
+	_pending_spawn = {}
+	rpc("_client_spawn_armies", _serialize_armies(), _sim.tick)
+	var dragons: Array = ps.get("dragons", [])
+	if not dragons.is_empty():
+		rpc("_client_spawn_dragons", dragons)
+	# Phase 2 (start barrier): the server sim pauses and the opening march is only scheduled
+	# once every client has built its units and rendered a frame with them. Building 2000
+	# soldiers stalls a client for a second or two; with the server ticking on, that client
+	# would come back 30+ ticks behind and have to skip them — and skipped ticks are the one
+	# thing prediction cannot recover from (jammed idle units evolve differently ever after).
+	_clients_armies_ready.clear()
+	_pending_march = {
+		"since_msec": Time.get_ticks_msec(),
+		"march_ids": ps.get("march_ids", []),
+		"march_dests": ps.get("march_dests", PackedFloat32Array()),
+		"march_dirs": ps.get("march_dirs", PackedFloat32Array()),
+	}
+
+var _pending_march: Dictionary = {}
+var _clients_armies_ready: Dictionary = {}
+## Move/attack orders that arrived while the start barrier was up (before the spawn march
+## was scheduled). If applied first they would execute at the same exec tick as the march
+## but with a lower seq and get overwritten by the march, so the test armies never reach
+## the capture points.
+var _deferred_march_orders: Array = []
+
+func _all_clients_armies_ready() -> bool:
+	for peer_id in multiplayer.get_peers():
+		if not _clients_armies_ready.get(peer_id, false):
+			return false
+	return true
+
+func _flush_pending_march() -> void:
+	if _pending_march.is_empty():
+		return
+	if not _all_clients_armies_ready():
+		if Time.get_ticks_msec() - int(_pending_march.get("since_msec", 0)) < SPAWN_READY_TIMEOUT_MS:
+			return
+		print("TEST_SPAWN_READY_TIMEOUT: not every client reported armies ready; marching anyway")
+	var pm: Dictionary = _pending_march
+	_pending_march = {}
+	# Clients kept their own clocks running through the barrier: re-seed them to the paused
+	# server tick (nothing moved, so setting the tick is exact), then hand out the state.
+	rpc("_client_clock_reseed", _sim.tick)
+	_send_full_snapshot()
+	var march_ids: Array = pm.get("march_ids", [])
 	if not march_ids.is_empty():
-		_server_broadcast_move(march_ids, march_dests, march_dirs, PackedFloat32Array(), false)
-	_spawn_map_dragons()
+		_server_broadcast_move(march_ids, pm["march_dests"], pm["march_dirs"], PackedFloat32Array(), false)
+	for o in _deferred_march_orders:
+		_schedule_order(int(o["kind"]), o["p"])
+	_deferred_march_orders.clear()
+
+@rpc("authority", "reliable")
+func _client_clock_reseed(server_tick: int) -> void:
+	if multiplayer.is_server() or _sim == null:
+		return
+	_client_match_barrier = false
+	_sim.tick = server_tick
+	_sim.time = float(server_tick) * _UnitSim.SIM_DT
+	_sim_accum = 0.0
+	_note_server_tick(server_tick, true)
+	_tick_drift = 0
+	_flush_pending_client_orders()
+
+@rpc("any_peer", "reliable")
+func _receive_client_armies_ready() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	_clients_armies_ready[peer_id] = true
+	print("TEST_CLIENT_ARMIES_READY: peer %d built its units" % peer_id)
+
+## Client: report once the spawned units have been through a rendered frame (the renderer
+## builds its meshes lazily on the first frame after spawn, which is the expensive part).
+func _notify_client_armies_ready() -> void:
+	if multiplayer.is_server() or not _multiplayer_active():
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if is_inside_tree():
+		rpc_id(1, "_receive_client_armies_ready")
+
+func _send_full_snapshot() -> void:
+	if _sim == null or _net == null:
+		return
+	var ids := PackedInt32Array()
+	for i in range(_sim.count):
+		if _sim.is_alive(i):
+			ids.append(i)
+	if ids.is_empty():
+		return
+	for chunk in _net.pack_chunks(_sim, ids, _sim.tick):
+		rpc("_client_snapshot", chunk)
+		_snapshot_bytes_sent += chunk.size()
 
 ## `--stress-units=N`: top up each player with extra armies laid out in a grid around
 ## that player's start marker until N soldiers exist. Returns the number of soldiers added.
@@ -2137,17 +2534,18 @@ func _spawn_stress_armies(pid: int, pname: String, start_armies: Array, dest: Ve
 	return added
 
 ## Neutral dragons are one-unit armies owned by NEUTRAL_DRAGON_OWNER_ID with a simple aggro AI.
-func _spawn_map_dragons() -> void:
+## Returns the client spawn payload (sent by _flush_pending_spawn together with the armies).
+func _spawn_map_dragons() -> Array:
+	var dragon_data: Array = []
 	if not multiplayer.is_server():
-		return
+		return dragon_data
 	# Auto-test is player-vs-player; the S-map dragon sits on the path between
 	# Stables and Blacksmith and stalls combat past the 120s match cap.
 	if GameState.is_auto_test:
-		return
+		return dragon_data
 	var cfgs: Array = MapConfig.get_neutral_dragons()
 	if cfgs.is_empty():
-		return
-	var dragon_data: Array = []
+		return dragon_data
 	for i in range(cfgs.size()):
 		var cfg: Dictionary = cfgs[i]
 		if cfg.is_empty():
@@ -2165,8 +2563,7 @@ func _spawn_map_dragons() -> void:
 		d["index"] = i
 		d["color"] = color
 		dragon_data.append(d)
-	if not dragon_data.is_empty():
-		rpc("_client_spawn_dragons", dragon_data)
+	return dragon_data
 
 func _update_map_dragon_ai(delta: float) -> void:
 	if _map_dragons.is_empty():
@@ -2189,25 +2586,13 @@ func _update_one_map_dragon_ai(army) -> void:
 	var best: int = _sim.nearest_unit(center, aggro, UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID, true)
 	if best < 0:
 		if fc.order_type != _Formation.OrderType.NONE:
-			fc.clear_order()
-			rpc("_client_order_clear", army.army_id)
+			_schedule_order(OrderKind.CLEAR, {"aid": army.army_id})
 		return
 	if fc.order_type == _Formation.OrderType.ATTACK and fc.order_target_unit == best:
 		return
-	_sim.recentre_anchor(fc)
-	fc.set_stance(_Formation.Stance.AGGRESSIVE)
-	fc.issue_attack_unit(best)
-	rpc("_client_order_attack", _stamp_order(), _sim.tick, [army.army_id], "", best)
-
-@rpc("authority", "reliable")
-func _client_order_clear(aid: String) -> void:
-	var army = _find_army(aid)
-	if army != null and army.fc != null:
-		army.fc.clear_order()
-		return
-	if multiplayer.is_server():
-		return
-	_pending_client_orders.append({"kind": "clear", "aid": aid})
+	if fc.stance != _Formation.Stance.AGGRESSIVE:
+		_schedule_order(OrderKind.STANCE, {"ids": [army.army_id], "stance": _Formation.Stance.AGGRESSIVE})
+	_schedule_order(OrderKind.ATTACK, {"ids": [army.army_id], "target_army_id": "", "target_unit": best})
 
 func _queue_unresolved_client_move(army_ids: Array, dests: PackedFloat32Array, facings: PackedFloat32Array, widths: PackedFloat32Array, attack_move: bool) -> void:
 	if multiplayer.is_server():
@@ -2237,6 +2622,8 @@ func _queue_unresolved_client_attack(army_ids: Array, target_army_id: String, ta
 			})
 			return
 
+## Safety net only: with world-ready gating the spawn always lands before any order, so this
+## list should stay empty. Anything in it is applied as soon as the army exists (late).
 func _flush_pending_client_orders() -> void:
 	if _pending_client_orders.is_empty():
 		return
@@ -2256,16 +2643,6 @@ func _flush_pending_client_orders() -> void:
 				army.fc.clear_order()
 			elif not multiplayer.is_server():
 				_pending_client_orders.append(o)
-
-func _apply_spawn_march(ad: Dictionary, fc) -> void:
-	if not ad.has("stop_x") or not ad.has("stop_y"):
-		return
-	var dest := snap_move_goal_xz(_clamp_map_v2(Vector2(float(ad.get("stop_x", 0.0)), float(ad.get("stop_y", 0.0)))))
-	var facing: float = float(ad.get("stop_dir", ad.get("dir", -999.0)))
-	var line_dir := -999.0
-	if facing > -100.0:
-		line_dir = _Formation.line_direction_for_front(facing)
-	fc.issue_move(dest, line_dir, false)
 
 ## Server: create an army (FormationController in the sim + thin Army3D handle) with `soldiers`
 ## units at `pos` facing `dir` (front angle). Unit ids are allocated sequentially by the server.
@@ -2320,23 +2697,6 @@ func _serialize_armies() -> Array:
 	var data := []
 	for army in armies:
 		data.append(_serialize_one_army(army))
-	return data
-
-func _serialize_armies_with_march(march_ids: Array, march_dests: PackedFloat32Array, march_dirs: PackedFloat32Array) -> Array:
-	var data: Array = _serialize_armies()
-	var dest_by_id := {}
-	for k in range(march_ids.size()):
-		dest_by_id[str(march_ids[k])] = k
-	for payload in data:
-		if typeof(payload) != TYPE_DICTIONARY:
-			continue
-		var k = dest_by_id.get(str(payload.get("army_id", "")), -1)
-		if k < 0 or k * 2 + 1 >= march_dests.size():
-			continue
-		payload["stop_x"] = march_dests[k * 2]
-		payload["stop_y"] = march_dests[k * 2 + 1]
-		if k < march_dirs.size():
-			payload["stop_dir"] = march_dirs[k]
 	return data
 
 ## Compact spawn payload: ids are contiguous from `first_id`; positions as packed arrays.
@@ -2539,16 +2899,15 @@ func _update_aggressive_armies(delta: float):
 		if fc.has_player_order():
 			# Stay locked while closing or fighting. If they have fallen out of
 			# contact, pick the closest enemy again so swapped blobs re-engage.
-			var now := Time.get_ticks_msec() / 1000.0
-			if fc.order_type != _Formation.OrderType.ATTACK or GameState.last_combat_time < 0.0 or (now - GameState.last_combat_time) < 4.0:
+			# (Sim time, not wall time: the decision must not depend on frame rate.)
+			if fc.order_type != _Formation.OrderType.ATTACK or _last_combat_sim_time < 0.0 or (_sim.time - _last_combat_sim_time) < 4.0:
 				continue
 		var enemy = _get_closest_enemy_army(a)
 		if enemy == null or enemy.fc == null:
 			continue
 		if fc.order_type == _Formation.OrderType.ATTACK and fc.order_target_army == enemy.fc.index:
 			continue
-		_apply_attack_order([a.army_id], enemy.army_id, -1)
-		rpc("_client_order_attack", _stamp_order(), _sim.tick, [a.army_id], enemy.army_id, -1)
+		_schedule_order(OrderKind.ATTACK, {"ids": [a.army_id], "target_army_id": enemy.army_id, "target_unit": -1})
 		var exz: Vector2 = _sim.army_centroid(enemy.fc)
 		print("TEST_AGGRESSIVE_TICK: army=%s owner=%s target_enemy=%s at=(%d,%d)" % [
 			a.army_id, a.owner_name, enemy.army_id, int(exz.x), int(exz.y)
@@ -2563,6 +2922,12 @@ func _physics_process(delta: float):
 			return
 		_check_match_timeout(delta)
 		if game_over:
+			return
+		_flush_pending_spawn()
+		_flush_pending_march()
+		if not _pending_march.is_empty():
+			# Start barrier: the sim does not tick while clients build their units, so no
+			# client starts the match with a backlog it has to skip (see _flush_pending_march).
 			return
 		_server_capture_and_resources(delta)
 		_update_aggressive_armies(delta)
@@ -2581,12 +2946,20 @@ func _physics_process(delta: float):
 
 ## Server: after every sim tick send batched events (reliable) and prioritised snapshots.
 func _server_after_tick() -> void:
+	# Grid compaction requested by the sim becomes a scheduled order so every peer applies
+	# it on the same tick (and only while the army is idle).
+	for ix in _sim.repack_requests:
+		var fc = _sim.armies[ix]
+		if fc.repack_pending or fc.is_routed:
+			continue
+		fc.repack_pending = true
+		_schedule_order(OrderKind.REPACK, {"aid": fc.army_id})
 	if not _all_clients_world_ready():
 		_sim.died_ids.clear()
 		_sim.routed_armies.clear()
 		return
 	if _sim.died_ids.size() > 0:
-		rpc("_client_units_died", _sim.died_ids.duplicate())
+		rpc("_client_units_died", _sim.tick, _sim.died_ids.duplicate())
 	for ai in _sim.routed_armies:
 		var fc = _sim.armies[ai]
 		var army = _find_army(fc.army_id)
@@ -2596,6 +2969,10 @@ func _server_after_tick() -> void:
 		rpc("_client_arrows", _sim.arrows.duplicate())
 	_sim.died_ids.clear()
 	_sim.routed_armies.clear()
+	if _sim.tick % TICK_SYNC_PERIOD == 0:
+		rpc("_client_tick_sync", _sim.tick)
+	if _sim.tick % ARMY_SYNC_PERIOD == 0:
+		_send_army_sync()
 	var budget: int = _net.budget_for(_sim.alive_count)
 	var ids: PackedInt32Array = _net.select_units(_sim, _sim.tick, budget)
 	if ids.is_empty():
@@ -2611,8 +2988,8 @@ func _client_after_tick() -> void:
 	_sim.routed_armies.clear()
 	if _sim.move_oscillation and not _move_osc_logged:
 		_move_osc_logged = true
-		print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s" % [
-			_sim.move_oscillation_id, _sim.move_oscillation_count
+		print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s %s" % [
+			_sim.move_oscillation_id, _sim.move_oscillation_count, _sim.move_oscillation_info
 		])
 	if _unit_renderer != null:
 		_unit_renderer.write_tick()
@@ -2627,14 +3004,96 @@ func _client_snapshot(bytes: PackedByteArray) -> void:
 	var snap: Dictionary = _net.unpack(bytes)
 	if snap.is_empty():
 		return
+	if not _client_match_barrier:
+		_note_server_tick(int(snap["tick"]))
 	_net.apply_snapshot(_sim, snap)
 	if _sim.died_ids.size() > 0:
 		_sim.died_ids.clear()
 
-@rpc("authority", "reliable")
-func _client_units_died(ids: PackedInt32Array) -> void:
-	if _sim == null:
+## ---------------------------------------------------------------------------------------------
+## Army sync. Soldiers are predicted from orders, but combat (damage, deaths, target choice)
+## is server-owned and the formation's discrete decisions hang off it: contact pause, attack
+## re-path, arrival. Left alone, one differing target flips such a decision on one peer only
+## and the whole block's slots drift. So every ARMY_SYNC_PERIOD ticks the server sends each
+## army's anchor / dest / moving / paused and clients adopt them (anchor blended, see
+## FormationController.sync_from_server). ~24 bytes per army, unreliable.
+## ---------------------------------------------------------------------------------------------
+const ARMY_SYNC_PERIOD := 10
+const ARMY_SYNC_TOLERANCE := 1.0
+var _army_sync_corrections := 0
+
+func _send_army_sync() -> void:
+	var data := PackedFloat32Array()
+	for fc in _sim.armies:
+		if fc.is_routed or fc.members.is_empty():
+			continue
+		data.append(float(fc.index))
+		data.append(fc.anchor.x)
+		data.append(fc.anchor.y)
+		data.append(fc.dest.x)
+		data.append(fc.dest.y)
+		data.append((1.0 if fc.moving else 0.0) + (2.0 if fc.paused_for_contact else 0.0))
+	if not data.is_empty():
+		rpc("_client_army_sync", _sim.tick, data)
+
+@rpc("authority", "unreliable_ordered")
+func _client_army_sync(server_tick: int, data: PackedFloat32Array) -> void:
+	if _sim == null or multiplayer.is_server():
 		return
+	_note_server_tick(server_tick)
+	# Anchors advance anchor_speed per tick; widen the tolerance by the tick offset so a packet
+	# from a slightly different tick is not mistaken for drift.
+	var lag := absi(_sim.tick - server_tick)
+	var k := 0
+	while k + 5 < data.size():
+		var idx := int(data[k])
+		if idx >= 0 and idx < _sim.armies.size():
+			var fc = _sim.armies[idx]
+			# The packet straddles an order: the server has already applied one we still have
+			# queued (or vice versa), so its state is legitimately different from ours for a
+			# tick or two. Skip; the next packet is on the same side of the order as we are.
+			if _army_order_straddles(fc.army_id, server_tick):
+				k += 6
+				continue
+			var bits := int(data[k + 5])
+			var tol: float = ARMY_SYNC_TOLERANCE + fc.anchor_speed * _UnitSim.SIM_DT * float(lag)
+			if fc.sync_from_server(Vector2(data[k + 1], data[k + 2]), Vector2(data[k + 3], data[k + 4]), (bits & 1) != 0, (bits & 2) != 0, tol):
+				_army_sync_corrections += 1
+		k += 6
+
+## Client: exec tick of the last order applied to each army (aid -> tick).
+var _army_last_order_tick: Dictionary = {}
+
+func _order_touches(o: Dictionary, aid: String) -> bool:
+	var p: Dictionary = o["p"]
+	if str(p.get("aid", "")) == aid:
+		return true
+	if p.has("ids"):
+		for x in p["ids"]:
+			if str(x) == aid:
+				return true
+	return false
+
+func _army_order_straddles(aid: String, server_tick: int) -> bool:
+	if server_tick < int(_army_last_order_tick.get(aid, -1)):
+		return true
+	for o in _order_queue:
+		if int(o["exec"]) <= server_tick and _order_touches(o, aid):
+			return true
+	return false
+
+## Deaths carry the server tick they happened on; a client still behind that tick applies
+## them when it gets there (same tick as the server), otherwise immediately.
+@rpc("authority", "reliable")
+func _client_units_died(tick: int, ids: PackedInt32Array) -> void:
+	if _sim == null or multiplayer.is_server():
+		return
+	if _clock_synced and tick > _sim.tick:
+		_enqueue_order(tick, _stamp_order(), OrderKind.DEATHS, {"ids": ids})
+		return
+	_apply_client_deaths(ids)
+
+func _apply_client_deaths(ids: PackedInt32Array) -> void:
 	_sim.kill_units(ids)
 	_sim.died_ids.clear()
 	if _unit_audio != null:
@@ -2794,22 +3253,54 @@ func _rect_from_points(a: Vector2, b: Vector2) -> Rect2:
 	var s := (a - b).abs()
 	return Rect2(p, s)
 
+## ---------------------------------------------------------------------------------------------
+## Selection model. Plain click / marquee replaces the selection; Shift + click toggles one
+## army; Shift + marquee adds. The SelectionBar mirrors `selected_armies` after every change,
+## so when Shift is released the bar shows exactly what is selected.
+## ---------------------------------------------------------------------------------------------
+
 func _clear_selection():
 	for a in selected_armies:
 		if a and is_instance_valid(a):
 			a.deselect()
 	selected_armies.clear()
-	if _army_command_bar != null:
-		_army_command_bar.set_visible_bar(false)
+	_refresh_selection_bar()
 
-func _set_selection(new_armies: Array):
-	_clear_selection()
+## Replace the selection with `new_armies`, or add them to it when `additive`.
+func _set_selection(new_armies: Array, additive: bool = false):
+	if not additive:
+		for a in selected_armies:
+			if a and is_instance_valid(a):
+				a.deselect()
+		selected_armies.clear()
 	for a in new_armies:
-		if a and is_instance_valid(a) and not a.is_routed:
+		if a and is_instance_valid(a) and not a.is_routed and not (a in selected_armies):
 			selected_armies.append(a)
 			a.select()
-	if _army_command_bar != null:
-		_army_command_bar.set_visible_bar(selected_armies.size() > 0)
+	_refresh_selection_bar()
+
+## Shift + click: add the army if it is not selected, remove it if it is.
+func _toggle_selection(army) -> void:
+	if army == null or not is_instance_valid(army) or army.is_routed:
+		return
+	if army in selected_armies:
+		selected_armies.erase(army)
+		army.deselect()
+	else:
+		selected_armies.append(army)
+		army.select()
+	_refresh_selection_bar()
+
+func _refresh_selection_bar() -> void:
+	if _selection_bar != null:
+		_selection_bar.set_armies(selected_armies)
+
+## Bar portrait clicked: plain click selects only that army, Shift + click toggles it.
+func _on_selection_bar_army_pressed(army, shift: bool) -> void:
+	if shift:
+		_toggle_selection(army)
+	else:
+		_set_selection([army])
 
 func _get_selected_non_routed() -> Array:
 	var out := []
@@ -2844,8 +3335,8 @@ func _clamp_map_v2(v: Vector2) -> Vector2:
 	return Vector2(clampf(v.x, 0, MapConfig.width), clampf(v.y, 0, MapConfig.height))
 
 func _is_attack_move_mode() -> bool:
-	return _army_command_bar != null \
-		and _army_command_bar.get_order_mode() == _ArmyCommandBar.OrderMode.ATTACK_MOVE
+	return _selection_bar != null \
+		and _selection_bar.get_order_mode() == _SelectionBar.OrderMode.ATTACK_MOVE
 
 ## Single RMB click: the selected group's centroid goes to the click; each army keeps its
 ## offset from that centroid. Facing follows travel direction. Instant local click marker.
@@ -2957,6 +3448,7 @@ func _update_formation_ghosts_3d(line_start: Vector2, line_end: Vector2):
 			continue
 		var p: Vector2 = positions[i]
 		box.visible = true
+		# Same triangle-exact ground sampler as the goal dots; box is 4 tall so +2 rests on it.
 		box.position = Vector3(p.x, get_ground_height_at(p.x, p.y) + 2.0, p.y)
 		box.material_override = mat if is_walkable_at(p.x, p.y) else invalid_mat
 
@@ -3005,25 +3497,29 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 					_marquee_overlay.set_marquee_rect(Rect2(), false)
 			else:
 				if _marquee_active:
+					var shift := mb.shift_pressed
 					if _marquee_moved:
 						var r := _rect_from_points(_marquee_start_screen, _marquee_end_screen)
 						var picked := _armies_in_screen_rect_3d(r, my_id)
-						_set_selection(picked)
+						_set_selection(picked, shift)
 					else:
 						var hit := _raycast_ground_at_screen(_marquee_start_screen)
 						if hit != Vector3.ZERO:
 							var click_xz := Vector2(hit.x, hit.z)
-							if _army_command_bar != null \
-									and _army_command_bar.get_order_mode() == _ArmyCommandBar.OrderMode.ATTACK \
+							if _selection_bar != null \
+									and _selection_bar.get_order_mode() == _SelectionBar.OrderMode.ATTACK \
 									and not _get_selected_non_routed().is_empty():
 								_issue_armies_attack_at(click_xz)
 							else:
 								var army = _get_army_at(click_xz, my_id)
 								if army:
-									_set_selection([army])
-								else:
+									if shift:
+										_toggle_selection(army)
+									else:
+										_set_selection([army])
+								elif not shift:
 									_clear_selection()
-						else:
+						elif not shift:
 							_clear_selection()
 				_marquee_active = false
 				if _marquee_overlay:
@@ -3063,13 +3559,13 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 
 func _handle_key(event: InputEventKey):
 	if event is InputEventKey and event.pressed and not event.echo:
-		if _army_command_bar != null:
+		if _selection_bar != null:
 			if event.keycode == KEY_M:
-				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.MOVE)
+				_selection_bar._set_order_mode(_SelectionBar.OrderMode.MOVE)
 			elif event.keycode == KEY_A:
-				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.ATTACK)
+				_selection_bar._set_order_mode(_SelectionBar.OrderMode.ATTACK)
 			elif event.keycode == KEY_G:
-				_army_command_bar._set_order_mode(_ArmyCommandBar.OrderMode.ATTACK_MOVE)
+				_selection_bar._set_order_mode(_SelectionBar.OrderMode.ATTACK_MOVE)
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return
@@ -3180,10 +3676,15 @@ func _terrain_grid_height_at(x: float, z: float) -> float:
 	var h10: float = _terrain_heights[j0 * _terrain_cols + i1]
 	var h01: float = _terrain_heights[j1 * _terrain_cols + i0]
 	var h11: float = _terrain_heights[j1 * _terrain_cols + i1]
-	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+	# The ground mesh splits every cell along the b-c diagonal (see _build_terrain):
+	# triangle (a,c,b) holds tx+tz<=1, triangle (b,c,d) the rest. Interpolate on the
+	# same plane so markers and units sit exactly on the visible surface.
+	if tx + tz <= 1.0:
+		return h00 + (h10 - h00) * tx + (h01 - h00) * tz
+	return h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
 
-## Bilinear lookup in the terrain height grid (the same samples the ground mesh was built
-## from). This is called per unit per tick, so it must never hit the physics server.
+## Triangle-exact lookup in the terrain height grid (the same samples and diagonal split the
+## ground mesh was built from). Called per unit per tick, so it must never hit the physics server.
 func get_ground_height_at(x: float, z: float) -> float:
 	return _terrain_grid_height_at(x, z)
 
@@ -3231,22 +3732,31 @@ func _add_play_boundary_line():
 	top.material_override = mat
 	root.add_child(top)
 
+## `server_tick` seeds the client's sim tick: the payload positions are the server's state at
+## that tick and the client runs forward from there (see _step_sim_slaved).
 @rpc("authority", "reliable")
-func _client_spawn_armies(data: Array):
-	# One frame later: ensures this node and the renderer are fully in the tree.
-	call_deferred("_client_spawn_armies_impl", data)
+func _client_spawn_armies(data: Array, server_tick: int = -1):
+	if multiplayer.is_server():
+		return
+	_client_match_barrier = true
+	# The renderer was created in _setup_sim, before any RPC can land: no deferral needed.
+	_client_spawn_armies_impl(data, server_tick)
 
 ## Client (and headless tests): build armies + units in the local sim from the compact payload
 ## produced by `_serialize_one_army`. Ids come from the server so snapshots address the same units.
-func _client_spawn_armies_impl(data: Array):
+func _client_spawn_armies_impl(data: Array, server_tick: int = -1):
+	if server_tick >= 0 and _sim != null:
+		_sim.tick = server_tick
+		_sim.time = float(server_tick) * _UnitSim.SIM_DT
+		_note_server_tick(server_tick, true)
 	for ad in data:
 		if typeof(ad) != TYPE_DICTIONARY:
 			continue
 		_client_spawn_one_army(ad, "")
-	_flush_pending_client_orders()
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
 	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [_alive_unit_count(), armies.size()])
 	_schedule_visibility_checks()
+	_notify_client_armies_ready()
 
 func _client_spawn_one_army(ad: Dictionary, color: String) -> Node:
 	var aid := str(ad.get("army_id", ""))
@@ -3269,7 +3779,6 @@ func _client_spawn_one_army(ad: Dictionary, color: String) -> Node:
 	fc.stance = int(ad.get("stance", fc.stance))
 	_sim.spawn_army_units(fc, first_id, n, utype, xs, zs)
 	_next_unit_id = maxi(_next_unit_id, first_id + n)
-	_apply_spawn_march(ad, fc)
 	var army = _make_army_handle(aid, pid, pname, fc, color)
 	armies.append(army)
 	_flush_pending_client_orders()
@@ -3438,7 +3947,11 @@ func _update_topbar_local(cp_data: Array, res_data):
 	)
 
 @rpc("authority", "reliable")
-func _client_spawn_drafted_army(army_data: Dictionary):
+func _client_spawn_drafted_army(army_data: Dictionary, server_tick: int = -1):
+	if multiplayer.is_server():
+		return
+	if server_tick >= 0:
+		_note_server_tick(server_tick)
 	var army = _client_spawn_one_army(army_data, "")
 	if army == null:
 		return
@@ -3452,6 +3965,7 @@ func _client_army_routed(army_id: String):
 	if army in selected_armies:
 		selected_armies.erase(army)
 		army.deselect()
+		_refresh_selection_bar()
 	_sim.rout_army(army.fc)
 	_sim.died_ids.clear()
 	_sim.routed_armies.clear()

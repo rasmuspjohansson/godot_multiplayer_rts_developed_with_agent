@@ -1,6 +1,6 @@
 extends Node
 ## Thin per-army handle around a FormationController living in UnitSim.
-## Holds identity, ownership and selection so MockPlayer, ArmyCommandBar and the World UI
+## Holds identity, ownership and selection so MockPlayer, SelectionBar and the World UI
 ## keep a node to talk to; all movement/combat state lives in the sim (see sim/UnitSim.gd).
 
 enum Stance { AGGRESSIVE, DEFENSIVE, HOLD, PASSIVE }

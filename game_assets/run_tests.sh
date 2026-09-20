@@ -57,8 +57,17 @@ echo "=== Headless: test_spatial_hash.gd ==="
 echo "=== Headless: test_unit_sim.gd ==="
 "$GODOT_BIN" --headless --path . -s test_unit_sim.gd
 
-echo "=== Headless: test_facing_oscillation.gd ==="
-"$GODOT_BIN" --headless --path . -s test_facing_oscillation.gd
+echo "=== Headless: test_move_sync.gd ==="
+"$GODOT_BIN" --headless --path . -s test_move_sync.gd
+
+echo "=== Headless: test_facing_flip.gd ==="
+"$GODOT_BIN" --headless --path . -s test_facing_flip.gd
+
+echo "=== Headless: test_sim_determinism.gd ==="
+"$GODOT_BIN" --headless --path . -s test_sim_determinism.gd
+
+echo "=== Headless: test_formation_rigidity.gd ==="
+"$GODOT_BIN" --headless --path . -s test_formation_rigidity.gd
 
 echo "=== Headless: test_world3d_horse_speed.gd ==="
 "$GODOT_BIN" --headless --path . -s test_world3d_horse_speed.gd

@@ -87,10 +87,11 @@ fi
 
 # Clean up any prior game instances (do NOT kill the editor).
 echo "Stopping any existing dedicated server / client Godot processes..."
-pkill -9 -f -- '[g]odot.*-- --server' 2>/dev/null || true
-pkill -9 -f -- 'Godot.*-- --server' 2>/dev/null || true
-pkill -9 -f -- '[g]odot.*-- --client' 2>/dev/null || true
-pkill -9 -f -- 'Godot.*-- --client' 2>/dev/null || true
+# Match the Godot binary followed by our launch flags only. A pattern like 'godot.*-- --server'
+# also matches an unrelated shell whose command line merely mentions this repo path and the
+# flags (e.g. a test driver script), and kills it mid-run.
+pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --server' 2>/dev/null || true
+pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --client' 2>/dev/null || true
 fuser -k 8910/tcp 2>/dev/null || true
 sleep 2
 for i in 1 2 3 4 5 6 7 8 9 10; do

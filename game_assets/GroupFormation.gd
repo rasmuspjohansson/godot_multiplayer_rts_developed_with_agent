@@ -2,8 +2,9 @@ extends RefCounted
 ## Shared math for Total War–style line formation (2D map coords: x,y).
 ## Works on counts and spacings only; armies are laid out by FormationController in the sim.
 
-const FORMATION_SPACING := 15.0
-const FOOT_FORMATION_SPACING := 10.0
+const _Formation := preload("res://sim/FormationController.gd")
+const FORMATION_SPACING := _Formation.MOUNTED_SPACING
+const FOOT_FORMATION_SPACING := _Formation.FOOT_SPACING
 ## Along-drag gap between adjacent armies' segments so two formations do not share one goal point.
 const ARMY_SEGMENT_GAP := FORMATION_SPACING * 0.5
 
@@ -74,13 +75,22 @@ static func front_angle_for_segment(line_start: Vector2, line_end: Vector2) -> f
 		return -PI * 0.5
 	return delta.angle() + PI * 0.5
 
-## Ghost preview positions for the given per-army (count, has_horse) pairs.
+## Ghost preview positions for the given per-army (count, has_horse) pairs. Each army gets
+## exactly the grid the sim will march in: fixed pitch, ranks from
+## FormationController.rows_for_width(count, segment length), centred on its segment and
+## rotated so the first rank lies on the drag line (what you preview is what you get).
 static func preview_positions(line_start: Vector2, line_end: Vector2, counts: Array, mounted: Array) -> Array[Vector2]:
 	var out: Array[Vector2] = []
 	var segs := split_segments(line_start, line_end, counts.size())
+	var line_dir := _Formation.line_direction_for_front(front_angle_for_segment(line_start, line_end))
 	for k in range(counts.size()):
 		var seg: Dictionary = segs[k]
+		var s: Vector2 = seg["start"]
+		var e: Vector2 = seg["end"]
 		var sp := spacing_for(bool(mounted[k]))
-		for p in compute_line_formation(seg["start"], seg["end"], int(counts[k]), sp):
-			out.append(p)
+		var n := int(counts[k])
+		var rows := _Formation.rows_for_width(n, s.distance_to(e), sp)
+		var mid := (s + e) * 0.5
+		for o in _Formation.grid_offsets(n, rows, sp):
+			out.append(mid + o.rotated(line_dir))
 	return out

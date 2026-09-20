@@ -20,6 +20,10 @@ const F_NEUTRAL := 64
 
 const CELL_SIZE := 20.0
 const STEER_DEADZONE := 0.6
+## Marching soldiers track their slot to this precision: the slot advances one anchor step
+## (~0.55 units for foot) per tick, so the parked deadzone would make them stutter every
+## other tick.
+const MARCH_DEADZONE := 0.05
 const CATCH_UP_DIST := 12.0
 const COMBAT_SCAN_PHASES := 4
 const STUCK_SECONDS := 1.2
@@ -52,6 +56,14 @@ const MAP_MARGIN := 200.0
 const MOVE_OSC_WINDOW_SEC := 2.0
 const MOVE_OSC_MAX_REVERSALS := 4
 const MOVE_OSC_MIN_DISP := 1.5
+## Position history kept for reconciliation: a snapshot stamped with server tick T is
+## compared against where *this* sim had the unit at tick T, not where it is now, so the
+## one-way latency never shows up as a backward error on marching units.
+const HIST_TICKS := 32
+## Client: after a snapshot reports a unit F_IN_COMBAT, keep following the server for this
+## many ticks instead of steering it back to its slot (damage/targets are server-owned, so a
+## fight the client did not predict must not turn into a slot-vs-correction tug of war).
+const SERVER_COMBAT_HOLD_TICKS := 16
 
 var count: int = 0
 var pos_x := PackedFloat32Array()
@@ -97,10 +109,20 @@ var routed_armies := PackedInt32Array()
 var arrows := PackedFloat32Array()
 var combat_hits: int = 0
 var alive_count: int = 0
-## Diagnostics: hard snaps applied by reconcile (client) and units flagged moving without
-## displacement (should both stay 0 in a healthy run; see TEST_SIM_CLIENT).
+## Server: armies whose living count dropped below REPACK_FRACTION of their grid while idle.
+## World turns these into a scheduled repack order so both peers compact on the same tick.
+var repack_requests := PackedInt32Array()
+## Diagnostics: hard snaps applied by reconcile (client), units flagged moving without
+## displacement, and medium (blended) corrections. All should sit at/near 0 in a healthy run
+## (see TEST_SIM_CLIENT).
 var snap_count: int = 0
 var walk_in_place_count: int = 0
+var corr_count: int = 0
+var _hist_x: Array = []
+var _hist_z: Array = []
+var _hist_tick := PackedInt32Array()
+## Client: sim tick until which the server's "in combat" report overrides local steering.
+var _srv_combat_until := PackedInt32Array()
 ## Set when any living unit reverses its step more than MOVE_OSC_MAX_REVERSALS times
 ## in MOVE_OSC_WINDOW_SEC. Peak is the worst window seen this sim.
 var move_oscillation := false
@@ -110,6 +132,11 @@ var move_oscillation_peak := 0
 var _last_disp_x := PackedFloat32Array()
 var _last_disp_z := PackedFloat32Array()
 var _disp_seen := PackedByteArray()
+## Per tick: 1 when separation shoved the unit farther than MOVE_OSC_MIN_DISP (crowd
+## jostling is identical on every peer and is not a sync reversal).
+var _pushed := PackedByteArray()
+## Diagnostics for the last oscillation trip (see World TEST_MOVE_OSCILLATION_FAIL).
+var move_oscillation_info: String = ""
 ## Per-unit list of sim ticks when step direction reversed.
 var _reversal_ticks: Array = []
 
@@ -125,7 +152,12 @@ var _pend_dmg := PackedFloat32Array()
 var _pend_time := PackedFloat32Array()
 var _army_alive := PackedInt32Array()
 var _army_fighting := PackedInt32Array()
+## Soldiers farther than CATCH_UP_DIST from their slot last tick (cohesion input).
+var _army_straggling := PackedInt32Array()
 var _army_moving := PackedByteArray()
+## Unit heading of each marching army (0 when parked); reference for direction-safe blends.
+var _army_dir_x := PackedFloat32Array()
+var _army_dir_z := PackedFloat32Array()
 var _army_offensive := PackedByteArray()
 var _army_attack_order := PackedByteArray()
 var _army_enemy_near := PackedByteArray()
@@ -204,7 +236,10 @@ func add_army(fc) -> int:
 	armies.append(fc)
 	_army_alive.resize(armies.size())
 	_army_fighting.resize(armies.size())
+	_army_straggling.resize(armies.size())
 	_army_moving.resize(armies.size())
+	_army_dir_x.resize(armies.size())
+	_army_dir_z.resize(armies.size())
 	_army_offensive.resize(armies.size())
 	_army_attack_order.resize(armies.size())
 	_army_enemy_near.resize(armies.size())
@@ -232,9 +267,11 @@ func ensure_capacity(n: int) -> void:
 	flags.resize(n)
 	dirty_tick.resize(n)
 	_has_path.resize(n)
+	_srv_combat_until.resize(n)
 	_last_disp_x.resize(n)
 	_last_disp_z.resize(n)
 	_disp_seen.resize(n)
+	_pushed.resize(n)
 	while _reversal_ticks.size() < n:
 		_reversal_ticks.append([])
 	for i in range(old, n):
@@ -288,6 +325,7 @@ func add_unit(id: int, x: float, z: float, p_owner: int, army_idx: int, p_type: 
 		var fc = armies[army_idx]
 		_army_alive[army_idx] += 1
 		fc.members.append(id)
+		fc.slot_index.append(fc.members.size() - 1)
 		if fc.packed_count < fc.members.size():
 			fc.packed_count = fc.members.size()
 
@@ -396,14 +434,45 @@ func army_min_speed(fc) -> float:
 			s = minf(s, speed[id])
 	return s if s < INF else speed_for_type(UnitType.CLUBMAN)
 
-## Re-centre the anchor on the living soldiers (used when a new order starts).
+## Re-centre the anchor so the *existing* slot grid best fits the living soldiers (least
+## squares over their fixed slots). Rows, pitch and slot indices are untouched: a new order
+## never rebuilds the grid, so soldiers keep their neighbours (see repack_army for the only
+## place the grid is compacted).
 func recentre_anchor(fc) -> void:
-	fc.anchor = army_centroid(fc)
+	var offs: PackedVector2Array = fc.slot_offsets(maxi(fc.packed_count, 1))
+	var cs := cos(fc.direction)
+	var sn := sin(fc.direction)
+	var sx := 0.0
+	var sz := 0.0
+	var n := 0
+	for k in range(fc.members.size()):
+		var id: int = fc.members[k]
+		if (flags[id] & F_ALIVE) == 0:
+			continue
+		var o: Vector2 = offs[mini(fc.slot_index[k], offs.size() - 1)]
+		sx += pos_x[id] - (o.x * cs - o.y * sn)
+		sz += pos_z[id] - (o.x * sn + o.y * cs)
+		n += 1
+	if n > 0:
+		fc.anchor = Vector2(sx / float(n), sz / float(n))
 	fc.anchor_speed = army_min_speed(fc) * Formation.ANCHOR_SPEED_SCALE
-	var alive := army_alive_count(fc)
-	fc.packed_count = alive
-	fc._offset_cache.clear()
 	fc.slots_dirty = true
+
+## Compact the grid onto the living soldiers: k-th living member takes slot k and the grid
+## shrinks to the living count. Only ever run from a scheduled order while the army is idle
+## so every peer changes slots on the same tick.
+func repack_army(fc) -> void:
+	var k := 0
+	for m in range(fc.members.size()):
+		if (flags[fc.members[m]] & F_ALIVE) == 0:
+			continue
+		fc.slot_index[m] = k
+		k += 1
+	if k > 0:
+		fc.packed_count = k
+	fc.repack_pending = false
+	fc.slots_dirty = true
+	recentre_anchor(fc)
 
 func _find_path(from: Vector2, to: Vector2) -> PackedVector2Array:
 	if walkability == null:
@@ -450,13 +519,18 @@ func rout_army(fc) -> void:
 		kill_unit(id)
 	routed_armies.append(fc.index)
 
-## Client reconciliation: pull toward the authoritative position. Small errors are ignored,
-## medium ones blended over the next ticks, large ones snapped.
-func apply_correction(id: int, sx: float, sz: float, ignore_below: float, snap_above: float) -> void:
+## Client reconciliation. `(sx, sz)` is the authoritative position and `(rx, rz)` the local
+## position it is compared against (this sim's position at the same tick when known, else the
+## current one); the error is applied to the *current* position. Small errors are ignored,
+## medium ones stored and blended direction-safely in _step_units, large ones snapped.
+func apply_correction(id: int, sx: float, sz: float, ignore_below: float, snap_above: float, rx: float = INF, rz: float = INF) -> void:
 	if not is_alive(id):
 		return
-	var dx := sx - pos_x[id]
-	var dz := sz - pos_z[id]
+	if rx == INF:
+		rx = pos_x[id]
+		rz = pos_z[id]
+	var dx := sx - rx
+	var dz := sz - rz
 	var d2 := dx * dx + dz * dz
 	if d2 < ignore_below * ignore_below:
 		corr_x[id] = 0.0
@@ -464,21 +538,14 @@ func apply_correction(id: int, sx: float, sz: float, ignore_below: float, snap_a
 		return
 	if d2 > snap_above * snap_above:
 		snap_count += 1
-		pos_x[id] = sx
-		pos_z[id] = sz
-		prev_x[id] = sx
-		prev_z[id] = sz
+		pos_x[id] += dx
+		pos_z[id] += dz
+		prev_x[id] = pos_x[id]
+		prev_z[id] = pos_z[id]
 		corr_x[id] = 0.0
 		corr_z[id] = 0.0
 		return
-	# While the formation is marching, local slots are the dest. Blending a
-	# snapshot through those slots pulls soldiers backward then they walk
-	# forward again (the rubber-band). Keep hard snaps; skip the blend.
-	var ai: int = army[id]
-	if ai >= 0 and ai < armies.size() and armies[ai].moving:
-		corr_x[id] = 0.0
-		corr_z[id] = 0.0
-		return
+	corr_count += 1
 	corr_x[id] = dx
 	corr_z[id] = dz
 
@@ -486,7 +553,8 @@ const RECONCILE_IGNORE := 2.0
 const RECONCILE_SNAP := 60.0
 
 ## Client: apply one authoritative snapshot record (position, hp fraction, server flags).
-func reconcile(id: int, sx: float, sz: float, hp_frac: float, server_flags: int) -> void:
+## `snap_tick` is the server tick the record was taken at (-1 = unknown -> compare with now).
+func reconcile(id: int, sx: float, sz: float, hp_frac: float, server_flags: int, snap_tick: int = -1) -> void:
 	if id < 0 or id >= count:
 		return
 	if (server_flags & F_ALIVE) == 0:
@@ -495,25 +563,56 @@ func reconcile(id: int, sx: float, sz: float, hp_frac: float, server_flags: int)
 	if not is_alive(id):
 		return
 	hp[id] = clampf(hp_frac, 0.0, 1.0) * max_hp[id]
-	apply_correction(id, sx, sz, RECONCILE_IGNORE, RECONCILE_SNAP)
+	if (server_flags & F_IN_COMBAT) != 0:
+		_srv_combat_until[id] = tick + SERVER_COMBAT_HOLD_TICKS
+	else:
+		_srv_combat_until[id] = 0
+	var rx := INF
+	var rz := INF
+	var ignore := RECONCILE_IGNORE
+	if snap_tick > tick:
+		# We have not simulated that tick yet: the server unit may legitimately be up to
+		# speed * lag ahead of us, so widen the dead band by that much.
+		ignore += speed[id] * SIM_DT * float(snap_tick - tick)
+	elif snap_tick >= 0 and tick - snap_tick < HIST_TICKS and not _hist_tick.is_empty():
+		var slot: int = snap_tick % HIST_TICKS
+		if _hist_tick[slot] == snap_tick:
+			var hx: PackedFloat32Array = _hist_x[slot]
+			if id < hx.size():
+				rx = hx[id]
+				rz = (_hist_z[slot] as PackedFloat32Array)[id]
+	apply_correction(id, sx, sz, ignore, RECONCILE_SNAP, rx, rz)
+
+func _record_history() -> void:
+	if _hist_tick.is_empty():
+		_hist_tick.resize(HIST_TICKS)
+		_hist_tick.fill(-1)
+		_hist_x.resize(HIST_TICKS)
+		_hist_z.resize(HIST_TICKS)
+	var slot: int = tick % HIST_TICKS
+	_hist_tick[slot] = tick
+	_hist_x[slot] = pos_x.duplicate()
+	_hist_z[slot] = pos_z.duplicate()
 
 func step(dt: float) -> void:
 	tick += 1
 	time += dt
 	died_ids.clear()
 	routed_armies.clear()
+	repack_requests.clear()
 	arrows.clear()
 	combat_hits = 0
 	prev_x = pos_x.duplicate()
 	prev_z = pos_z.duplicate()
 	_step_formations(dt)
 	hash.build(pos_x, pos_z, flags, count)
-	for a in armies:
-		if (tick + a.index) % ENEMY_NEAR_PERIOD == 0:
-			_update_enemy_near(a)
+	for ai in range(armies.size()):
+		if (tick + ai) % ENEMY_NEAR_PERIOD == 0:
+			_update_enemy_near(armies[ai])
 	_step_units(dt)
 	_step_pending_arrows(dt)
 	_step_deaths()
+	_record_history()
 	_track_move_oscillation()
 
 func max_move_reversals_in_window() -> int:
@@ -527,6 +626,7 @@ func _ensure_move_track() -> void:
 		_last_disp_x.resize(count)
 		_last_disp_z.resize(count)
 		_disp_seen.resize(count)
+		_pushed.resize(count)
 	while _reversal_ticks.size() < count:
 		_reversal_ticks.append([])
 
@@ -542,8 +642,9 @@ func _track_move_oscillation() -> void:
 	for i in range(count):
 		if (flags[i] & F_ALIVE) == 0:
 			continue
-		if (flags[i] & F_IN_COMBAT) != 0:
+		if (flags[i] & F_IN_COMBAT) != 0 or _srv_combat_until[i] > tick or _pushed[i] != 0:
 			_disp_seen[i] = 0
+			_pushed[i] = 0
 			continue
 		var dx: float = pos_x[i] - prev_x[i]
 		var dz: float = pos_z[i] - prev_z[i]
@@ -576,10 +677,20 @@ func _track_move_oscillation() -> void:
 			move_oscillation = true
 			move_oscillation_id = i
 			move_oscillation_count = n
+			var ai: int = army[i]
+			var a_moving := false
+			var a_order := -1
+			if ai >= 0 and ai < armies.size():
+				a_moving = armies[ai].moving
+				a_order = armies[ai].order_type
+			move_oscillation_info = "step=(%.2f,%.2f) goal_dist=%.1f corr=(%.2f,%.2f) has_path=%d army=%d moving=%s order=%d" % [
+				dx, dz, Vector2(goal_x[i] - pos_x[i], goal_z[i] - pos_z[i]).length(),
+				corr_x[i], corr_z[i], _has_path[i], ai, a_moving, a_order
+			]
 
 func _step_formations(dt: float) -> void:
-	for a in armies:
-		var ix: int = a.index
+	for ix in range(armies.size()):
+		var a = armies[ix]
 		_army_moving[ix] = 1 if a.moving else 0
 		_army_attack_order[ix] = 1 if a.order_type == Formation.OrderType.ATTACK else 0
 		_army_offensive[ix] = 1 if (
@@ -601,13 +712,49 @@ func _step_formations(dt: float) -> void:
 				if not a.members.is_empty():
 					pursuit = pursuit_for_type(utype[a.members[0]])
 				a.update_attack_destination(dt, tgt, pursuit, contact)
-		var moved: bool = a.advance_anchor(dt, contact)
-		_army_moving[ix] = 1 if a.moving else 0
-		if alive < int(float(a.packed_count) * Formation.REPACK_FRACTION) and alive > 0:
-			a.packed_count = alive
+		# Cohesion: the block crawls while too many soldiers are out of their slots.
+		var cohesion := 1.0
+		if alive > 0 and float(_army_straggling[ix]) > float(alive) * Formation.COHESION_STRAGGLER_FRACTION:
+			cohesion = Formation.COHESION_CRAWL_SPEED
+		# Client: glide the anchor toward the server's (see FormationController.sync_from_server).
+		# Direction-safe like the unit blend: a correction pointing against the march is never
+		# applied as a backward slide; the block holds instead and the debt is paid off by the
+		# anchor steps it does not take.
+		if a.anchor_corr != Vector2.ZERO:
+			var ac: Vector2 = a.anchor_corr
+			var blend: Vector2 = ac * 0.35
+			if a.moving and a.path_i < a.path.size():
+				var to: Vector2 = a.path[a.path_i] - a.anchor
+				if to.length_squared() > 1e-6:
+					var dir: Vector2 = to.normalized()
+					var along: float = ac.dot(dir)
+					if along < 0.0:
+						cohesion = 0.0
+						ac += dir * minf(-along, a.anchor_speed * dt)
+						blend -= dir * blend.dot(dir)
+			a.anchor += blend
+			ac -= blend
+			if ac.length_squared() < 0.0025:
+				ac = Vector2.ZERO
+			a.anchor_corr = ac
 			a.slots_dirty = true
-		# Slots follow the anchor; while marching they only need refreshing every other tick.
-		if a.slots_dirty or (moved and ((tick + a.index) & 1) == 0):
+		var moved: bool = a.advance_anchor(dt, contact, cohesion)
+		_army_moving[ix] = 1 if a.moving else 0
+		_army_dir_x[ix] = 0.0
+		_army_dir_z[ix] = 0.0
+		if a.moving and a.path_i < a.path.size():
+			var hd: Vector2 = a.path[a.path_i] - a.anchor
+			if hd.length_squared() > 1e-6:
+				hd = hd.normalized()
+				_army_dir_x[ix] = hd.x
+				_army_dir_z[ix] = hd.y
+		# Grid compaction is never done here: it is requested and applied later as a scheduled
+		# order (same tick on every peer) and only while the army is idle.
+		if not a.moving and not a.repack_pending and alive > 0 \
+				and alive < int(float(a.packed_count) * Formation.REPACK_FRACTION):
+			repack_requests.append(ix)
+		# Slots follow the anchor every tick so the block stays rigid while marching.
+		if a.slots_dirty or moved:
 			_assign_slots(a)
 			a.slots_dirty = false
 
@@ -626,15 +773,18 @@ func _attack_order_target_xz(a) -> Vector2:
 func _assign_slots(a) -> void:
 	var n: int = maxi(a.packed_count, 1)
 	var offs: PackedVector2Array = a.slot_offsets(n)
-	var k := 0
 	var dir: float = a.direction
 	var anchor: Vector2 = a.anchor
 	var cs := cos(dir)
 	var sn := sin(dir)
-	for id in a.members:
+	var members: PackedInt32Array = a.members
+	var slots: PackedInt32Array = a.slot_index
+	var last: int = offs.size() - 1
+	for k in range(members.size()):
+		var id: int = members[k]
 		if (flags[id] & F_ALIVE) == 0:
 			continue
-		var o: Vector2 = offs[mini(k, offs.size() - 1)]
+		var o: Vector2 = offs[mini(slots[k], last)]
 		var gx: float = anchor.x + o.x * cs - o.y * sn
 		var gz: float = anchor.y + o.x * sn + o.y * cs
 		if not is_walkable(gx, gz):
@@ -645,7 +795,6 @@ func _assign_slots(a) -> void:
 			goal_x[id] = gx
 			goal_z[id] = gz
 			_on_goal_changed(id)
-		k += 1
 
 func _on_goal_changed(id: int) -> void:
 	if _has_path[id] != 0:
@@ -659,6 +808,7 @@ func _on_goal_changed(id: int) -> void:
 func _step_units(dt: float) -> void:
 	_army_alive.fill(0)
 	_army_fighting.fill(0)
+	_army_straggling.fill(0)
 	alive_count = 0
 	var paths_this_tick := 0
 	var phase := tick % COMBAT_SCAN_PHASES
@@ -683,6 +833,11 @@ func _step_units(dt: float) -> void:
 	var has_path := _has_path
 	var a_alive := _army_alive
 	var a_fight := _army_fighting
+	var a_strag := _army_straggling
+	var srv_hold := _srv_combat_until
+	var pushed := _pushed
+	var push_track2 := MOVE_OSC_MIN_DISP * MOVE_OSC_MIN_DISP * 0.25
+	var catch_up_d2 := CATCH_UP_DIST * CATCH_UP_DIST
 	var cell_start: PackedInt32Array = hash._cell_start
 	var cell_items: PackedInt32Array = hash._cell_items
 	var hcols: int = hash.cols
@@ -697,6 +852,8 @@ func _step_units(dt: float) -> void:
 	var mh := map_h
 	var tk := tick
 	var a_moving := _army_moving
+	var a_dir_x := _army_dir_x
+	var a_dir_z := _army_dir_z
 	var a_off := _army_offensive
 	var a_atk := _army_attack_order
 	var a_near := _army_enemy_near
@@ -797,6 +954,10 @@ func _step_units(dt: float) -> void:
 			elif tdx3 < -0.5:
 				f &= ~F_FACING_RIGHT
 			stuck_arr[i] = 0.0
+		elif srv_hold[i] > tk:
+			# Server reports this soldier fighting while we predict it idle/marching: follow
+			# the server (corrections + separation only) instead of pulling it back to its slot.
+			stuck_arr[i] = 0.0
 		else:
 			var gx: float = gx_arr[i]
 			var gz: float = gz_arr[i]
@@ -824,11 +985,19 @@ func _step_units(dt: float) -> void:
 			var dx := gx - x
 			var dz := gz - z
 			var d2s := dx * dx + dz * dz
-			if d2s > STEER_DEADZONE * STEER_DEADZONE:
+			var dead: float = MARCH_DEADZONE if army_moving else STEER_DEADZONE
+			if d2s > dead * dead:
 				var d := sqrt(d2s)
 				var stp := step_len
-				if far2 > CATCH_UP_DIST * CATCH_UP_DIST and army_moving:
+				if army_moving:
+					# Rigid march: a soldier in its slot follows the anchor exactly (the slot
+					# advances one anchor step per tick and the step is clamped to `d`, so it
+					# lands on the slot and locks); a soldier behind its slot runs at
+					# CATCH_UP_SPEED until it does. Beyond CATCH_UP_DIST it counts as a
+					# straggler and slows the block (cohesion).
 					stp *= Formation.CATCH_UP_SPEED
+					if far2 > catch_up_d2 and ai >= 0:
+						a_strag[ai] += 1
 				if stp > d:
 					stp = d
 				var inv := stp / d
@@ -859,12 +1028,43 @@ func _step_units(dt: float) -> void:
 			else:
 				stuck_arr[i] = 0.0
 
-		# --- network correction blend (clients) ---
+		# --- network correction blend (clients), direction-safe ---
+		# The part of the correction that opposes the march is dropped: a correction may
+		# speed a soldier up, slow it down or slide it sideways, but it can never walk it
+		# backwards through its slot (the old rubber-band). "Backwards" is measured against
+		# the block's heading while the army marches and against the soldier's own steering
+		# step (so a soldier closing on its slot is not yanked away from it again either).
 		var cx: float = cx_arr[i]
 		var cz: float = cz_arr[i]
 		if cx != 0.0 or cz != 0.0:
-			nx += cx * 0.35
-			nz += cz * 0.35
+			var bx := cx * 0.35
+			var bz := cz * 0.35
+			var hx := 0.0
+			var hz := 0.0
+			if army_moving and ai >= 0:
+				hx = a_dir_x[ai]
+				hz = a_dir_z[ai]
+			var has_heading := hx != 0.0 or hz != 0.0
+			if has_heading:
+				var ah := bx * hx + bz * hz
+				if ah < 0.0:
+					bx -= hx * ah
+					bz -= hz * ah
+			var sx0 := nx - x
+			var sz0 := nz - z
+			var s2 := sx0 * sx0 + sz0 * sz0
+			if s2 > 1e-6:
+				var along := (bx * sx0 + bz * sz0) / s2
+				if along < 0.0:
+					bx -= sx0 * along
+					bz -= sz0 * along
+					if has_heading:
+						var ah2 := bx * hx + bz * hz
+						if ah2 < 0.0:
+							bx -= hx * ah2
+							bz -= hz * ah2
+			nx += bx
+			nz += bz
 			cx *= 0.65
 			cz *= 0.65
 			if absf(cx) < 0.05 and absf(cz) < 0.05:
@@ -933,6 +1133,8 @@ func _step_units(dt: float) -> void:
 					var sc := MAX_PUSH_PER_TICK / sqrt(pl2)
 					px *= sc
 					pz *= sc
+				if pl2 > push_track2:
+					pushed[i] = 1
 				nx += px
 				nz += pz
 

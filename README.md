@@ -89,6 +89,8 @@ Add `--stress-units=1000 --map=XL` to the server and both client commands in **T
 
 Join a host's server, or play two humans on this machine. In the lobby, pick a color if you want, then press **Ready**.
 
+In a match, use the **bottom selection bar** (Total War–style): order mode (Move / Attack / Attack-Move), stance buttons, **portraits** for each selected army (with soldier count), Show range, and Draft. Click a portrait to select only that army; **Shift+click** a portrait or an army on the map to add or remove it from the selection. **Shift+drag** a marquee to add armies to the selection. Keyboard shortcuts **M** / **A** / **G** still set move / attack / attack-move.
+
 ### Windows
 
 **Join a server** — Command Prompt in this folder (use the IP the host gives you):

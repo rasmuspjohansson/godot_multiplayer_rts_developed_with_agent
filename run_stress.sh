@@ -28,8 +28,8 @@ CLIENT_FPS_MIN="${CLIENT_FPS_MIN:-45}"
 echo "Stress run: units/player=$UNITS map=$MAP; sampling for ${SECONDS_TO_RUN}s..."
 sleep "$SECONDS_TO_RUN"
 
-pkill -9 -f -- '[g]odot.*-- --server' 2>/dev/null || true
-pkill -9 -f -- '[g]odot.*-- --client' 2>/dev/null || true
+pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --server' 2>/dev/null || true
+pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --client' 2>/dev/null || true
 sleep 1
 
 summarise() {
@@ -78,6 +78,27 @@ def samples(path, marker):
             out.append(dict(re.findall(r"(\w+)=(-?[\d.]+)", line)))
     return out[1:] if len(out) > 1 else out
 ok = True
+# Same sync checks as tests.json for the two-client match: the clock stays slaved, orders are
+# never late, no hard snaps, no walking in place, no move oscillation.
+for c in ("A", "B"):
+    path = f"logs/client_{c}.log"
+    rows = [dict(re.findall(r"(\w+)=(-?[\d.]+)", l)) for l in open(path, errors="replace") if "TEST_SIM_CLIENT" in l]
+    osc = any("TEST_MOVE_OSCILLATION_FAIL" in l for l in open(path, errors="replace"))
+    if not rows:
+        print(f"  client {c}: no TEST_SIM_CLIENT samples FAIL")
+        ok = False
+        continue
+    worst = {k: max(int(float(r.get(k, 0))) for r in rows) for k in ("tick_drift", "late_orders", "snaps", "walk_in_place")}
+    checks = [
+        ("tick_drift <= 2", worst["tick_drift"] <= 2),
+        ("late_orders == 0", worst["late_orders"] == 0),
+        ("snaps == 0", worst["snaps"] == 0),
+        ("walk_in_place == 0", worst["walk_in_place"] == 0),
+        ("no TEST_MOVE_OSCILLATION_FAIL", not osc),
+    ]
+    for name, good in checks:
+        print(f"  client {c} sync {name} (worst {worst})" if name == "tick_drift <= 2" else f"  client {c} sync {name}", "OK" if good else "FAIL")
+        ok &= good
 srv = samples("logs/server.log", "TEST_PERF_TICK_MS")
 if srv:
     avg = sum(float(r["sim_avg"]) for r in srv) / len(srv)

@@ -282,9 +282,14 @@ func _height_inline(hg: PackedFloat32Array, cols: int, rows: int, inv_step: floa
 	var tz: float = gz - float(j0)
 	var r0: int = j0 * cols
 	var r1: int = j1 * cols
-	var h0: float = hg[r0 + i0] + (hg[r0 + i1] - hg[r0 + i0]) * tx
-	var h1: float = hg[r1 + i0] + (hg[r1 + i1] - hg[r1 + i0]) * tx
-	return h0 + (h1 - h0) * tz
+	var h00: float = hg[r0 + i0]
+	var h10: float = hg[r0 + i1]
+	var h01: float = hg[r1 + i0]
+	var h11: float = hg[r1 + i1]
+	# Same triangle split as World._build_terrain (diagonal b-c) so feet match the mesh.
+	if tx + tz <= 1.0:
+		return h00 + (h10 - h00) * tx + (h01 - h00) * tz
+	return h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
 
 func _process(_delta: float) -> void:
 	var t := now_sec()
