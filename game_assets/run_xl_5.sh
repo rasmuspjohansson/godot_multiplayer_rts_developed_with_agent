@@ -25,8 +25,8 @@ for RUN in 1 2 3 4 5; do
     cp logs/client_A.log "$RUN_DIR/" 2>/dev/null || true
     cp logs/client_B.log "$RUN_DIR/" 2>/dev/null || true
     FAIL=$((FAIL + 1))
-    pkill -9 -f '[g]odot.*-- --server' 2>/dev/null || true
-    pkill -9 -f '[g]odot.*-- --client' 2>/dev/null || true
+    pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --server' 2>/dev/null || true
+    pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --client' 2>/dev/null || true
     sleep 3
     continue
   fi
@@ -54,8 +54,8 @@ for RUN in 1 2 3 4 5; do
     PASS=$((PASS + 1))
   fi
 
-  pkill -9 -f '[g]odot.*-- --server' 2>/dev/null || true
-  pkill -9 -f '[g]odot.*-- --client' 2>/dev/null || true
+  pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --server' 2>/dev/null || true
+  pkill -9 -f -- '/[Gg]odot[^ ]* .*--path [^ ]* -- --client' 2>/dev/null || true
   sleep 3
 done
 

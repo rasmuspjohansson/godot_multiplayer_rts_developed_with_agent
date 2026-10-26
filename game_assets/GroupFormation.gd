@@ -62,16 +62,6 @@ static func drag_layout(
 		"front_span": front_span,
 	}
 
-## Drag from line_start (RMB press) to line_end (cursor / release). Delegates to drag_layout.
-static func compute_line_formation(
-	line_start: Vector2,
-	line_end: Vector2,
-	soldier_count: int,
-	spacing: float = FOOT_FORMATION_SPACING,
-) -> Array[Vector2]:
-	var layout: Dictionary = drag_layout(line_start, line_end, soldier_count, spacing)
-	return layout["positions"]
-
 ## Splits the drag segment into one sub-segment per army (in selection order) with a gap between
 ## them. `spacings` = per-army formation pitch (mounted/foot); gaps scale so bodies do not overlap.
 ## If the drag is too short to fit K segments every army gets the whole segment.

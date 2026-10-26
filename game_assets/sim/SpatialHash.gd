@@ -11,7 +11,6 @@ var _cell_start: PackedInt32Array = PackedInt32Array()
 var _cell_items: PackedInt32Array = PackedInt32Array()
 var _cell_of: PackedInt32Array = PackedInt32Array()
 var _fill: PackedInt32Array = PackedInt32Array()
-var _n: int = 0
 ## Result buffer for the last query (ids); valid entries are [0, last_count).
 var scratch: PackedInt32Array = PackedInt32Array()
 
@@ -23,14 +22,8 @@ func setup(map_w: float, map_h: float, p_cell_size: float) -> void:
 	_fill.resize(cols * rows)
 	scratch.resize(256)
 
-func cell_index(x: float, z: float) -> int:
-	var cx: int = clampi(int(x / cell_size), 0, cols - 1)
-	var cz: int = clampi(int(z / cell_size), 0, rows - 1)
-	return cz * cols + cx
-
 ## Rebuild from positions; only ids with alive[i] != 0 are inserted.
 func build(xs: PackedFloat32Array, zs: PackedFloat32Array, alive: PackedByteArray, n: int) -> void:
-	_n = n
 	if _cell_of.size() < n:
 		_cell_of.resize(n)
 	if _cell_items.size() < n:
@@ -96,28 +89,6 @@ func query_radius(x: float, z: float, radius: float, xs: PackedFloat32Array, zs:
 						scratch.resize(cap)
 					scratch[count] = id
 					count += 1
-	return count
-
-## Ids in the cells overlapping the radius (no exact distance test; caller filters).
-func query_cells(x: float, z: float, radius: float) -> int:
-	var cx0: int = clampi(int((x - radius) / cell_size), 0, cols - 1)
-	var cx1: int = clampi(int((x + radius) / cell_size), 0, cols - 1)
-	var cz0: int = clampi(int((z - radius) / cell_size), 0, rows - 1)
-	var cz1: int = clampi(int((z + radius) / cell_size), 0, rows - 1)
-	var count: int = 0
-	var cap: int = scratch.size()
-	for cz in range(cz0, cz1 + 1):
-		var row_base: int = cz * cols
-		for cx in range(cx0, cx1 + 1):
-			var c: int = row_base + cx
-			var a: int = _cell_start[c]
-			var b: int = _cell_start[c + 1]
-			if count + (b - a) > cap:
-				cap = maxi(cap * 2, count + (b - a))
-				scratch.resize(cap)
-			for k in range(a, b):
-				scratch[count] = _cell_items[k]
-				count += 1
 	return count
 
 ## Nearest alive id to (x, z) within radius, or -1.

@@ -6,7 +6,7 @@ const _GroupFormation = preload("res://GroupFormation.gd")
 const _MarqueeRectOverlay = preload("res://MarqueeRectOverlay.gd")
 const _SelectionBar = preload("res://SelectionBar.gd")
 const UNIT_SPRITE_PATHS = preload("res://UnitSpritePaths.gd")
-## Data-oriented simulation core (see documentation.md "Architecture").
+## Data-oriented simulation core (see docs/architecture.md).
 const _UnitSim = preload("res://sim/UnitSim.gd")
 const _Formation = preload("res://sim/FormationController.gd")
 const _NetSync = preload("res://sim/NetSync.gd")
@@ -18,8 +18,6 @@ const DEFAULT_SOLDIERS_PER_ARMY := 10
 const MIN_SOLDIERS_PER_ARMY := 10
 const MAX_SOLDIERS_PER_ARMY := 200
 const STRESS_SOLDIERS_PER_ARMY := 50
-## Default armies per player when map JSON is unavailable (see MapConfig.max_armies_per_player()).
-const ARMIES_PER_PLAYER_FALLBACK := 2
 const OFFMAP_SPAWN_MARGIN := 120.0
 ## Map width/height come from `MapConfig` (maps/map_{S|L|XL}.json). Access via
 ## `MapConfig.width` / `MapConfig.height` elsewhere in this file.
@@ -43,11 +41,8 @@ var _local_sim_enabled := false
 ## Off-map spawn/stop lanes for the legacy draft-army path. Recomputed from
 ## MapConfig in `_init_offmap_lanes()` so they scale with map size.
 var WEST_SPAWN: Vector2 = Vector2.ZERO
-var EAST_SPAWN: Vector2 = Vector2.ZERO
 var WEST_STOP_X: float = 80.0
 var EAST_STOP_X: float = 0.0
-var NORTH_SPAWN: Vector2 = Vector2.ZERO
-var SOUTH_SPAWN: Vector2 = Vector2.ZERO
 var NORTH_STOP_Y: float = 80.0
 var SOUTH_STOP_Y: float = 0.0
 const CP_CAPTURE_RADIUS := 120.0
@@ -99,7 +94,6 @@ var sync_timer := 0.0
 var _last_sent_cp_owner: Dictionary = {}
 var _last_sent_resources: Dictionary = {}
 var _capture_hud_sent := false
-var player_side := {}  # pid -> "west" | "east" | ... (legacy draft path)
 var player_slot := {}  # pid -> int (index into MapConfig.start_positions)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
@@ -484,7 +478,6 @@ func _ready():
 		_setup_selection_bar()
 	_add_play_boundary_line()
 	_setup_perf_monitor()
-	call_deferred("_agent_debug_log_world_ready")
 	if not multiplayer.is_server():
 		call_deferred("_notify_client_world_ready")
 
@@ -698,11 +691,8 @@ func _init_offmap_lanes() -> void:
 	var w: float = MapConfig.width
 	var h: float = MapConfig.height
 	WEST_SPAWN = Vector2(-120.0, h / 2.0)
-	EAST_SPAWN = Vector2(w + 120.0, h / 2.0)
 	WEST_STOP_X = 80.0
 	EAST_STOP_X = w - 80.0
-	NORTH_SPAWN = Vector2(w / 2.0, -100.0)
-	SOUTH_SPAWN = Vector2(w / 2.0, h + 100.0)
 	NORTH_STOP_Y = 80.0
 	SOUTH_STOP_Y = h - 80.0
 
@@ -978,17 +968,6 @@ func find_unit_path(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
 		return PackedVector2Array([to_xz])
 	return _walkability.find_path(from_xz, to_xz)
 
-func prepare_unit_move_target(from_xz: Vector2, to_xz: Vector2) -> PackedVector2Array:
-	to_xz = snap_move_goal_xz(to_xz)
-	if _walkability == null:
-		return PackedVector2Array([to_xz])
-	if not _walkability.is_walkable_world(to_xz.x, to_xz.y):
-		return PackedVector2Array()
-	var found := _walkability.find_path(from_xz, to_xz)
-	if found.is_empty():
-		return PackedVector2Array()
-	return found
-
 func rebuild_from_mapconfig() -> void:
 	_init_offmap_lanes()
 	var bg := get_node_or_null("Background")
@@ -1117,21 +1096,6 @@ func _build_background() -> void:
 	add_child(bg)
 	print("TEST_BACKGROUND_BUILT: w=%.1f h=%.1f at z=-1" % [panel_w, panel_h])
 
-func _agent_debug_log_world_ready() -> void:
-	#region agent log
-	var vc: Camera3D = get_viewport().get_camera_3d()
-	GameState.agent_debug_log("H5", "World.gd:_agent_debug_log_world_ready", "viewport_camera", {
-		"viewport_cam_null": vc == null,
-		"viewport_cam_path": str(vc.get_path()) if vc else "",
-		"viewport_cam_is_current": vc.is_current() if vc else false,
-		"_camera_matches_viewport": (vc == _camera) if vc and _camera else false
-	})
-	GameState.agent_debug_log("H4", "World.gd:_agent_debug_log_world_ready", "world_root_visibility", {
-		"world_visible": visible,
-		"world_in_tree": is_inside_tree()
-	})
-	#endregion
-
 func _setup_selection_overlay():
 	var layer := CanvasLayer.new()
 	layer.layer = 50
@@ -1177,13 +1141,6 @@ func _setup_camera():
 	_camera.current = true
 	_camera_smoothing_initialized = false
 	_update_camera_position(0.0)
-	#region agent log
-	GameState.agent_debug_log("H1", "World.gd:_setup_camera", "camera_after_setup", {
-		"camera_current": _camera.current,
-		"camera_is_current": _camera.is_current(),
-		"cam_global_origin": [ _camera.global_position.x, _camera.global_position.y, _camera.global_position.z ]
-	})
-	#endregion
 
 ## 0 = zoomed out (overview), 1 = zoomed in (soldier-like framing).
 func _camera_zoom_t() -> float:
@@ -1282,14 +1239,6 @@ func _raycast_ground_along_camera_ray(from: Vector3, dir: Vector3) -> Vector3:
 			best = pt
 	return best
 
-func _ground_hit_at_screen_for_pose(screen: Vector2, look_xz: Vector2) -> Vector3:
-	if _camera == null:
-		return Vector3.ZERO
-	_apply_camera_pose_for_extents(look_xz)
-	var from := _camera.project_ray_origin(screen)
-	var dir := _camera.project_ray_normal(screen)
-	return _raycast_ground_along_camera_ray(from, dir)
-
 func _raycast_ground_at_screen_with_current_pose(screen: Vector2) -> Vector3:
 	if _camera == null:
 		return Vector3.ZERO
@@ -1358,14 +1307,6 @@ func _clamp_look_at_xz(v: Vector2) -> Vector2:
 		v += delta
 		_invalidate_pan_bounds_cache()
 	return v
-
-func _ray_hit_plane_y(from: Vector3, dir: Vector3, plane_y: float) -> Variant:
-	if absf(dir.y) < 0.0001:
-		return null
-	var t := (plane_y - from.y) / dir.y
-	if t < 0.0:
-		return null
-	return from + dir * t
 
 ## Ground footprint beyond pivot: (west, east, north, south) in map X/Z units.
 func _camera_ground_view_extents_raw(look_xz: Vector2) -> Vector4:
@@ -2114,23 +2055,6 @@ func _server_armies_order_attack(army_ids: Array, target_army_id: String, target
 	else:
 		print("TEST_ARMY_ATTACK: %s -> unit %d" % [",".join(ids), target_unit])
 
-@rpc("any_peer", "reliable")
-func _server_armies_order_attack_move(army_ids: Array, dest_x: float, dest_y: float):
-	if not multiplayer.is_server():
-		return
-	var sender := multiplayer.get_remote_sender_id()
-	var owned := _owned_live_armies(sender, army_ids)
-	if owned.is_empty():
-		return
-	var ids: Array = []
-	var dests := PackedFloat32Array()
-	for a in owned:
-		ids.append(a.army_id)
-		dests.append(dest_x)
-		dests.append(dest_y)
-	_server_broadcast_move(ids, dests, PackedFloat32Array(), PackedFloat32Array(), true)
-	print("TEST_ARMY_ATTACK_MOVE: sender=%d dest=(%d,%d) armies=%d" % [sender, int(dest_x), int(dest_y), ids.size()])
-
 ## MockPlayer / simple move: one army to a point, facing the travel direction.
 @rpc("any_peer", "reliable")
 func _server_move_army(aid: String, target: Vector2):
@@ -2246,8 +2170,7 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var edge: Dictionary = _offmap_spawn_for(dest)
 	var spawn_pos: Vector2 = edge.get("spawn", WEST_SPAWN)
 	var dir: float = float(edge.get("dir", 0.0))
-	var side: String = _nearest_edge_side(dest)
-	var stop_pos: Vector2 = _onmap_entry_for(spawn_pos, side)
+	var stop_pos: Vector2 = _onmap_entry_for(spawn_pos, str(edge.get("side", "west")))
 	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow, "soldiers": soldier_count}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
 	armies.append(army)
@@ -2259,46 +2182,25 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s soldiers=%d)" % [aid, use_horse, use_spear, use_bow, soldier_count])
 
 func _set_player_sides():
-	# Assign each player a start-position index by join order. Draft still uses
-	# west/east/north/south from the nearest map edge of that start marker.
+	# Assign each player a start-position index by join order. Draft spawns off the
+	# nearer of the west and east edges of that start marker.
 	var player_ids = GameState.players.keys()
 	for i in range(player_ids.size()):
 		var pid = player_ids[i]
 		player_slot[pid] = i
-		var dest: Vector2 = MapConfig.get_start_position(i)
-		player_side[pid] = _nearest_edge_side(dest)
 	for pid in player_ids:
 		army_index_per_player[pid] = MapConfig.max_armies_per_player() + 1
 
-func _nearest_edge_side(dest: Vector2) -> String:
-	var w: float = MapConfig.width
-	var h: float = MapConfig.height
-	var d_w: float = dest.x
-	var d_e: float = w - dest.x
-	var d_n: float = dest.y
-	var d_s: float = h - dest.y
-	if d_w <= d_e and d_w <= d_n and d_w <= d_s:
-		return "west"
-	if d_e <= d_n and d_e <= d_s:
-		return "east"
-	if d_n <= d_s:
-		return "north"
-	return "south"
-
+## Sprites only face left or right, so the opening march has to be horizontal: the nearer
+## of the west and east edges, at the rally's height. `dir` is the front angle (0 faces +X).
 func _offmap_spawn_for(dest: Vector2) -> Dictionary:
 	var w: float = MapConfig.width
 	var h: float = MapConfig.height
 	var m := OFFMAP_SPAWN_MARGIN
-	var side := _nearest_edge_side(dest)
-	match side:
-		"west":
-			return {"spawn": Vector2(-m, clampf(dest.y, 0.0, h)), "dir": 0.0}
-		"east":
-			return {"spawn": Vector2(w + m, clampf(dest.y, 0.0, h)), "dir": PI}
-		"north":
-			return {"spawn": Vector2(clampf(dest.x, 0.0, w), -m), "dir": PI / 2.0}
-		_:
-			return {"spawn": Vector2(clampf(dest.x, 0.0, w), h + m), "dir": -PI / 2.0}
+	var y := clampf(dest.y, 0.0, h)
+	if dest.x <= w - dest.x:
+		return {"spawn": Vector2(-m, y), "dir": 0.0, "side": "west"}
+	return {"spawn": Vector2(w + m, y), "dir": PI, "side": "east"}
 
 func _onmap_entry_for(spawn: Vector2, side: String) -> Vector2:
 	match side:
@@ -2816,12 +2718,6 @@ func _get_closest_enemy_army(army) -> Node:
 			best = a
 	return best
 
-## Living unit ids within `radius` of `center` (spatial hash; valid after the first sim tick).
-func get_units_in_radius(center: Vector2, radius: float) -> PackedInt32Array:
-	if _sim == null:
-		return PackedInt32Array()
-	return _sim.units_in_radius(center, radius)
-
 func _server_capture_and_resources(delta: float):
 	if not multiplayer.is_server() or _sim == null:
 		return
@@ -3178,9 +3074,6 @@ func _on_army_routed(army):
 		print("TEST_GAME_OVER: Draw (no armies left)")
 		rpc("_announce_winner", "")
 		_announce_winner("")
-
-func _raycast_ground() -> Vector3:
-	return _raycast_ground_at_screen(get_viewport().get_mouse_position())
 
 func _terrain_in_map_bounds(x: float, z: float) -> bool:
 	return x >= 0.0 and z >= 0.0 and x <= MapConfig.width and z <= MapConfig.height
@@ -3615,16 +3508,6 @@ func _issue_armies_attack_at(pos: Vector2) -> void:
 		_show_click_marker(pos)
 		rpc_id(1, "_server_armies_order_attack", ids, "", unit)
 
-func _issue_armies_attack_move_3d(dest: Vector2) -> void:
-	var sel := _get_selected_non_routed()
-	if sel.is_empty():
-		return
-	var ids: Array = []
-	for a in sel:
-		ids.append(a.army_id)
-	var dest_c := _clamp_map_v2(dest)
-	rpc_id(1, "_server_armies_order_attack_move", ids, dest_c.x, dest_c.y)
-
 func _get_army_at(pos_2d: Vector2, peer_id: int):
 	var best = null
 	var best_dist = ARMY_CLICK_RADIUS
@@ -3859,12 +3742,6 @@ func _client_spawn_capture_points(data: Array):
 			"sprite": anchor.get_node("Sprite"),
 		})
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
-	#region agent log
-	GameState.agent_debug_log("H3", "World.gd:_client_spawn_capture_points", "after_cp_spawn", {
-		"rpc_data_size": data.size(),
-		"capture_points_nodes": capture_points.size()
-	})
-	#endregion
 
 @rpc("authority", "unreliable")
 func _client_update_capture(cp_data: Array, res_data: Dictionary):

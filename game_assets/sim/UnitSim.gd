@@ -161,8 +161,11 @@ var _army_dir_z := PackedFloat32Array()
 var _army_offensive := PackedByteArray()
 var _army_attack_order := PackedByteArray()
 var _army_enemy_near := PackedByteArray()
-var _scratch_alive: PackedInt32Array = PackedInt32Array()
-
+## Per-soldier index into the army path. Only moves forward, and restarts when march_seq changes.
+var _march_i := PackedInt32Array()
+## 1 once a soldier has entered the last stretch, so a wide slot cannot pull them back onto the path.
+var _march_deploy := PackedByteArray()
+var _army_march_seen := PackedInt32Array()
 func setup(p_walkability, p_map_w: float, p_map_h: float, authority: bool) -> void:
 	walkability = p_walkability
 	map_w = p_map_w
@@ -244,13 +247,8 @@ func add_army(fc) -> int:
 	_army_attack_order.resize(armies.size())
 	_army_enemy_near.resize(armies.size())
 	_army_enemy_near[fc.index] = 1
+	_army_march_seen.resize(armies.size())
 	return fc.index
-
-func army_by_id(aid: String):
-	for a in armies:
-		if a.army_id == aid:
-			return a
-	return null
 
 func ensure_capacity(n: int) -> void:
 	if n <= count:
@@ -272,6 +270,8 @@ func ensure_capacity(n: int) -> void:
 	_last_disp_z.resize(n)
 	_disp_seen.resize(n)
 	_pushed.resize(n)
+	_march_i.resize(n)
+	_march_deploy.resize(n)
 	while _reversal_ticks.size() < n:
 		_reversal_ticks.append([])
 	for i in range(old, n):
@@ -307,10 +307,10 @@ func add_unit(id: int, x: float, z: float, p_owner: int, army_idx: int, p_type: 
 	target[id] = -1
 	var f := F_ALIVE
 	# Art faces right; F_FACING_RIGHT means "looking toward +X". Inherit the army's
-	# formation facing so east-side armies do not idle looking the wrong way.
+	# front, not its rank axis, so an army marching west does not idle facing right.
 	var face_right := true
 	if army_idx >= 0 and army_idx < armies.size():
-		face_right = cos(armies[army_idx].direction) >= 0.0
+		face_right = cos(armies[army_idx].front_angle()) >= 0.0
 	if face_right:
 		f |= F_FACING_RIGHT
 	if bool(st.ranged):
@@ -398,13 +398,6 @@ func nearest_unit(p: Vector2, radius: float, exclude_owner: int = -1, skip_neutr
 
 func is_alive(id: int) -> bool:
 	return id >= 0 and id < count and (flags[id] & F_ALIVE) != 0
-
-func is_hostile(a: int, b: int) -> bool:
-	if owner_pid[a] == owner_pid[b]:
-		return false
-	if (flags[a] & F_NEUTRAL) != 0 and (flags[b] & F_NEUTRAL) != 0:
-		return false
-	return true
 
 func army_centroid(fc) -> Vector2:
 	var sx := 0.0
@@ -712,9 +705,11 @@ func _step_formations(dt: float) -> void:
 				if not a.members.is_empty():
 					pursuit = pursuit_for_type(utype[a.members[0]])
 				a.update_attack_destination(dt, tgt, pursuit, contact)
-		# Cohesion: the block crawls while too many soldiers are out of their slots.
+		# Cohesion crawl holds the block for stragglers. A player move does not wait:
+		# everyone walks the shared path at their own speed.
 		var cohesion := 1.0
-		if alive > 0 and float(_army_straggling[ix]) > float(alive) * Formation.COHESION_STRAGGLER_FRACTION:
+		var player_march: bool = a.order_type == Formation.OrderType.MOVE or a.order_type == Formation.OrderType.ATTACK_MOVE
+		if not player_march and alive > 0 and float(_army_straggling[ix]) > float(alive) * Formation.COHESION_STRAGGLER_FRACTION:
 			cohesion = Formation.COHESION_CRAWL_SPEED
 		# Client: glide the anchor toward the server's (see FormationController.sync_from_server).
 		# Direction-safe like the unit blend: a correction pointing against the march is never
@@ -753,8 +748,10 @@ func _step_formations(dt: float) -> void:
 		if not a.moving and not a.repack_pending and alive > 0 \
 				and alive < int(float(a.packed_count) * Formation.REPACK_FRACTION):
 			repack_requests.append(ix)
-		# Slots follow the anchor every tick so the block stays rigid while marching.
-		if a.slots_dirty or moved:
+		# Attack slots follow the anchor. A player march refreshes path goals every tick,
+		# because each soldier's cursor advances on its own.
+		var marching: bool = player_march and a.moving and not a.path.is_empty()
+		if a.slots_dirty or moved or marching:
 			_assign_slots(a)
 			a.slots_dirty = false
 
@@ -773,20 +770,48 @@ func _attack_order_target_xz(a) -> Vector2:
 func _assign_slots(a) -> void:
 	var n: int = maxi(a.packed_count, 1)
 	var offs: PackedVector2Array = a.slot_offsets(n)
+	var members: PackedInt32Array = a.members
+	var slots: PackedInt32Array = a.slot_index
+	var last: int = offs.size() - 1
+	var marching: bool = (a.order_type == Formation.OrderType.MOVE or a.order_type == Formation.OrderType.ATTACK_MOVE) and a.moving and not a.path.is_empty()
+	if marching and a.index >= 0 and a.index < _army_march_seen.size() and _army_march_seen[a.index] != a.march_seq:
+		_army_march_seen[a.index] = a.march_seq
+		for id in members:
+			if id >= 0 and id < _march_i.size():
+				_march_i[id] = 0
+				_march_deploy[id] = 0
 	var dir: float = a.direction
 	var anchor: Vector2 = a.anchor
 	var cs := cos(dir)
 	var sn := sin(dir)
-	var members: PackedInt32Array = a.members
-	var slots: PackedInt32Array = a.slot_index
-	var last: int = offs.size() - 1
+	var fcs := cos(a.dest_direction)
+	var fsn := sin(a.dest_direction)
 	for k in range(members.size()):
 		var id: int = members[k]
 		if (flags[id] & F_ALIVE) == 0:
 			continue
 		var o: Vector2 = offs[mini(slots[k], last)]
-		var gx: float = anchor.x + o.x * cs - o.y * sn
-		var gz: float = anchor.y + o.x * sn + o.y * cs
+		var gx: float
+		var gz: float
+		if marching:
+			var along := _march_goal(a, id, o)
+			var fx: float = a.dest.x + o.x * fcs - o.y * fsn
+			var fz: float = a.dest.y + o.x * fsn + o.y * fcs
+			var remain := _march_remaining(a.path, _march_i[id], pos_x[id], pos_z[id])
+			var deployed := id < _march_deploy.size() and _march_deploy[id] != 0
+			if not deployed and remain <= Formation.DEPLOY_DIST:
+				_march_deploy[id] = 1
+				deployed = true
+			if deployed:
+				# Last stretch: the goal becomes the destination slot and stays there.
+				gx = fx
+				gz = fz
+			else:
+				gx = along.x
+				gz = along.y
+		else:
+			gx = anchor.x + o.x * cs - o.y * sn
+			gz = anchor.y + o.x * sn + o.y * cs
 		if not is_walkable(gx, gz):
 			var s := snap_walkable(Vector2(gx, gz))
 			gx = s.x
@@ -795,6 +820,65 @@ func _assign_slots(a) -> void:
 			goal_x[id] = gx
 			goal_z[id] = gz
 			_on_goal_changed(id)
+
+## Point on the shared path for this soldier: the waypoint their cursor is on, plus a rank
+## offset no wider than one spacing. The cursor only advances.
+func _march_goal(a, id: int, slot: Vector2) -> Vector2:
+	var path: PackedVector2Array = a.path
+	var cursor: int = 0
+	if id >= 0 and id < _march_i.size():
+		cursor = clampi(_march_i[id], 0, path.size() - 1)
+	# Wide enough for the one-spacing column to pass a bend, and narrow enough that a
+	# soldier on the far side of a lake cannot skip onto the next leg.
+	var reach := maxf(Formation.WAYPOINT_REACH, a.spacing * 2.0)
+	var px := pos_x[id]
+	var pz := pos_z[id]
+	while cursor < path.size() - 1:
+		var wp: Vector2 = path[cursor]
+		var nxt: Vector2 = path[cursor + 1]
+		var rel := Vector2(px - wp.x, pz - wp.y)
+		if rel.length() <= reach:
+			cursor += 1
+			continue
+		var ab := nxt - wp
+		var len2 := ab.length_squared()
+		if len2 < 1e-6:
+			break
+		var t := rel.dot(ab) / len2
+		if t <= 0.0:
+			break
+		var closest := wp + ab * clampf(t, 0.0, 1.0)
+		if Vector2(px, pz).distance_to(closest) > reach:
+			break
+		cursor += 1
+	if id >= 0 and id < _march_i.size():
+		_march_i[id] = cursor
+	var tangent := Vector2.ZERO
+	if cursor < path.size() - 1:
+		tangent = path[cursor + 1] - path[cursor]
+	elif cursor > 0:
+		tangent = path[cursor] - path[cursor - 1]
+	if tangent.length_squared() < 1e-6:
+		# One waypoint (open ground): the order's travel direction, which is the front.
+		tangent = Vector2.from_angle(a.dest_direction - PI * 0.5)
+	else:
+		tangent = tangent.normalized()
+	var normal := Vector2(-tangent.y, tangent.x)
+	var pitch: float = a.spacing
+	var lateral := clampf(slot.x, -pitch, pitch)
+	var stagger := clampf(slot.y, -pitch, pitch) * 0.5
+	return path[cursor] - tangent * stagger + normal * lateral
+
+func _march_remaining(path: PackedVector2Array, cursor: int, px: float, pz: float) -> float:
+	if path.is_empty():
+		return 0.0
+	var i := clampi(cursor, 0, path.size() - 1)
+	var wp: Vector2 = path[i]
+	var remain := Vector2(wp.x - px, wp.y - pz).length()
+	while i < path.size() - 1:
+		remain += path[i].distance_to(path[i + 1])
+		i += 1
+	return remain
 
 func _on_goal_changed(id: int) -> void:
 	if _has_path[id] != 0:

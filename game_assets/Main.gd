@@ -4,7 +4,6 @@ const PORT = 8910
 const MAX_CLIENTS = 4
 
 var is_server := false
-var is_client := false
 var player_name := ""
 var auto_test := false
 var preferred_color := -1
@@ -78,7 +77,6 @@ func _start_server():
 	_load_lobby()
 
 func _start_client():
-	is_client = true
 	var peer = ENetMultiplayerPeer.new()
 	var err = peer.create_client(_server_host, PORT)
 	if err != OK:
@@ -150,6 +148,13 @@ const LOBBY_RETURN_DELAY_SEC := 5.0
 func return_to_lobby_after_match() -> void:
 	if not is_server:
 		return
+	if GameState.is_auto_test:
+		# Automated runs must not linger in the lobby: the clients render with vsync off and
+		# would slow down the headless checks that verify_test_logs.sh runs afterwards.
+		# Clients quit on their own when the server disconnects.
+		print("TEST_AUTO_TEST_QUIT: auto-test match finished, server quitting")
+		get_tree().quit()
+		return
 	GameState.reset_match_state()
 	for pid in GameState.players:
 		GameState.players[pid]["ready"] = false
@@ -212,14 +217,6 @@ func set_my_color(color_index: int):
 	GameState.players[sender_id]["color_index"] = color_index
 	rpc("_sync_players_from_main", GameState.players)
 
-@rpc("any_peer", "reliable")
-func update_player_name(p_name: String):
-	var sender_id = multiplayer.get_remote_sender_id()
-	if sender_id in GameState.players:
-		GameState.players[sender_id]["name"] = p_name
-		print("Server: Player name updated to '%s' (id=%d)" % [p_name, sender_id])
-		rpc("_sync_players_from_main", GameState.players)
-
 @rpc("authority", "reliable")
 func _sync_players_from_main(players: Dictionary):
 	GameState.players = players
@@ -250,15 +247,7 @@ func load_world():
 	var vol := get_node_or_null("AudioUI/VolumePanel")
 	if vol:
 		vol.visible = false
-	var scene_path = "res://World.tscn"
-	#region agent log
-	GameState.agent_debug_log("H2", "Main.gd:load_world", "scene_path_selection", {
-		"scene_path": scene_path,
-		"is_server": multiplayer.is_server(),
-		"unique_id": multiplayer.get_unique_id()
-	})
-	#endregion
-	var world = load(scene_path).instantiate()
+	var world = load("res://World.tscn").instantiate()
 	$Level.add_child(world)
 
 func load_game_over(winner_name: String):

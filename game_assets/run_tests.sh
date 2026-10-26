@@ -1,83 +1,67 @@
 #!/usr/bin/env bash
-# Run automated checks: headless PNG path test + optional client log verification.
+# Run all headless unit tests, optionally followed by match log verification.
 # Usage:
-#   ./run_tests.sh              — headless texture paths only
-#   ./run_tests.sh --with-logs  — also verify logs/client_*.log (after ./run_test.sh)
+#   ./run_tests.sh              — headless tests only
+#   ./run_tests.sh --with-logs  — also verify logs/*.log (after ./run_test.sh)
 
-set -euo pipefail
+set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-GODOT_BIN="${GODOT_BIN:-godot}"
+BUNDLED_GODOT="$SCRIPT_DIR/../tools/godot/Godot_v4.6.1-stable_linux.x86_64"
+if [[ -z "${GODOT_BIN:-}" ]]; then
+	if [[ -x "$BUNDLED_GODOT" ]]; then
+		GODOT_BIN="$BUNDLED_GODOT"
+	else
+		GODOT_BIN="godot"
+	fi
+fi
 
-echo "=== Headless: test_texture_paths.gd ==="
-"$GODOT_BIN" --headless --path . -s test_texture_paths.gd
+FAILED=()
 
-echo "=== Headless: test_world3d_spawn.gd ==="
-"$GODOT_BIN" --headless --path . -s test_world3d_spawn.gd
+run_test() {
+	echo "=== Headless: $1 ==="
+	"$GODOT_BIN" --headless --path . -s "$1" || FAILED+=("$1")
+}
 
-echo "=== Headless: test_world3d_goal_arrival.gd ==="
-"$GODOT_BIN" --headless --path . -s test_world3d_goal_arrival.gd
+run_test_map() {
+	echo "=== Headless: $2 (--map=$1) ==="
+	"$GODOT_BIN" --headless --path . --map="$1" -s "$2" || FAILED+=("$2 (--map=$1)")
+}
 
-echo "=== Headless: test_terrain_feature_types.gd ==="
-"$GODOT_BIN" --headless --path . -s test_terrain_feature_types.gd
-
-echo "=== Headless: test_xl_map_bounds.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_xl_map_bounds.gd
-
-echo "=== Headless: test_camera_w_pan_zoom_out.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd
-
-echo "=== Headless: test_water_lakes.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_water_lakes.gd
-
-echo "=== Headless: test_water_polygon.gd ==="
-"$GODOT_BIN" --headless --path . -s test_water_polygon.gd
-
-echo "=== Headless: test_water_basin_filter.gd ==="
-"$GODOT_BIN" --headless --path . -s test_water_basin_filter.gd
-
-echo "=== Headless: test_map_lighting.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_map_lighting.gd
-
-echo "=== Headless: test_walkability.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_walkability.gd
-
-echo "=== Headless: test_walkability_mask.gd ==="
-"$GODOT_BIN" --headless --path . -s test_walkability_mask.gd
-
-echo "=== Headless: test_spawn_walkability.gd ==="
-"$GODOT_BIN" --headless --path . -s test_spawn_walkability.gd
-
-echo "=== Headless: test_vegetation.gd (--map=XL) ==="
-"$GODOT_BIN" --headless --path . --map=XL -s test_vegetation.gd
-
-echo "=== Headless: test_spatial_hash.gd ==="
-"$GODOT_BIN" --headless --path . -s test_spatial_hash.gd
-
-echo "=== Headless: test_unit_sim.gd ==="
-"$GODOT_BIN" --headless --path . -s test_unit_sim.gd
-
-echo "=== Headless: test_move_sync.gd ==="
-"$GODOT_BIN" --headless --path . -s test_move_sync.gd
-
-echo "=== Headless: test_facing_flip.gd ==="
-"$GODOT_BIN" --headless --path . -s test_facing_flip.gd
-
-echo "=== Headless: test_sim_determinism.gd ==="
-"$GODOT_BIN" --headless --path . -s test_sim_determinism.gd
-
-echo "=== Headless: test_formation_rigidity.gd ==="
-"$GODOT_BIN" --headless --path . -s test_formation_rigidity.gd
-
-echo "=== Headless: test_world3d_horse_speed.gd ==="
-"$GODOT_BIN" --headless --path . -s test_world3d_horse_speed.gd
-
-echo "=== Headless: test_server_match.gd ==="
-"$GODOT_BIN" --headless --path . -s test_server_match.gd
+run_test test_texture_paths.gd
+run_test test_world3d_spawn.gd
+run_test test_world3d_goal_arrival.gd
+run_test test_terrain_feature_types.gd
+run_test_map XL test_xl_map_bounds.gd
+run_test_map XL test_camera_w_pan_zoom_out.gd
+run_test_map XL test_water_lakes.gd
+run_test test_water_polygon.gd
+run_test test_water_basin_filter.gd
+run_test_map XL test_map_lighting.gd
+run_test_map XL test_walkability.gd
+run_test test_walkability_mask.gd
+run_test test_spawn_walkability.gd
+run_test_map XL test_vegetation.gd
+run_test test_spatial_hash.gd
+run_test test_unit_sim.gd
+run_test test_move_sync.gd
+run_test test_facing_flip.gd
+run_test test_sim_determinism.gd
+run_test test_formation_rigidity.gd
+run_test test_world3d_horse_speed.gd
+run_test test_server_match.gd
+run_test test_terrain_height_consistency.gd
+run_test_map XL test_terrain_tint.gd
+run_test test_arrow_trajectory.gd
+run_test test_group_formation_drag.gd
 
 if [[ "${1:-}" == "--with-logs" ]]; then
 	echo "=== verify_test_logs.sh ==="
-	./verify_test_logs.sh
+	./verify_test_logs.sh || FAILED+=("verify_test_logs.sh")
 fi
 
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+	echo "=== FAILED (${#FAILED[@]}): ${FAILED[*]} ==="
+	exit 1
+fi
 echo "=== All requested checks passed ==="

@@ -120,7 +120,7 @@
       "implementation": "godot --headless --path . -s test_sim_determinism.gd 2>&1 | grep -q 'TEST_SIM_DETERMINISM_OK'"
     },
     {
-      "description_of_test": "Formation rigidity (headless): a 50-man block ordered 400 units away forms up and then marches with every rank neighbour within 15% of the pitch, no stragglers, unchanged slot indices and an anchor that never crawls",
+      "description_of_test": "Formation march (headless): a 50-man block ordered 400 units away keeps its slot indices, aims along the shared path from the first tick, and finishes in the destination slots; a detour path is not cut across",
       "implementation": "godot --headless --path . -s test_formation_rigidity.gd 2>&1 | grep -q 'TEST_FORMATION_RIGIDITY_OK'"
     },
     {

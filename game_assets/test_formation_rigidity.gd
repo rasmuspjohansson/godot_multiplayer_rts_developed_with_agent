@@ -1,8 +1,8 @@
 extends SceneTree
-## Rigid march: a 50-man army ordered 400 units away wheels onto the new heading, forms up,
-## and from then on marches as one block — every rank neighbour stays within 15% of the
-## formation pitch, nobody straggles, slot indices never change and the anchor covers the
-## ground at the soldiers' speed (no stretching / bunching).
+## Responsive march: a 50-man army ordered 400 units away keeps its slot indices, aims along
+## the shared path from the first tick (no local wheel), and finishes in the destination
+## slots. A second order overwrites the path with a detour and checks that march goals stay
+## on that polyline instead of cutting across it.
 ##
 ## Run: godot --headless --path . -s test_formation_rigidity.gd
 
@@ -12,9 +12,9 @@ const Formation := preload("res://sim/FormationController.gd")
 const N := 50
 const START := Vector2(200.0, 360.0)
 const DEST := Vector2(600.0, 360.0)
-const FORM_UP_MAX_TICKS := 200
-const SLOT_TOL := 1.0
-const PITCH_TOL := 0.15
+const ARRIVE_TOL := 2.5
+const PATH_TOL_SCALE := 1.5
+const TICK_CAP := 2000
 
 func _init() -> void:
 	call_deferred("_begin")
@@ -38,88 +38,37 @@ func _spawn(sim, x: float, z: float, n: int):
 	sim._assign_slots(fc)
 	return fc
 
-## Pairs of members that sit next to each other in the same rank (slot k, k+1 on one row).
-func _rank_neighbours(fc) -> Array:
-	var cols: int = maxi(1, ceili(float(fc.packed_count) / float(maxi(fc.rows, 1))))
-	var by_slot := {}
-	for m in range(fc.members.size()):
-		by_slot[fc.slot_index[m]] = fc.members[m]
-	var pairs: Array = []
-	for s in by_slot.keys():
-		if (int(s) % cols) == cols - 1 or not by_slot.has(int(s) + 1):
-			continue
-		pairs.append([by_slot[s], by_slot[int(s) + 1]])
-	return pairs
+func _dist_to_segment(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var len2 := ab.length_squared()
+	if len2 < 1e-6:
+		return p.distance_to(a)
+	var t := clampf((p - a).dot(ab) / len2, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
 
-func _max_slot_error(sim, fc) -> float:
-	var m := 0.0
-	for id in fc.members:
-		m = maxf(m, Vector2(sim.goal_x[id] - sim.pos_x[id], sim.goal_z[id] - sim.pos_z[id]).length())
-	return m
+func _dist_to_path(p: Vector2, path: PackedVector2Array) -> float:
+	if path.is_empty():
+		return INF
+	if path.size() == 1:
+		return p.distance_to(path[0])
+	var best := INF
+	for i in range(path.size() - 1):
+		best = minf(best, _dist_to_segment(p, path[i], path[i + 1]))
+	return best
+
+func _slot_world(fc, o: Vector2) -> Vector2:
+	var cs := cos(fc.dest_direction)
+	var sn := sin(fc.dest_direction)
+	return Vector2(
+		fc.dest.x + o.x * cs - o.y * sn,
+		fc.dest.y + o.x * sn + o.y * cs
+	)
 
 func _begin() -> void:
 	print("TEST_FORMATION_RIGIDITY_BEGIN")
-	var sim = UnitSim.new()
-	sim.setup(null, 1280.0, 720.0, true)
-	var fc = _spawn(sim, START.x, START.y, N)
-	var slots0: PackedInt32Array = fc.slot_index.duplicate()
-	var rows0: int = fc.rows
-	var pitch: float = fc.spacing
-	sim.recentre_anchor(fc)
-	fc.issue_move(DEST)
-	var pairs := _rank_neighbours(fc)
 	var fails: Array[String] = []
-	var formed_tick := -1
-	var worst_pitch := 0.0
-	var worst_slot := 0.0
-	var straggle_ticks := 0
-	var anchor_at_form := Vector2.ZERO
-	var arrived_tick := -1
-	for t in range(1200):
-		sim.step(UnitSim.SIM_DT)
-		if fc.slot_index != slots0:
-			fails.append("slot indices changed at tick %d" % sim.tick)
-			break
-		if fc.rows != rows0 or not is_equal_approx(fc.spacing, pitch):
-			fails.append("grid changed at tick %d (rows %d->%d)" % [sim.tick, rows0, fc.rows])
-			break
-		var slot_err := _max_slot_error(sim, fc)
-		if formed_tick < 0:
-			if slot_err <= SLOT_TOL:
-				formed_tick = sim.tick
-				anchor_at_form = fc.anchor
-			elif sim.tick > FORM_UP_MAX_TICKS:
-				fails.append("block never formed up (slot_err=%.2f after %d ticks)" % [slot_err, sim.tick])
-				break
-			continue
-		# Formed: from here on the block must stay rigid until it arrives.
-		worst_slot = maxf(worst_slot, slot_err)
-		if sim._army_straggling[fc.index] > 0:
-			straggle_ticks += 1
-		for p in pairs:
-			var d := Vector2(sim.pos_x[p[0]] - sim.pos_x[p[1]], sim.pos_z[p[0]] - sim.pos_z[p[1]]).length()
-			worst_pitch = maxf(worst_pitch, absf(d - pitch) / pitch)
-		if not fc.moving:
-			arrived_tick = sim.tick
-			break
-	var marched := 0.0
-	if formed_tick >= 0 and arrived_tick >= 0:
-		marched = fc.anchor.distance_to(anchor_at_form)
-		var expected: float = fc.anchor_speed * UnitSim.SIM_DT * float(arrived_tick - formed_tick)
-		# The anchor must not have slowed down (cohesion crawl) once the block was formed.
-		if marched < expected * 0.98:
-			fails.append("anchor crawled: marched %.1f in %d ticks, expected %.1f" % [marched, arrived_tick - formed_tick, expected])
-	if arrived_tick < 0 and fails.is_empty():
-		fails.append("did not arrive within 1200 ticks")
-	if worst_pitch > PITCH_TOL:
-		fails.append("rank neighbours drifted %.0f%% off pitch (limit %.0f%%)" % [worst_pitch * 100.0, PITCH_TOL * 100.0])
-	if straggle_ticks > 0:
-		fails.append("%d ticks with stragglers after forming up" % straggle_ticks)
-	if fc.anchor.distance_to(DEST) > 1.0:
-		fails.append("anchor ended %.1f from dest" % fc.anchor.distance_to(DEST))
-	print("TEST_FORMATION_RIGIDITY: formed_tick=%d arrived_tick=%d marched=%.1f worst_pitch=%.1f%% worst_slot=%.2f straggle_ticks=%d" % [
-		formed_tick, arrived_tick, marched, worst_pitch * 100.0, worst_slot, straggle_ticks
-	])
+	_run_straight(fails)
+	_run_detour(fails)
 	if fails.is_empty():
 		print("TEST_FORMATION_RIGIDITY_OK")
 		quit(0)
@@ -127,3 +76,105 @@ func _begin() -> void:
 	for f in fails:
 		print("TEST_FORMATION_RIGIDITY_FAIL: %s" % f)
 	quit(1)
+
+func _run_straight(fails: Array[String]) -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var fc = _spawn(sim, START.x, START.y, N)
+	var slots0: PackedInt32Array = fc.slot_index.duplicate()
+	var spawn_x: PackedFloat32Array = sim.pos_x.duplicate()
+	var spawn_z: PackedFloat32Array = sim.pos_z.duplicate()
+	sim.recentre_anchor(fc)
+	fc.issue_move(DEST)
+	var min_goal := INF
+	var moved_ok := true
+	var arrived := false
+	for t in range(TICK_CAP):
+		sim.step(UnitSim.SIM_DT)
+		if fc.slot_index != slots0:
+			fails.append("straight: slot indices changed at tick %d" % sim.tick)
+			return
+		if t == 0:
+			for id in fc.members:
+				var g := Vector2(sim.goal_x[id], sim.goal_z[id])
+				min_goal = minf(min_goal, g.distance_to(START))
+		if t == 2:
+			for id in fc.members:
+				var step := Vector2(sim.pos_x[id] - spawn_x[id], sim.pos_z[id] - spawn_z[id])
+				var to_goal := Vector2(sim.goal_x[id] - spawn_x[id], sim.goal_z[id] - spawn_z[id])
+				if step.length() < 0.4 or to_goal.length() < 1.0 or step.dot(to_goal) <= 0.0:
+					moved_ok = false
+		if not fc.moving and _arrived(sim, fc):
+			arrived = true
+			break
+	if min_goal < 100.0:
+		fails.append("straight: goals stayed near the start (min goal distance %.1f)" % min_goal)
+	if not moved_ok:
+		fails.append("straight: soldiers did not move toward their goals on the first ticks")
+	if not arrived:
+		fails.append("straight: did not finish in the destination slots within %d ticks" % TICK_CAP)
+	else:
+		var err := _arrival_error(sim, fc)
+		print("TEST_FORMATION_RIGIDITY: straight arrived_tick=%d slot_err=%.2f min_goal=%.1f" % [sim.tick, err, min_goal])
+		if err > ARRIVE_TOL:
+			fails.append("straight: arrival error %.2f" % err)
+
+func _run_detour(fails: Array[String]) -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var fc = _spawn(sim, START.x, START.y, N)
+	var slots0: PackedInt32Array = fc.slot_index.duplicate()
+	sim.recentre_anchor(fc)
+	fc.issue_move(DEST)
+	var detour := PackedVector2Array([
+		Vector2(START.x, 200.0),
+		Vector2(DEST.x, 200.0),
+		DEST,
+	])
+	fc.path = detour
+	fc.path_i = 0
+	fc.slots_dirty = true
+	var worst := 0.0
+	var shortcut := false
+	var arrived := false
+	var band: float = fc.spacing * PATH_TOL_SCALE
+	for t in range(TICK_CAP):
+		sim.step(UnitSim.SIM_DT)
+		if fc.slot_index != slots0:
+			fails.append("detour: slot indices changed at tick %d" % sim.tick)
+			return
+		for id in fc.members:
+			if not sim.is_alive(id):
+				continue
+			var goal := Vector2(sim.goal_x[id], sim.goal_z[id])
+			var remain: float = sim._march_remaining(fc.path, sim._march_i[id], sim.pos_x[id], sim.pos_z[id])
+			if fc.moving and remain > Formation.DEPLOY_DIST and sim._march_deploy[id] == 0:
+				worst = maxf(worst, _dist_to_path(goal, detour))
+			# Still beside the start: the cursor has to be on the first bend, not a later one.
+			if Vector2(sim.pos_x[id], sim.pos_z[id]).distance_to(START) < 80.0 and sim._march_i[id] > 0:
+				shortcut = true
+		if not fc.moving and _arrived(sim, fc):
+			arrived = true
+			break
+	print("TEST_FORMATION_RIGIDITY: detour arrived_tick=%d worst_goal_off_path=%.2f" % [sim.tick if arrived else -1, worst])
+	if worst > band:
+		fails.append("detour: march goal %.2f off the shared path (limit %.2f)" % [worst, band])
+	if shortcut:
+		fails.append("detour: a soldier's path cursor jumped ahead of the first bend")
+	if not arrived:
+		fails.append("detour: did not finish in the destination slots within %d ticks" % TICK_CAP)
+
+func _arrived(sim, fc) -> bool:
+	return _arrival_error(sim, fc) <= ARRIVE_TOL
+
+func _arrival_error(sim, fc) -> float:
+	var offs: PackedVector2Array = fc.slot_offsets(N)
+	var last: int = offs.size() - 1
+	var m := 0.0
+	for k in range(fc.members.size()):
+		var id: int = fc.members[k]
+		if not sim.is_alive(id):
+			continue
+		var slot := _slot_world(fc, offs[mini(fc.slot_index[k], last)])
+		m = maxf(m, Vector2(sim.pos_x[id] - slot.x, sim.pos_z[id] - slot.y).length())
+	return m

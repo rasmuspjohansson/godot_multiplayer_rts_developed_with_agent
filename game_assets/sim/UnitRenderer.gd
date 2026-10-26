@@ -153,10 +153,6 @@ func set_selected_ids(ids: PackedInt32Array, selected: bool) -> void:
 			_selected[id] = 1 if selected else 0
 			_static[id] = 0
 
-func clear_selection() -> void:
-	_selected.fill(0)
-	_static.fill(0)
-
 ## Write the current sim state into every group's buffer. Call once per sim tick.
 ## Units whose position/state/hp/selection did not change since the last write are skipped
 ## (their instance already holds a zero interpolation delta), so parked armies are free.
@@ -253,8 +249,7 @@ func write_tick() -> void:
 			buf[o + 14] = oz - z
 			buf[o + 15] = h / maxf(mhp[id], 1.0)
 			buf[o + 16] = state
-			# Veo sheets face right (see UnitSpritePaths.art_faces_right_for_unit):
-			# mirror only when the unit is facing left.
+			# Veo sheets face right: mirror only when the unit is facing left.
 			buf[o + 17] = 0.0 if (fl & f_right) != 0 else 1.0
 			buf[o + 18] = phase_of[id]
 			buf[o + 19] = 1.0 if selected[id] != 0 else 0.0

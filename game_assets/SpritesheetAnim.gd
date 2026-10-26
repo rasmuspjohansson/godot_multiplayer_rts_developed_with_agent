@@ -1,22 +1,13 @@
 extends RefCounted
-## Loads a horizontal sprite strip (spritesheet.png + spritesheet.json) and advances frames.
+## Loads a horizontal sprite strip (spritesheet.png + spritesheet.json); used for army portraits.
 
 const _SCRIPT := preload("res://SpritesheetAnim.gd")
 
 static var _cache: Dictionary = {}
 
 var _sheet: Texture2D
-var _sheet_image: Image
 var _frame_w: int
 var _frame_h: int
-var _frame_count: int
-var _playback_fps: float
-var _frame_index: int = 0
-var _accum: float = 0.0
-var _finished: bool = false
-var _char_height_cache: Dictionary = {}
-var _feet_y_cache: Dictionary = {}
-var _max_char_height_px: int = -1
 
 static func load_from_folder(folder_path: String):
 	if _cache.has(folder_path):
@@ -26,12 +17,6 @@ static func load_from_folder(folder_path: String):
 		return null
 	_cache[folder_path] = anim
 	return anim
-
-static func try_load_folder(folder_path: String):
-	return load_from_folder(folder_path)
-
-static func clear_cache() -> void:
-	_cache.clear()
 
 func _load(folder_path: String) -> bool:
 	var manifest_path := folder_path.path_join("spritesheet.json")
@@ -46,10 +31,6 @@ func _load(folder_path: String) -> bool:
 	var d: Dictionary = parsed
 	_frame_w = int(d.get("frame_width", 256))
 	_frame_h = int(d.get("frame_height", 256))
-	_frame_count = maxi(1, int(d.get("frame_count", 1)))
-	_playback_fps = float(d.get("playback_fps", 8.0))
-	if _playback_fps <= 0.0:
-		_playback_fps = 8.0
 
 	var png_path := folder_path.path_join("spritesheet.png")
 	if not FileAccess.file_exists(png_path):
@@ -59,20 +40,7 @@ func _load(folder_path: String) -> bool:
 	if img == null:
 		return false
 	_sheet = ImageTexture.create_from_image(img)
-	_sheet_image = img
-	reset()
 	return true
-
-func reset() -> void:
-	_frame_index = 0
-	_accum = 0.0
-	_finished = false
-
-func is_finished() -> bool:
-	return _finished
-
-func get_frame_count() -> int:
-	return _frame_count
 
 func get_frame_width() -> int:
 	return _frame_w
@@ -80,87 +48,8 @@ func get_frame_width() -> int:
 func get_frame_height() -> int:
 	return _frame_h
 
-func get_playback_fps() -> float:
-	return _playback_fps
-
-func get_duration(speed_scale: float = 1.0) -> float:
-	return float(_frame_count) / (_playback_fps * speed_scale)
-
-func get_character_height_px(frame_index: int = -1) -> int:
-	if _sheet_image == null:
-		return _frame_h
-	if frame_index < 0:
-		frame_index = _frame_index
-	if _char_height_cache.has(frame_index):
-		return _char_height_cache[frame_index]
-	var bounds := _opaque_bounds_px(frame_index)
-	var height: int = _frame_h if bounds.y < 0 else int(bounds.w)
-	_char_height_cache[frame_index] = height
-	return height
-
-func get_max_character_height_px() -> int:
-	if _sheet_image == null:
-		return _frame_h
-	if _max_char_height_px >= 0:
-		return _max_char_height_px
-	var max_h := 0
-	for i in range(_frame_count):
-		max_h = maxi(max_h, get_character_height_px(i))
-	if max_h <= 0:
-		max_h = _frame_h
-	_max_char_height_px = max_h
-	return _max_char_height_px
-
-func get_feet_y_px(frame_index: int = -1) -> int:
-	if _sheet_image == null:
-		return _frame_h - 1
-	if frame_index < 0:
-		frame_index = _frame_index
-	if _feet_y_cache.has(frame_index):
-		return _feet_y_cache[frame_index]
-	var bounds := _opaque_bounds_px(frame_index)
-	var feet_y: int = _frame_h - 1 if bounds.y < 0 else int(bounds.y + bounds.w - 1.0)
-	_feet_y_cache[frame_index] = feet_y
-	return feet_y
-
-func _opaque_bounds_px(frame_index: int) -> Vector4:
-	var x0: int = frame_index * _frame_w
-	var y_min: int = _frame_h
-	var y_max: int = -1
-	for y in range(_frame_h):
-		for x in range(_frame_w):
-			var px := _sheet_image.get_pixel(x0 + x, y)
-			if px.a > 0.5:
-				y_min = mini(y_min, y)
-				y_max = maxi(y_max, y)
-	if y_max < 0:
-		return Vector4(0.0, -1.0, 0.0, float(_frame_h))
-	return Vector4(0.0, float(y_min), 0.0, float(y_max - y_min + 1))
-
 func get_frame_texture() -> AtlasTexture:
 	var at := AtlasTexture.new()
 	at.atlas = _sheet
-	at.region = Rect2(_frame_index * _frame_w, 0, _frame_w, _frame_h)
+	at.region = Rect2(0, 0, _frame_w, _frame_h)
 	return at
-
-func advance(delta: float, loop: bool, speed_scale: float = 1.0) -> AtlasTexture:
-	if _sheet == null:
-		return null
-	if _finished and not loop:
-		return get_frame_texture()
-	if _frame_count <= 1:
-		return get_frame_texture()
-	_accum += delta * speed_scale
-	var dt: float = 1.0 / _playback_fps
-	while _accum >= dt:
-		_accum -= dt
-		if _frame_index >= _frame_count - 1:
-			if loop:
-				_frame_index = 0
-			else:
-				_frame_index = _frame_count - 1
-				_finished = true
-				break
-		else:
-			_frame_index += 1
-	return get_frame_texture()

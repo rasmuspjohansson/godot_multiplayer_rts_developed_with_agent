@@ -31,10 +31,5 @@ window/size/viewport_height=720
 
 [layer_names]
 
-2d_physics/layer_1="units"
 3d_physics/layer_1="units"
 3d_physics/layer_2="ground"
-
-[physics]
-
-2d/default_gravity=0.0

@@ -15,7 +15,6 @@ var is_selected: bool = false
 var has_horse: bool = false
 var has_spear: bool = false
 var has_bow: bool = false
-var sim_index: int = -1
 ## FormationController (RefCounted) owned by the sim.
 var fc = null
 
@@ -40,14 +39,10 @@ func setup(p_army_id: String, p_owner_id: int, p_owner_name: String, p_fc) -> vo
 	owner_name = p_owner_name
 	fc = p_fc
 	if fc != null:
-		sim_index = fc.index
 		has_horse = fc.has_horse
 		has_spear = fc.has_spear
 		has_bow = fc.has_bow
 	name = "Army_" + army_id
-
-func unit_ids() -> PackedInt32Array:
-	return fc.members if fc != null else PackedInt32Array()
 
 func select() -> void:
 	if is_selected:
@@ -63,12 +58,6 @@ func deselect() -> void:
 
 func soldier_count() -> int:
 	return fc.members.size() if fc != null else 0
-
-func is_ranged() -> bool:
-	return has_bow
-
-func uses_mounted_spacing() -> bool:
-	return has_horse
 
 func anchor() -> Vector2:
 	return fc.anchor if fc != null else Vector2.ZERO

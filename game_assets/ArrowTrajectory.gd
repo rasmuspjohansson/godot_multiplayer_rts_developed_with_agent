@@ -20,18 +20,3 @@ static func sample(from: Vector3, to: Vector3, peak: float, t: float) -> Vector3
 	var p := from.lerp(to, t)
 	p.y += peak * 4.0 * t * (1.0 - t)
 	return p
-
-static func arrow_endpoints(archer_pos: Vector3, target_pos: Vector3) -> Dictionary:
-	var delta_xz := Vector2(target_pos.x - archer_pos.x, target_pos.z - archer_pos.z)
-	var dist: float = delta_xz.length()
-	var dir_xz := Vector2.ZERO
-	if dist > 0.01:
-		dir_xz = delta_xz / dist
-	var from := archer_pos + Vector3(dir_xz.x * 3.0, 2.0, dir_xz.y * 3.0)
-	return {
-		"from": from,
-		"to": target_pos,
-		"dist": dist,
-		"peak": peak_height(dist),
-		"duration": flight_duration(dist),
-	}

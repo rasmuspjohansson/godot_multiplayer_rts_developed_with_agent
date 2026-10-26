@@ -2,6 +2,7 @@
 """Chroma-key neon green screen from vegetation PNGs (tree, spruce, bush, stone).
 
 Uses a tight bright-green mask so darker tree foliage is preserved.
+Edits the files in place. Requires: pip install opencv-python numpy
 """
 from __future__ import annotations
 
@@ -11,12 +12,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+BACKGROUND = Path(__file__).resolve().parents[1] / "game_assets/images/background"
 ASSETS = [
-    ROOT / "images/background/tree.png",
-    ROOT / "images/background/tree_spruce.png",
-    ROOT / "images/background/bush.png",
-    ROOT / "images/background/stone.png",
+    BACKGROUND / "tree.png",
+    BACKGROUND / "tree_spruce.png",
+    BACKGROUND / "bush.png",
+    BACKGROUND / "stone.png",
 ]
 
 

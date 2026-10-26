@@ -1,176 +1,54 @@
 # Automated RTS — Godot 4.6
 
-A multiplayer RTS: command armies, capture stables / blacksmiths / villages / archeries, and rout the other side.
+A multiplayer real-time strategy game with Total War-style formations. Command armies of spearmen, knights, bowmen and horse archers, capture stables, blacksmiths, villages and archeries to earn resources, draft new armies, and rout every enemy army to win. Supports 2–4 players and around 2000 units on a dedicated server.
 
 ![Screenshot from the game](from_game.jpg)
 
+## Quickstart: join a game
 
----
+You need this repository, Godot 4.6.1 (downloaded by the install script), and the IP address of a running server. Only outbound UDP port **8910** is used; no port forwarding is needed on your machine.
 
-## INSTALL
+**1. Install Godot (once).** It is downloaded into `tools/godot/`; nothing is installed system-wide.
 
-### Windows
+| Windows | Linux |
+|---------|-------|
+| Double-click `install_godot_windows.bat` | `./install_godot_linux.sh` |
 
-Double-click `install_godot_windows.bat`. This downloads Godot **4.6.1** into `tools\godot\` 
+**2. Connect to the server** (use the IP the host gives you; the name is optional).
 
-### Linux
+| Windows (Command Prompt) | Linux |
+|--------------------------|-------|
+| `connect_remote.bat SERVER_IP MyName` | `./connect_remote.sh --host=SERVER_IP --name=MyName` |
 
-```bash
-./install_godot_linux.sh
-```
+**3. In the lobby**, pick a color and press **Ready**. The match starts when every player is ready. The map is chosen in the lobby and synced from the server.
 
-This downloads Godot **4.6.1** into `tools/godot/` (once; needs a network connection).
+## How to play
 
----
+- Each player starts with a few armies that march in from their side of the map.
+- **Capture points** are taken when only your units stand near them. Each one produces a resource every 6 seconds: Stables give horses, Blacksmiths spears, Villages villagers, Archeries bows.
+- **Draft** new armies from the bottom bar. Every army costs 10 villagers, plus 10 of each equipment you add. Equipment decides the unit type: horse makes knights, spear makes spearmen, bow makes bowmen, horse + bow makes horse archers, and no equipment makes clubmen.
+- An army **routs** when fewer than 30 % of its soldiers are alive. The last player with an army that has not routed wins.
 
-## TEST
+## Controls
 
-Starts a dedicated server plus two bot clients (`MockPlayer`) on this machine.
+| Input | Action |
+|-------|--------|
+| Left-click army | Select it alone (Shift+click or Shift+drag a box to add to the selection) |
+| Click a portrait (bottom bar) | Add or remove that army from the selection |
+| Right-click ground | Move the selected armies |
+| Right-drag ground | Move and set the front line: from press (first file) to release (last file) |
+| `M` / `A` / `G` | Order mode: Move / Attack / Attack-Move (or use the bottom bar) |
+| Bottom bar | Stances (Aggressive, Defensive, Hold, Passive), Show range, Draft |
+| `Q` / `E` or arrow keys | Rotate the selected armies |
+| `W` `A` `S` `D`, middle-drag | Pan the camera |
+| Mouse wheel | Zoom (the camera tilts toward the horizon as you zoom in) |
+| **Menu** (top-right) | Music/SFX volume, sun lighting, animation speed |
 
-### Windows
+## More documentation
 
-Open **Command Prompt** in this folder. Start three windows:
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --headless --path game_assets -- --server --auto-test
-```
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --path game_assets -- --client --name=A --auto-test
-```
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --path game_assets -- --client --name=B --auto-test --color=1
-```
-
-Optional map: add `--map=XL` to each command.
-
-### Linux
-
-```bash
-./run_test.sh
-```
-
-Optional map: `./run_test.sh --map=XL`.
-
-Auto-test skips neutral map dragons by default; add **`--dragons`** to spawn them when the map JSON defines any (e.g. `./run_test.sh --map=S --dragons`).
-
----
-
-## STRESS (≈2000 units)
-
-Spawns extra armies so each player has N soldiers, runs the auto-test match, then prints perf from the logs (server sim tick, client fps). Default is **1000 soldiers per player** on the XL map — about **2000 units** total.
-
-### Linux
-
-```bash
-./run_stress.sh
-```
-
-That is the same as `./run_stress.sh --units=1000 --map=XL --seconds=90`.
-
-`--seconds` controls how long the stress driver waits before stopping Godot and printing perf summaries, and it sets the auto-test **match timeout** (so a long run is not capped at 120s). Plain `./run_test.sh` still uses a **120s** match cap unless you pass `--match-timeout=N`.
-
-Smaller / shorter:
-
-```bash
-./run_stress.sh --units=500 --map=L --seconds=60
-```
-
-Or skip the wrapper and keep the match running:
-
-```bash
-./run_test.sh --map=XL --stress-units=1000
-```
-
-### Windows
-
-Add `--stress-units=1000 --map=XL` to the server and both client commands in **TEST** above (three Command Prompt windows).
-
----
-
-## PLAY
-
-Join a host's server, or play two humans on this machine. In the lobby, pick a color if you want, then press **Ready**.
-
-In a match, open **Menu** (top-right) for music/SFX volume, sun lighting, and sprite animation speed. **Move** orders: **RMB drag** on the ground draws the front rank from press (first file) to release (last file on that rank); a tiny drag stacks depth on one file. Use the **bottom selection bar** (Total War–style): order mode (Move / Attack / Attack-Move), stance buttons, **portraits for all your armies** (gold border = selected), Show range, and Draft. **Click a portrait** to add or remove that army from the selection. On the map, click an army to select it alone; **Shift+click** or **Shift+drag** a marquee to add to the selection. Keyboard shortcuts **M** / **A** / **G** still set move / attack / attack-move.
-
-### Windows
-
-**Join a server** — Command Prompt in this folder (use the IP the host gives you):
-
-```bat
-connect_remote.bat SERVER_IP
-```
-
-Optional name:
-
-```bat
-connect_remote.bat SERVER_IP MyName
-```
-
-**Two humans on this PC** — three Command Prompt windows:
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --headless --path game_assets -- --server
-```
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --path game_assets -- --client --name=Player1
-```
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --path game_assets -- --client --name=Player2 --color=1
-```
-
-### Linux
-
-**Join a server** (use the IP the host gives you):
-
-```bash
-./connect_remote.sh --host=SERVER_IP
-```
-
-Optional name (default is `Human`):
-
-```bash
-./connect_remote.sh --host=SERVER_IP --name=Human
-```
-
-**Two humans on this PC:**
-
-```bash
-./run_test.sh --no_test
-```
-
-Optional map: `./run_test.sh --no_test --map=XL`.
-
----
-
-## MAP EDITOR
-
-Standalone editor for terrain, capture points, start rally points, army loadouts, and map objects. Run from the repo root.
-
-### Windows
-
-```bat
-tools\godot\Godot_v4.6.1-stable_win64.exe --rendering-driver opengl3 --path game_assets -- --map-editor
-```
-
-### Linux
-
-```bash
-godot --rendering-driver opengl3 --path game_assets -- --map-editor
-```
-
-If `godot` is not on your PATH:
-
-```bash
-./tools/godot/Godot_v4.6.1-stable_linux.x86_64 --rendering-driver opengl3 --path game_assets -- --map-editor
-```
-
-Save writes `game_assets/maps/map_<Name>.json`. That name appears in the lobby Map dropdown. Start a match with `--map=Name` (e.g. `./run_test.sh --map=MyMap`).
-
----
-
-Design, maps, and agent test details: [documentation/documentation.md](documentation/documentation.md).
+- [docs/hosting.md](docs/hosting.md): run your own server, play two humans on one PC, remote debugging.
+- [docs/game_design.md](docs/game_design.md): rules, unit types and the formation/combat design spec.
+- [docs/maps.md](docs/maps.md): map JSON format and the map editor.
+- [docs/architecture.md](docs/architecture.md): code structure, simulation and networking.
+- [docs/ai_development.md](docs/ai_development.md): how the game is built and tested by an AI agent (automated tests, MockPlayer, stress tests).
+- [docs/todo.md](docs/todo.md): ideas and open tasks.

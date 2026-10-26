@@ -21,6 +21,10 @@ fi
 FAIL=0
 PASS=0
 
+# Print immediately even when stdout is redirected to a file (bash block-buffers it otherwise,
+# so a long run looks stuck).
+progress() { python3 -c 'import sys; print(sys.argv[1], flush=True)' "$*"; }
+
 # Emit "marker<TAB>log_basename" lines for every (event, log) pair.
 mapfile -t EVENT_CHECKS < <(python3 -c '
 import json,sys
@@ -32,27 +36,27 @@ for e in d.get("events",[]):
         print(m+"\t"+lg)
 ')
 
-echo "=== Log-marker checks (from tests.json events[]) ==="
+progress "=== Log-marker checks (${#EVENT_CHECKS[@]} from tests.json events[]) ==="
+n=0
 for row in "${EVENT_CHECKS[@]}"; do
+  n=$((n+1))
   marker="${row%%$'\t'*}"
   log="${row##*$'\t'}"
   path="$LOGS_DIR/$log"
   if [[ ! -f "$path" ]]; then
-    echo "FAIL: log file missing: $path (need marker $marker)"
+    progress "[$n/${#EVENT_CHECKS[@]}] FAIL: log file missing: $path (need marker $marker)"
     FAIL=$((FAIL+1))
     continue
   fi
   if grep -q -- "$marker" "$path"; then
-    echo "ok   : $marker in $log"
+    progress "[$n/${#EVENT_CHECKS[@]}] ok   : $marker in $log"
     PASS=$((PASS+1))
   else
-    echo "FAIL : $marker missing in $log"
+    progress "[$n/${#EVENT_CHECKS[@]}] FAIL : $marker missing in $log"
     FAIL=$((FAIL+1))
   fi
 done
 
-echo ""
-echo "=== other_tests (from tests.json other_tests[]) ==="
 mapfile -t OTHER_TESTS < <(python3 -c '
 import json,sys
 with open("tests.json") as f:
@@ -64,26 +68,31 @@ for t in d.get("other_tests",[]):
     print(desc+"\x1f"+impl)
 ')
 
+progress ""
+progress "=== other_tests (${#OTHER_TESTS[@]} from tests.json; headless Godot checks, each can take a while) ==="
+n=0
 for row in "${OTHER_TESTS[@]}"; do
+  n=$((n+1))
   desc="${row%%$'\x1f'*}"
   impl="${row##*$'\x1f'}"
-  echo "--- $desc"
+  progress "[$n/${#OTHER_TESTS[@]}] running: $desc"
+  start=$SECONDS
   if bash -c "$impl" >/dev/null 2>&1; then
-    echo "ok   : $desc"
+    progress "[$n/${#OTHER_TESTS[@]}] ok   ($((SECONDS - start))s): $desc"
     PASS=$((PASS+1))
   else
-    echo "FAIL : $desc"
-    echo "      cmd: $impl"
+    progress "[$n/${#OTHER_TESTS[@]}] FAIL ($((SECONDS - start))s): $desc"
+    progress "      cmd: $impl"
     FAIL=$((FAIL+1))
   fi
 done
 
-echo ""
-echo "=== Summary ==="
-echo "Passed: $PASS"
-echo "Failed: $FAIL"
+progress ""
+progress "=== Summary ==="
+progress "Passed: $PASS"
+progress "Failed: $FAIL"
 if [[ "$FAIL" -eq 0 ]]; then
-  echo "OK"
+  progress "OK"
   exit 0
 fi
 exit 1

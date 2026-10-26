@@ -34,6 +34,20 @@ func _begin() -> void:
 	var fc = _spawn(sim, 500.0)
 	print("TEST_FACING_FLIP_BEGIN")
 
+	# Front angle PI points west (-X). Spawn facing must follow the front, not the rank.
+	var west = Formation.new()
+	west.army_id = "W"
+	west.owner_pid = 2
+	west.initial_count = 1
+	west.rows = 1
+	west.anchor = Vector2(800.0, 360.0)
+	west.direction = Formation.line_direction_for_front(PI)
+	sim.add_army(west)
+	sim.spawn_army_units(west, 1, 1, UnitSim.UnitType.SPEARMAN)
+	var west_id: int = west.members[0]
+	var west_ok: bool = (sim.flags[west_id] & UnitSim.F_FACING_RIGHT) == 0
+	print("TEST_FACING_FLIP_STEP: spawn_facing_west facing_right=%s pass=%s" % [(sim.flags[west_id] & UnitSim.F_FACING_RIGHT) != 0, west_ok])
+
 	sim.recentre_anchor(fc)
 	fc.issue_move(Vector2(700.0, 360.0))
 	for _i in range(5):
@@ -63,9 +77,9 @@ func _begin() -> void:
 	var right_again_ok: bool = (sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0
 	print("TEST_FACING_FLIP_STEP: after_move_right_again facing_right=%s pass=%s" % [(sim.flags[0] & UnitSim.F_FACING_RIGHT) != 0, right_again_ok])
 
-	if right_ok and left_ok and idle_ok and right_again_ok:
+	if right_ok and left_ok and idle_ok and right_again_ok and west_ok:
 		print("TEST_FACING_FLIP_OK")
 		quit(0)
 	else:
-		print("TEST_FACING_FLIP_FAIL right=%s left=%s idle=%s right_again=%s" % [right_ok, left_ok, idle_ok, right_again_ok])
+		print("TEST_FACING_FLIP_FAIL right=%s left=%s idle=%s right_again=%s west=%s" % [right_ok, left_ok, idle_ok, right_again_ok, west_ok])
 		quit(1)

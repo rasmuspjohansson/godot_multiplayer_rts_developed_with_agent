@@ -1,6 +1,7 @@
 extends RefCounted
 ## One army = one formation. Owns the order, the single A* path for the whole army and the
-## anchor that travels along it; soldiers (ids into UnitSim) steer toward anchor + slot offset.
+## anchor that travels along it. On a move, soldiers follow that path (a narrow column) and
+## open into their destination slots at the end. Attack orders still use anchor + slot offset.
 ## Runs identically on server and clients from the same order stream.
 
 enum Stance { AGGRESSIVE, DEFENSIVE, HOLD, PASSIVE }
@@ -25,6 +26,9 @@ const TARGET_REEVAL_SEC := 0.5
 const DEST_CHANGE_MIN := 20.0
 const IDLE_CLOSE_MIN := 4.0
 const WAYPOINT_REACH := 6.0
+## A move follows the shared path until this much of it is left, then soldiers ease into the
+## destination slots. The column stays about one spacing wide so it cannot split around a lake.
+const DEPLOY_DIST := 40.0
 ## Slot repack happens when the alive count falls below this fraction of the packed count.
 const REPACK_FRACTION := 0.8
 
@@ -49,8 +53,6 @@ var spacing: float = FOOT_SPACING
 var stance: int = Stance.DEFENSIVE
 
 var order_type: int = OrderType.NONE
-var order_seq: int = 0
-var order_dest: Vector2 = Vector2.ZERO
 var order_target_army: int = -1
 var order_target_unit: int = -1
 var hold_position: Vector2 = Vector2.ZERO
@@ -62,6 +64,10 @@ var anchor_corr: Vector2 = Vector2.ZERO
 var dest: Vector2 = Vector2.ZERO
 var path: PackedVector2Array = PackedVector2Array()
 var path_i: int = 0
+## Facing the formation will have at the destination. `direction` follows the path until then.
+var dest_direction: float = 0.0
+## Bumped when a new destination is set so UnitSim restarts each soldier's path cursor.
+var march_seq: int = 0
 var moving: bool = false
 var paused_for_contact: bool = false
 var anchor_speed: float = 10.0
@@ -157,16 +163,6 @@ func set_rows(r: int) -> void:
 	_offset_cache.clear()
 	slots_dirty = true
 
-func set_spacing(s: float) -> void:
-	if is_equal_approx(s, spacing):
-		return
-	spacing = s
-	_offset_cache.clear()
-	slots_dirty = true
-
-func slot_world(offset: Vector2) -> Vector2:
-	return anchor + offset.rotated(direction)
-
 func half_width() -> float:
 	var c: int = maxi(1, ceili(float(maxi(packed_count, 1)) / float(maxi(rows, 1))))
 	return float(c - 1) * 0.5 * spacing
@@ -196,7 +192,6 @@ func issue_move(p_dest: Vector2, facing: float = -999.0, attack_move: bool = fal
 	order_type = OrderType.ATTACK_MOVE if attack_move else OrderType.MOVE
 	order_target_army = -1
 	order_target_unit = -1
-	order_dest = p_dest
 	_start_path_to(p_dest, facing)
 
 func issue_attack_army(target_idx: int) -> void:
@@ -217,10 +212,12 @@ func rotate(delta_angle: float) -> void:
 	direction += delta_angle
 	slots_dirty = true
 
-## Called by UnitSim with a path finder; sets dest/path and faces travel direction.
+## Called by UnitSim with a path finder. Stores the destination facing in `dest_direction`
+## and leaves `direction` tracking the path until the army arrives.
 var _pathfinder: Callable = Callable()
 
 func _start_path_to(p_dest: Vector2, facing: float) -> void:
+	var fresh := path.is_empty() or dest.distance_to(p_dest) > 1.0
 	dest = p_dest
 	path = PackedVector2Array()
 	if _pathfinder.is_valid():
@@ -231,11 +228,13 @@ func _start_path_to(p_dest: Vector2, facing: float) -> void:
 	moving = true
 	paused_for_contact = false
 	if facing > -100.0:
-		direction = facing
+		dest_direction = facing
 	else:
 		var to := p_dest - anchor
 		if to.length() > 1.0:
-			direction = line_direction_for_front(to.angle())
+			dest_direction = line_direction_for_front(to.angle())
+	if fresh:
+		march_seq += 1
 	slots_dirty = true
 
 ## `direction` is the angle of the line's +x axis; the front of the formation is at
@@ -245,11 +244,6 @@ static func line_direction_for_front(front_angle: float) -> float:
 
 func front_angle() -> float:
 	return direction - PI * 0.5
-
-## Choose the number of rows so the line is at most `width` wide.
-func fit_rows_to_width(count: int, width: float) -> void:
-	set_rows(rows_for_width(count, width, spacing))
-
 ## Client: fold the server's periodic army state in. Combat (damage, deaths, target choice)
 ## is server-owned, so the discrete decisions that hang off it — contact pause, attack
 ## re-path, arrival — are adopted from the server; the anchor position itself is blended
@@ -275,12 +269,14 @@ func sync_from_server(srv_anchor: Vector2, srv_dest: Vector2, srv_moving: bool, 
 		if not moving or not same_dest:
 			# Server is (still) marching toward srv_dest: follow the same destination.
 			var keep_type := order_type
-			_start_path_to(srv_dest, direction)
+			var face := dest_direction if keep_type == OrderType.MOVE or keep_type == OrderType.ATTACK_MOVE else direction
+			_start_path_to(srv_dest, face)
 			order_type = keep_type
 			changed = true
 	elif moving:
 		# Server has arrived / stopped: stop here as well (MOVE completes like advance_anchor).
 		moving = false
+		direction = dest_direction
 		path_i = path.size()
 		if order_type == OrderType.MOVE:
 			order_type = OrderType.NONE
@@ -300,7 +296,7 @@ func repath_from(new_anchor: Vector2, elapsed: float) -> void:
 	if order_type != OrderType.MOVE and order_type != OrderType.ATTACK_MOVE:
 		slots_dirty = true
 		return
-	_start_path_to(dest, direction)
+	_start_path_to(dest, dest_direction)
 	if elapsed > 0.0:
 		advance_anchor(elapsed, 0.0)
 	slots_dirty = true
@@ -345,9 +341,14 @@ func advance_anchor(dt: float, contact_fraction: float, cohesion_scale: float = 
 			path_i += 1
 	if path_i >= path.size():
 		moving = false
+		direction = dest_direction
 		if order_type == OrderType.MOVE:
 			# Arrived: keep formation, order complete.
 			order_type = OrderType.NONE
+	elif path_i < path.size():
+		var hd: Vector2 = path[path_i] - anchor
+		if hd.length_squared() > 1e-6:
+			direction = line_direction_for_front(hd.angle())
 	return moved
 
 ## ATTACK pursuit: re-path toward `target_xz` at most every TARGET_REEVAL_SEC and only if the

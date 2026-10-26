@@ -3,7 +3,7 @@
 # Usage:
 #   ./connect_remote.sh --host=SERVER_IP
 #   ./connect_remote.sh --host=SERVER_IP --name=Human
-# Other game flags are passed through (e.g. --map=XL --color=2).
+# Other game flags are passed through (e.g. --color=2).
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,4 +62,4 @@ echo "Connecting as '$NAME' to $HOST:8910 ..."
 echo "In the lobby: press Ready when you are set."
 
 exec "$GODOT_BIN" --rendering-driver opengl3 --path "$GAME_PATH" -- \
-  --client --name="$NAME" --color=1 --host="$HOST" "${EXTRA[@]}"
+  --client --name="$NAME" --host="$HOST" "${EXTRA[@]}"

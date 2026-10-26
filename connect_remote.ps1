@@ -2,13 +2,17 @@
 # Usage:
 #   .\connect_remote.ps1 -ServerIp 91.99.144.8
 #   .\connect_remote.ps1 -ServerIp 91.99.144.8 -Name Human
+#   .\connect_remote.ps1 91.99.144.8 Human --color=2   (extra game flags are passed through)
 
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$ServerIp,
 
     [Parameter(Position = 1)]
-    [string]$Name = "Human"
+    [string]$Name = "Human",
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Extra = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,5 +45,5 @@ Write-Host "Connecting as '$Name' to ${ServerIp}:8910 ..."
 Write-Host "In the lobby: press Ready when you are set."
 Write-Host ""
 
-& $Godot --path $GamePath -- --client "--name=$Name" --color=1 "--host=$ServerIp"
+& $Godot --path $GamePath -- --client "--name=$Name" "--host=$ServerIp" @Extra
 exit $LASTEXITCODE

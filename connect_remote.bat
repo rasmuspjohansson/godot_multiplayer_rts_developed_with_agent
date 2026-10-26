@@ -2,11 +2,20 @@
 setlocal EnableExtensions
 
 REM Join a remote game server as a human client.
-REM Usage: connect_remote.bat SERVER_IP [PlayerName]
+REM Usage: connect_remote.bat SERVER_IP [PlayerName] [extra game flags, e.g. --color 2]
 
 set "SERVER_IP=%~1"
 set "PLAYER_NAME=%~2"
 if "%PLAYER_NAME%"=="" set "PLAYER_NAME=Human"
+set "EXTRA="
+shift
+shift
+:collect_extra
+if "%~1"=="" goto :extra_done
+set "EXTRA=%EXTRA% %1"
+shift
+goto :collect_extra
+:extra_done
 
 if "%SERVER_IP%"=="" (
   echo Usage: connect_remote.bat SERVER_IP [PlayerName]
@@ -56,5 +65,5 @@ echo Connecting as '%PLAYER_NAME%' to %SERVER_IP%:8910 ...
 echo In the lobby: press Ready when you are set.
 echo.
 
-"%GODOT%" --path "%REPO%game_assets" -- --client --name=%PLAYER_NAME% --color=1 --host=%SERVER_IP%
+"%GODOT%" --path "%REPO%game_assets" -- --client "--name=%PLAYER_NAME%" "--host=%SERVER_IP%"%EXTRA%
 exit /b %ERRORLEVEL%

@@ -236,9 +236,6 @@ func to_dict() -> Dictionary:
 func get_lakes() -> Array:
 	return lakes
 
-func get_props() -> Array:
-	return props
-
 func get_neutral_dragons() -> Array:
 	if not neutral_dragons.is_empty():
 		return neutral_dragons

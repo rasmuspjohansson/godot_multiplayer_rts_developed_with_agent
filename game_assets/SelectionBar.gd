@@ -7,7 +7,6 @@ extends CanvasLayer
 ## World owns the selection model; the bar lists all local armies (set_roster) and reports
 ## portrait clicks (army_pressed) so World can toggle selection.
 
-signal order_mode_changed(mode: int)
 signal stance_pressed(stance: int)
 signal army_pressed(army, shift: bool)
 signal show_range_toggled(pressed: bool)
@@ -207,7 +206,6 @@ func _set_order_mode(mode: int) -> void:
 	_order_mode = mode
 	for i in range(_order_buttons.size()):
 		_order_buttons[i].button_pressed = i == mode
-	order_mode_changed.emit(mode)
 
 ## Enable the order/stance block only while something is selected.
 func _set_orders_enabled(enabled: bool) -> void:
