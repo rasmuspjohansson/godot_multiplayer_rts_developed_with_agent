@@ -26,9 +26,10 @@ const TARGET_REEVAL_SEC := 0.5
 const DEST_CHANGE_MIN := 20.0
 const IDLE_CLOSE_MIN := 4.0
 const WAYPOINT_REACH := 6.0
-## A move follows the shared path until this much of it is left, then soldiers ease into the
-## destination slots. The column stays about one spacing wide so it cannot split around a lake.
-const DEPLOY_DIST := 40.0
+## A move follows the shared path until this many seconds of walking are left, then soldiers
+## head for their destination slots. They close the path at CATCH_UP_SPEED times their own
+## speed, so the distance is speed * CATCH_UP_SPEED * DEPLOY_SEC (180 for infantry, 378 for horse).
+const DEPLOY_SEC := 12.0
 ## Slot repack happens when the alive count falls below this fraction of the packed count.
 const REPACK_FRACTION := 0.8
 
@@ -241,6 +242,10 @@ func _start_path_to(p_dest: Vector2, facing: float) -> void:
 ## `direction - PI/2` (local -y). Converts a desired front angle into a line direction.
 static func line_direction_for_front(front_angle: float) -> float:
 	return front_angle + PI * 0.5
+
+## Path length still ahead when soldiers leave the column for their destination slots.
+static func deploy_distance(speed: float) -> float:
+	return maxf(speed, 0.0) * CATCH_UP_SPEED * DEPLOY_SEC
 
 func front_angle() -> float:
 	return direction - PI * 0.5

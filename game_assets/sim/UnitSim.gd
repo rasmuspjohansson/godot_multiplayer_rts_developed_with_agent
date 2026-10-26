@@ -799,7 +799,7 @@ func _assign_slots(a) -> void:
 			var fz: float = a.dest.y + o.x * fsn + o.y * fcs
 			var remain := _march_remaining(a.path, _march_i[id], pos_x[id], pos_z[id])
 			var deployed := id < _march_deploy.size() and _march_deploy[id] != 0
-			if not deployed and remain <= Formation.DEPLOY_DIST:
+			if not deployed and remain <= Formation.deploy_distance(a.anchor_speed):
 				_march_deploy[id] = 1
 				deployed = true
 			if deployed:

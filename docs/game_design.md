@@ -46,7 +46,7 @@ Fast is 1.4× normal speed and slow is 0.9×. The values live in `UnitSim.stats_
 | **Attack** (`A`) | LMB on an enemy army or dragon: pursue and attack that target. |
 | **Aggressive / Defensive / Hold / Passive** | Stance buttons on the bottom bar. |
 
-- A move or attack-move keeps one path for the army. Every soldier walks that path at their own speed, in a column about one spacing wide, and opens into the clicked grid or the dragged line on the last stretch. Nobody waits for the formation to turn first.
+- A move or attack-move keeps one path for the army. Every soldier walks that path at their own speed, in a column about one spacing wide, and opens into the clicked grid or the dragged line when about 12 seconds of the path are left. Nobody waits for the formation to turn first.
 - Move orders are **not** cancelled when attacked.
 - Attack orders lock onto the commanded target.
 - Aggressive armies with no order are retargeted to the closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).

@@ -148,7 +148,7 @@ func _run_detour(fails: Array[String]) -> void:
 				continue
 			var goal := Vector2(sim.goal_x[id], sim.goal_z[id])
 			var remain: float = sim._march_remaining(fc.path, sim._march_i[id], sim.pos_x[id], sim.pos_z[id])
-			if fc.moving and remain > Formation.DEPLOY_DIST and sim._march_deploy[id] == 0:
+			if fc.moving and remain > Formation.deploy_distance(fc.anchor_speed) and sim._march_deploy[id] == 0:
 				worst = maxf(worst, _dist_to_path(goal, detour))
 			# Still beside the start: the cursor has to be on the first bend, not a later one.
 			if Vector2(sim.pos_x[id], sim.pos_z[id]).distance_to(START) < 80.0 and sim._march_i[id] > 0:

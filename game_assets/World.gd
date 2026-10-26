@@ -1500,7 +1500,9 @@ func _preview_camera_process(delta: float) -> void:
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 	_update_camera_position(delta)
 
-## Move-goal markers: one small flat dot per soldier slot at the local player's final dest.
+## Move-goal markers: one small flat dot per living soldier's destination slot.
+## A move rotates by dest_direction, the facing stored with the order. `direction` follows
+## the path while marching, so the dots would twist if they used it.
 ## The dot sits on the exact terrain triangle (see _terrain_grid_height_at) with depth
 ## testing on, so it reads as painted on the ground rather than floating.
 func _update_move_goal_markers_3d():
@@ -1537,12 +1539,19 @@ func _update_move_goal_markers_3d():
 		if n_alive <= 0:
 			continue
 		var offs: PackedVector2Array = fc.slot_offsets(maxi(fc.packed_count, 1))
-		var cs := cos(fc.direction)
-		var sn := sin(fc.direction)
-		for k in range(n_alive):
+		var face: float = fc.direction
+		if fc.order_type == _Formation.OrderType.MOVE or fc.order_type == _Formation.OrderType.ATTACK_MOVE:
+			face = fc.dest_direction
+		var cs := cos(face)
+		var sn := sin(face)
+		var last: int = maxi(offs.size() - 1, 0)
+		for k in range(fc.members.size()):
 			if used >= MAX_GHOST_MARKERS:
 				break
-			var o: Vector2 = offs[mini(k, offs.size() - 1)]
+			var id: int = fc.members[k]
+			if _sim != null and not _sim.is_alive(id):
+				continue
+			var o: Vector2 = offs[mini(fc.slot_index[k], last)]
 			var gx: float = d.x + o.x * cs - o.y * sn
 			var gz: float = d.y + o.x * sn + o.y * cs
 			var snapped := snap_move_goal_xz(Vector2(gx, gz))
