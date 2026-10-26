@@ -48,6 +48,7 @@ run_test test_move_sync.gd
 run_test test_facing_flip.gd
 run_test test_sim_determinism.gd
 run_test test_formation_rigidity.gd
+run_test test_fog_of_war.gd
 run_test test_world3d_horse_speed.gd
 run_test test_server_match.gd
 run_test test_terrain_height_consistency.gd

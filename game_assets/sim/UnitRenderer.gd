@@ -26,6 +26,9 @@ const STATE_ATTACK := 2.0
 const STATE_DIE := 3.0
 
 var sim: RefCounted = null
+## Local player. Enemies and neutrals outside fog_visible are drawn at scale 0.
+var viewer_pid: int = -1
+var fog_visible: Callable = Callable()
 
 class Group:
 	var key: String
@@ -225,7 +228,11 @@ func write_tick() -> void:
 			var x := px[id]
 			var z := pz[id]
 			var h := hp[id]
-			var key: int = int(state) * 4 + (2 if (fl & f_right) != 0 else 0) + (1 if selected[id] != 0 else 0)
+			var hidden := 0
+			if viewer_pid >= 0 and fog_visible.is_valid() and sim.owner_pid[id] != viewer_pid:
+				if not bool(fog_visible.call(x, z)):
+					hidden = 1
+			var key: int = int(state) * 4 + (2 if (fl & f_right) != 0 else 0) + (1 if selected[id] != 0 else 0) + hidden * 16
 			if stat[id] != 0 and key == last_key[id] and x == last_x[id] and z == last_z[id] and h == last_hp[id]:
 				continue
 			var ox := qx[id]
@@ -237,7 +244,7 @@ func write_tick() -> void:
 			if has_ground:
 				y = _height_inline(hg, hg_cols, hg_rows, hg_inv, x, z)
 				py = y if (ox == x and oz == z) else _height_inline(hg, hg_cols, hg_rows, hg_inv, ox, oz)
-			var s := size_mul[id]
+			var s := 0.0 if hidden != 0 else size_mul[id]
 			buf[o] = s
 			buf[o + 3] = x
 			buf[o + 5] = s

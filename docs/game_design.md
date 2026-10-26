@@ -38,6 +38,11 @@ Fast is 1.4× normal speed and slow is 0.9×. The values live in `UnitSim.stats_
 - An owned point produces **1** resource every **6 seconds**.
 - Each player starts with 10 horses, 10 spears, 10 bows and 10 villagers. The top bar shows owned point counts and the inventory.
 
+### Fog of war
+- Each player sees a circle around their own armies, extending 160 units past the outermost living soldier. The mask is on the map, so turning the camera does not move it.
+- Ground inside the circle is lit. Ground the army has walked through stays dim. Ground never seen is black. Trees and capture points follow the same three states.
+- Enemy and neutral soldiers are drawn only while they are inside a lit circle. The server still simulates them.
+
 ### Orders and stances
 | Control | Action |
 |---------|--------|

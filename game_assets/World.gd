@@ -11,6 +11,7 @@ const _UnitSim = preload("res://sim/UnitSim.gd")
 const _Formation = preload("res://sim/FormationController.gd")
 const _NetSync = preload("res://sim/NetSync.gd")
 const _UnitRenderer = preload("res://sim/UnitRenderer.gd")
+const _FogOfWar = preload("res://sim/FogOfWar.gd")
 const _UnitAudio = preload("res://sim/UnitAudio.gd")
 
 ## Army size is a per-army parameter: map JSON `soldiers`, draft UI spin box, stress flag.
@@ -28,6 +29,8 @@ const MAX_GHOST_MARKERS := 400
 var _sim = null            # UnitSim
 var _net = null            # NetSync
 var _unit_renderer = null  # UnitRenderer (clients only)
+var _fog = null  # FogOfWar (clients only)
+var _ground_mat: ShaderMaterial
 var _unit_audio = null     # UnitAudio (clients only)
 var _sim_accum := 0.0
 var _order_seq := 0
@@ -542,6 +545,11 @@ func _setup_sim() -> void:
 		if not _terrain_heights.is_empty():
 			_unit_renderer.set_height_grid(_terrain_heights, _terrain_cols, _terrain_rows, _terrain_step)
 		add_child(_unit_renderer)
+		_fog = _FogOfWar.new()
+		_fog.setup(float(MapConfig.width), float(MapConfig.height))
+		_unit_renderer.viewer_pid = multiplayer.get_unique_id()
+		_unit_renderer.fog_visible = Callable(_fog, "is_visible")
+		_bind_fog_material()
 		_unit_audio = _UnitAudio.new()
 		_unit_audio.name = "UnitAudio"
 		_unit_audio.sim = _sim
@@ -949,8 +957,82 @@ func _apply_ground_walkability_visual() -> void:
 	if steep_tex != null:
 		mat.set_shader_parameter("steep_tex", steep_tex)
 	array_mesh.surface_set_material(0, mat)
+	_ground_mat = mat
+	_bind_fog_material()
 	ground.mesh = array_mesh
 	ground.set_surface_override_material(0, null)
+
+func _bind_fog_material() -> void:
+	if _ground_mat == null:
+		return
+	_ground_mat.set_shader_parameter("map_size", Vector2(MapConfig.width, MapConfig.height))
+	if _fog != null and _fog.texture != null:
+		_ground_mat.set_shader_parameter("fog_tex", _fog.texture)
+		_ground_mat.set_shader_parameter("fog_enabled", 1.0)
+		return
+	var blank := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+	blank.fill(Color(1, 1, 1, 1))
+	_ground_mat.set_shader_parameter("fog_tex", ImageTexture.create_from_image(blank))
+	_ground_mat.set_shader_parameter("fog_enabled", 0.0)
+
+## Friendly armies stamp a disc. The radius reaches SIGHT past the outermost living soldier.
+func _update_fog() -> void:
+	if _fog == null or _sim == null:
+		return
+	var me := multiplayer.get_unique_id()
+	_fog.begin_stamp()
+	for a in armies:
+		if a == null or not is_instance_valid(a) or a.is_routed or a.fc == null:
+			continue
+		if a.owner_id != me:
+			continue
+		if _sim.army_alive_count(a.fc) <= 0:
+			continue
+		_fog.stamp_circle(a.fc.anchor.x, a.fc.anchor.y, _fog_radius(a.fc))
+	_fog.end_stamp()
+	_apply_fog_to_props()
+
+func _fog_radius(fc) -> float:
+	var reach := 0.0
+	var ax: float = fc.anchor.x
+	var az: float = fc.anchor.y
+	for id in fc.members:
+		if not _sim.is_alive(id):
+			continue
+		var dx: float = _sim.pos_x[id] - ax
+		var dz: float = _sim.pos_z[id] - az
+		reach = maxf(reach, sqrt(dx * dx + dz * dz))
+	return reach + _FogOfWar.SIGHT
+
+func _army_in_sight(fc) -> bool:
+	if _fog == null:
+		return true
+	for id in fc.members:
+		if _sim.is_alive(id) and _fog.is_visible(_sim.pos_x[id], _sim.pos_z[id]):
+			return true
+	return false
+
+func _apply_fog_to_props() -> void:
+	var foliage := get_node_or_null("Foliage")
+	if foliage != null:
+		for anchor in foliage.get_children():
+			var sprite := anchor.get_node_or_null("Sprite")
+			if sprite is Sprite3D:
+				_apply_fog_sprite(sprite, anchor.position.x, anchor.position.z, Color.WHITE)
+	for cp in capture_points:
+		var sprite: Sprite3D = cp.get("sprite", null)
+		var node: Node3D = cp.get("node", null)
+		if sprite == null or node == null:
+			continue
+		_apply_fog_sprite(sprite, node.position.x, node.position.z, _capture_point_modulate(int(cp.get("owner_pid", 0))))
+
+func _apply_fog_sprite(sprite: Sprite3D, x: float, z: float, base: Color) -> void:
+	var shade: float = _fog.light_at(x, z)
+	if shade <= 0.0:
+		sprite.visible = false
+		return
+	sprite.visible = true
+	sprite.modulate = Color(base.r * shade, base.g * shade, base.b * shade, base.a)
 
 func is_walkable_at(x: float, z: float) -> bool:
 	if _walkability == null:
@@ -2890,6 +2972,8 @@ func _client_after_tick() -> void:
 		print("TEST_MOVE_OSCILLATION_FAIL: unit=%d reversals=%d window=2.0s %s" % [
 			_sim.move_oscillation_id, _sim.move_oscillation_count, _sim.move_oscillation_info
 		])
+	if _fog != null:
+		_update_fog()
 	if _unit_renderer != null:
 		_unit_renderer.write_tick()
 	if _unit_audio != null:
@@ -3489,6 +3573,8 @@ func _get_enemy_army_at(pos_2d: Vector2, for_peer_id: int):
 			continue
 		if _sim.army_alive_count(army.fc) == 0:
 			continue
+		if _fog != null and not _army_in_sight(army.fc):
+			continue
 		var dist = pos_2d.distance_to(_sim.army_centroid(army.fc))
 		if dist < best_dist:
 			best_dist = dist
@@ -3497,7 +3583,10 @@ func _get_enemy_army_at(pos_2d: Vector2, for_peer_id: int):
 
 ## Nearest hostile unit id near the click (dragons included), or -1.
 func _get_attackable_unit_at(pos_2d: Vector2, for_peer_id: int) -> int:
-	return _sim.nearest_unit(pos_2d, ARMY_CLICK_RADIUS, for_peer_id, false)
+	var id: int = _sim.nearest_unit(pos_2d, ARMY_CLICK_RADIUS, for_peer_id, false)
+	if id >= 0 and _fog != null and not _fog.is_visible(_sim.pos_x[id], _sim.pos_z[id]):
+		return -1
+	return id
 
 func _issue_armies_attack_at(pos: Vector2) -> void:
 	var sel := _get_selected_non_routed()
