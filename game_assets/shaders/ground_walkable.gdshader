@@ -17,10 +17,7 @@ void fragment() {
 		vec3 world_pos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
 		vec2 fog_uv = clamp(world_pos.xz / map_size, vec2(0.0), vec2(1.0));
 		vec4 fog = texture(fog_tex, fog_uv);
-		float visible = fog.r;
-		float explored = fog.g;
-		float shade = mix(explored * 0.28, 1.0, visible);
-		ALBEDO *= shade;
+		ALBEDO *= fog.g;
 	}
 	ROUGHNESS = 0.85;
 	METALLIC = 0.0;

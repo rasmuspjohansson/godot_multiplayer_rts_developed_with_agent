@@ -548,7 +548,7 @@ func _setup_sim() -> void:
 		_fog = _FogOfWar.new()
 		_fog.setup(float(MapConfig.width), float(MapConfig.height))
 		_unit_renderer.viewer_pid = multiplayer.get_unique_id()
-		_unit_renderer.fog_visible = Callable(_fog, "is_visible")
+		_unit_renderer.fog_visible = Callable(_fog, "is_explored")
 		_bind_fog_material()
 		_unit_audio = _UnitAudio.new()
 		_unit_audio.name = "UnitAudio"
@@ -980,7 +980,6 @@ func _update_fog() -> void:
 	if _fog == null or _sim == null:
 		return
 	var me := multiplayer.get_unique_id()
-	_fog.begin_stamp()
 	for a in armies:
 		if a == null or not is_instance_valid(a) or a.is_routed or a.fc == null:
 			continue
@@ -1008,7 +1007,7 @@ func _army_in_sight(fc) -> bool:
 	if _fog == null:
 		return true
 	for id in fc.members:
-		if _sim.is_alive(id) and _fog.is_visible(_sim.pos_x[id], _sim.pos_z[id]):
+		if _sim.is_alive(id) and _fog.is_explored(_sim.pos_x[id], _sim.pos_z[id]):
 			return true
 	return false
 
@@ -3584,7 +3583,7 @@ func _get_enemy_army_at(pos_2d: Vector2, for_peer_id: int):
 ## Nearest hostile unit id near the click (dragons included), or -1.
 func _get_attackable_unit_at(pos_2d: Vector2, for_peer_id: int) -> int:
 	var id: int = _sim.nearest_unit(pos_2d, ARMY_CLICK_RADIUS, for_peer_id, false)
-	if id >= 0 and _fog != null and not _fog.is_visible(_sim.pos_x[id], _sim.pos_z[id]):
+	if id >= 0 and _fog != null and not _fog.is_explored(_sim.pos_x[id], _sim.pos_z[id]):
 		return -1
 	return id
 
