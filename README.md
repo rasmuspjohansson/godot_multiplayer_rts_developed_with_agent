@@ -1,6 +1,10 @@
 # Automated RTS — Godot 4.6
 
-A multiplayer real-time strategy game with Total War-style formations. Command armies of spearmen, knights, bowmen and horse archers, capture stables, blacksmiths, villages and archeries to earn resources, draft new armies, and rout every enemy army to win. Supports 2–4 players and around 2000 units on a dedicated server.
+A multiplayer real-time strategy game with Total War-style formations. 
+
+Capture point based (think company of heroes) with crafting system for unit types.
+
+Supports 2–4 players and around 2000 units on a dedicated server.
 
 ![Screenshot from the game](from_game.jpg)
 
