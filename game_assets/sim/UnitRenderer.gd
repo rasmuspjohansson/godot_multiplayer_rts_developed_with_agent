@@ -148,6 +148,9 @@ func add_unit(id: int, color: String, unit_type: String) -> void:
 		for i in range(mini(g.buf.size(), nb.size())):
 			nb[i] = g.buf[i]
 		g.buf = nb
+		# Resizing reallocates the GPU buffer with undefined contents (GL), which draws as
+		# soldiers scattered over the screen until write_tick uploads; zeros draw at scale 0.
+		g.mm.buffer = g.buf
 	g.mm.visible_instance_count = g.count
 
 func set_selected_ids(ids: PackedInt32Array, selected: bool) -> void:

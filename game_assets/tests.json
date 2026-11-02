@@ -124,6 +124,10 @@
       "implementation": "godot --headless --path . -s test_formation_rigidity.gd 2>&1 | grep -q 'TEST_FORMATION_RIGIDITY_OK'"
     },
     {
+      "description_of_test": "Separation (headless): friendly armies marching through each other never move a soldier more than a catch-up step plus a capped push per tick and both finish in their slots; two armies parked on one spot settle without jostling; two soldiers swapping places head-on both arrive",
+      "implementation": "godot --headless --path . -s test_separation_smooth.gd 2>&1 | grep -q 'TEST_SEPARATION_SMOOTH_OK'"
+    },
+    {
       "description_of_test": "SpatialHash: counting-sort grid radius/nearest queries match brute force on 3000 random points, and a 2000-unit rebuild + queries stay within budget",
       "implementation": "godot --headless --path . -s test_spatial_hash.gd 2>&1 | grep -q 'TEST_SPATIAL_HASH_OK'"
     },

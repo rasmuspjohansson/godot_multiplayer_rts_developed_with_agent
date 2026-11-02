@@ -48,9 +48,10 @@ var _plateaus: Array = []
 var _valleys: Array = []
 ## Each crater entry: {cx, cz, sigma, depth}. Inverse of a hill (Gaussian carve).
 var _craters: Array = []
-## Each valley_polygon entry: {points, depth, rim, sigma}.
+## Each valley_polygon entry: {points, depth, rim, sigma, bounds}.
 var _valley_polygons: Array = []
-## Each plateau_polygon entry: {points, peak, sigma}.
+## Each plateau_polygon entry: {points, peak, sigma, bounds}. bounds reaches 5 sigma past
+## the polygon; beyond it the falloff is below peak * 4e-6.
 var _plateau_polygons: Array = []
 
 const GROUND_HEIGHT := 5.0
@@ -426,6 +427,7 @@ func _precompute_terrain_features() -> void:
 				"depth": vdepth,
 				"rim": vfalloff,
 				"sigma": vfalloff / 6.0,
+				"bounds": _polygon_bounds(points, 0.0),
 			})
 		elif ftype == "plateau_polygon":
 			var pp_points := _parse_feature_points(f)
@@ -437,6 +439,7 @@ func _precompute_terrain_features() -> void:
 				"points": pp_points,
 				"peak": pp_height,
 				"sigma": pp_falloff / 6.0,
+				"bounds": _polygon_bounds(pp_points, 5.0 * pp_falloff / 6.0),
 			})
 
 func _parse_feature_points(feature: Dictionary) -> PackedVector2Array:
@@ -449,6 +452,12 @@ func _parse_feature_points(feature: Dictionary) -> PackedVector2Array:
 			continue
 		points.append(Vector2(float(pt.get("x", 0.0)), float(pt.get("y", 0.0))))
 	return points
+
+func _polygon_bounds(points: PackedVector2Array, margin: float) -> Rect2:
+	var r := Rect2(points[0], Vector2.ZERO)
+	for pt in points:
+		r = r.expand(pt)
+	return r.grow(margin)
 
 func _distance_to_polygon_edge(p: Vector2, polygon: PackedVector2Array) -> float:
 	var min_dist_sq := INF
@@ -479,10 +488,11 @@ func _valley_depth_at(x: float, z: float, valley: Dictionary) -> float:
 
 func _polygon_valley_depth_at(x: float, z: float, valley: Dictionary) -> float:
 	var p := Vector2(x, z)
+	if valley.has("bounds") and not valley.bounds.has_point(p):
+		return 0.0
 	var polygon: PackedVector2Array = valley.points
-	var edge_dist: float = _distance_to_polygon_edge(p, polygon)
 	if Geometry2D.is_point_in_polygon(p, polygon):
-		return valley.depth * smoothstep(0.0, valley.rim, edge_dist)
+		return valley.depth * smoothstep(0.0, valley.rim, _distance_to_polygon_edge(p, polygon))
 	return 0.0
 
 func _plateau_height_at(x: float, z: float, plateau: Dictionary) -> float:
@@ -494,6 +504,8 @@ func _plateau_height_at(x: float, z: float, plateau: Dictionary) -> float:
 
 func _polygon_plateau_height_at(x: float, z: float, plateau: Dictionary) -> float:
 	var p := Vector2(x, z)
+	if plateau.has("bounds") and not plateau.bounds.has_point(p):
+		return 0.0
 	var polygon: PackedVector2Array = plateau.points
 	if Geometry2D.is_point_in_polygon(p, polygon):
 		return plateau.peak

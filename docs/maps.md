@@ -9,8 +9,17 @@ Built-in maps:
 | **S** | 1280×720 | 2 (spear + horse) | 1 Stables, 1 Blacksmith, 1 Village | 1 (center) |
 | **L** | 2560×1440 | 1 club army | 2 Stables, 2 Blacksmith, 3 Villages, 2 Archeries | none |
 | **XL** | 3840×2160 | 2 (spear + horse) | 3 Stables, 3 Blacksmith, 3 Villages, 2 Archeries | none (mountainous) |
+| **Valleys** | 3200×3136 | 2 (spear + horse) | 1 Stables, 1 Blacksmith, 1 Village, 1 Archery | none (lakes, plateaus, impassable mountains) |
 
 `New`, `New2` and `demo` are maps made with the editor.
+
+`Valleys` is generated from the painted image `source_art/maps/map_1.png` by [`tools/png_to_map.py`](../tools/png_to_map.py):
+
+```bash
+python3 tools/png_to_map.py source_art/maps/map_1.png Valleys --width 3200 --height 3136 --debug /tmp/walk.png
+```
+
+Green is ground, light grey becomes walkable hills (large areas are flat plateaus), dark grey becomes mountains ringed by unclimbable slopes, blue becomes carved valleys filled with water, and red dots become start markers. The script rebuilds the heights on the game's 20-unit grid and refuses to write the JSON unless every start is reachable from the others and from its spawn edge, no dark grey area can be entered, and the water covers the blue areas. Capture points are placed on reachable ground automatically. Re-running the script overwrites the JSON, so do it before adding trees and objects in the editor.
 
 ## Map JSON format
 

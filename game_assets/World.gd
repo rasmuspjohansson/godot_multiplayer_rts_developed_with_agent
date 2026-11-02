@@ -30,6 +30,7 @@ var _sim = null            # UnitSim
 var _net = null            # NetSync
 var _unit_renderer = null  # UnitRenderer (clients only)
 var _fog = null  # FogOfWar (clients only)
+var _fog_props_init_logged := false
 var _ground_mat: ShaderMaterial
 var _unit_audio = null     # UnitAudio (clients only)
 var _sim_accum := 0.0
@@ -550,6 +551,7 @@ func _setup_sim() -> void:
 		_unit_renderer.viewer_pid = multiplayer.get_unique_id()
 		_unit_renderer.fog_visible = Callable(_fog, "is_explored")
 		_bind_fog_material()
+		_apply_fog_to_props()
 		_unit_audio = _UnitAudio.new()
 		_unit_audio.name = "UnitAudio"
 		_unit_audio.sim = _sim
@@ -1013,11 +1015,19 @@ func _army_in_sight(fc) -> bool:
 
 func _apply_fog_to_props() -> void:
 	var foliage := get_node_or_null("Foliage")
+	var hidden := 0
+	var total := 0
 	if foliage != null:
 		for anchor in foliage.get_children():
 			var sprite := anchor.get_node_or_null("Sprite")
 			if sprite is Sprite3D:
 				_apply_fog_sprite(sprite, anchor.position.x, anchor.position.z, Color.WHITE)
+				total += 1
+				if not sprite.visible:
+					hidden += 1
+	if not _fog_props_init_logged:
+		_fog_props_init_logged = true
+		print("TEST_FOG_PROPS_INIT: hidden=%d total=%d" % [hidden, total])
 	for cp in capture_points:
 		var sprite: Sprite3D = cp.get("sprite", null)
 		var node: Node3D = cp.get("node", null)
@@ -1063,6 +1073,8 @@ func rebuild_from_mapconfig() -> void:
 	add_water()
 	_build_walkability()
 	_build_vegetation()
+	if _fog != null:
+		_apply_fog_to_props()
 	_build_background()
 	_add_play_boundary_line()
 	if _camera != null:
@@ -3726,6 +3738,9 @@ func _client_spawn_armies_impl(data: Array, server_tick: int = -1):
 		if typeof(ad) != TYPE_DICTIONARY:
 			continue
 		_client_spawn_one_army(ad, "")
+	# The sim is held at the match barrier for a few frames; show the armies where they stand.
+	if _unit_renderer != null:
+		_unit_renderer.write_tick()
 	print("TEST_ARMIES_SPAWNED: Client received %d armies" % armies.size())
 	print("TEST_3D_CLIENT_UNITS_SPAWNED: units=%d armies=%d" % [_alive_unit_count(), armies.size()])
 	_refresh_selection_bar()
@@ -3838,6 +3853,8 @@ func _client_spawn_capture_points(data: Array):
 			"node": anchor,
 			"sprite": anchor.get_node("Sprite"),
 		})
+		if _fog != null:
+			_apply_fog_sprite(anchor.get_node("Sprite"), anchor.position.x, anchor.position.z, _capture_point_modulate(int(d.get("owner_pid", 0))))
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
 
 @rpc("authority", "unreliable")

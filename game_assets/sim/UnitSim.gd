@@ -34,9 +34,24 @@ const RADIUS_FOOT := 4.5
 const RADIUS_HORSE := 6.5
 const RADIUS_DRAGON := 18.0
 const SEPARATION_QUERY_PAD := 7.0
-const FRIENDLY_PUSH := 0.25
-const ENEMY_PUSH := 0.5
-const MAX_PUSH_PER_TICK := 2.5
+## Separation is order-first: units remember up to CONTACT_SLOTS neighbours, slide along
+## them while steering, and a weak push eases leftover overlap. Overlap is allowed, jumps
+## are not.
+const CONTACT_SLOTS := 4
+## A neighbour becomes a contact this far before its overlap limit, and is dropped once it
+## is CONTACT_DROP_MARGIN beyond that again (no flicker at the boundary).
+const CONTACT_PAD := 4.0
+const CONTACT_DROP_MARGIN := 1.0
+## Fraction of the summed radii two units may close to before sliding / pushing kicks in.
+const FRIENDLY_OVERLAP_OK := 0.6
+const ENEMY_OVERLAP_OK := 0.85
+## Per tick, fraction of the remaining overlap a push removes.
+const FRIENDLY_PUSH := 0.15
+const ENEMY_PUSH := 0.3
+## Per tick, a push never moves a unit farther than this fraction of its own walk step.
+const PUSH_STEP_FRAC := 0.35
+## Head-on contact: sidestep this fraction of the walk step so neither unit freezes.
+const SIDESTEP_FRAC := 0.3
 const BASE_HP := 100.0
 const KNIGHT_HP := 200.0
 const MELEE_ATTACK_RANGE := 22.0
@@ -135,6 +150,8 @@ var _disp_seen := PackedByteArray()
 ## Per tick: 1 when separation shoved the unit farther than MOVE_OSC_MIN_DISP (crowd
 ## jostling is identical on every peer and is not a sync reversal).
 var _pushed := PackedByteArray()
+## CONTACT_SLOTS unit ids per unit (-1 = empty): neighbours it is close to overlapping.
+var _contacts := PackedInt32Array()
 ## Diagnostics for the last oscillation trip (see World TEST_MOVE_OSCILLATION_FAIL).
 var move_oscillation_info: String = ""
 ## Per-unit list of sim ticks when step direction reversed.
@@ -270,6 +287,7 @@ func ensure_capacity(n: int) -> void:
 	_last_disp_z.resize(n)
 	_disp_seen.resize(n)
 	_pushed.resize(n)
+	_contacts.resize(n * CONTACT_SLOTS)
 	_march_i.resize(n)
 	_march_deploy.resize(n)
 	while _reversal_ticks.size() < n:
@@ -278,6 +296,8 @@ func ensure_capacity(n: int) -> void:
 		flags[i] = 0
 		target[i] = -1
 		army[i] = -1
+		for s in range(CONTACT_SLOTS):
+			_contacts[i * CONTACT_SLOTS + s] = -1
 
 ## Register unit `id` (server picks ids sequentially; clients replay the same ids).
 func add_unit(id: int, x: float, z: float, p_owner: int, army_idx: int, p_type: int) -> void:
@@ -921,6 +941,9 @@ func _step_units(dt: float) -> void:
 	var srv_hold := _srv_combat_until
 	var pushed := _pushed
 	var push_track2 := MOVE_OSC_MIN_DISP * MOVE_OSC_MIN_DISP * 0.25
+	var contacts := _contacts
+	var cd2 := PackedFloat32Array()
+	cd2.resize(CONTACT_SLOTS)
 	var catch_up_d2 := CATCH_UP_DIST * CATCH_UP_DIST
 	var cell_start: PackedInt32Array = hash._cell_start
 	var cell_items: PackedInt32Array = hash._cell_items
@@ -1157,18 +1180,21 @@ func _step_units(dt: float) -> void:
 			cx_arr[i] = cx
 			cz_arr[i] = cz
 
-		# --- soft separation (hash cell walk inlined; this is the hottest loop) ---
-		# Each unit resolves overlaps on alternate ticks (10 Hz); pushes are small per tick
-		# so this halves the cost without visible change.
+		# --- contacts (hash cell walk inlined; this is the hottest loop) ---
+		# The neighbour scan runs on alternate ticks (10 Hz) and keeps the CONTACT_SLOTS
+		# nearest units that are close to their overlap limit; on the other ticks the list
+		# is only pruned. A marching soldier ignores its own army (slots are spaced).
+		var r: float = rad_arr[i]
+		var my_owner: int = own_arr[i]
+		var my_neutral := (f & F_NEUTRAL) != 0
+		var cbase: int = i * CONTACT_SLOTS
 		if ((tk + i) & 1) == 0:
-			var r: float = rad_arr[i]
-			var qr := r + SEPARATION_QUERY_PAD
+			var qr := r + SEPARATION_QUERY_PAD + CONTACT_PAD
 			if r >= RADIUS_DRAGON:
-				qr = r + RADIUS_HORSE + 1.0
-			var my_owner: int = own_arr[i]
-			var my_neutral := (f & F_NEUTRAL) != 0
-			var px := 0.0
-			var pz := 0.0
+				qr = r + RADIUS_HORSE + 1.0 + CONTACT_PAD
+			for s in range(CONTACT_SLOTS):
+				contacts[cbase + s] = -1
+				cd2[s] = INF
 			var cx0: int = int((x - qr) * inv_cell)
 			var cx1: int = int((x + qr) * inv_cell)
 			var cz0: int = int((z - qr) * inv_cell)
@@ -1191,36 +1217,136 @@ func _step_units(dt: float) -> void:
 						var j: int = cell_items[k]
 						if j == i:
 							continue
+						if army_moving and army_arr[j] == ai:
+							continue
 						var ddx: float = x - px_arr[j]
 						var ddz: float = z - pz_arr[j]
 						var d2 := ddx * ddx + ddz * ddz
 						if d2 >= qr2:
 							continue
-						var min_d: float = r + rad_arr[j]
-						if d2 >= min_d * min_d:
-							continue
-						var dd := sqrt(d2)
-						var w := FRIENDLY_PUSH
+						var tol := FRIENDLY_OVERLAP_OK
 						if own_arr[j] != my_owner and not (my_neutral and (flg_arr[j] & F_NEUTRAL) != 0):
-							w = ENEMY_PUSH
-						if dd < 0.01:
-							# Coincident: deterministic nudge by id parity.
-							ddx = 0.01 if (i & 1) == 0 else -0.01
-							ddz = 0.01 if (j & 1) == 0 else -0.01
-							dd = 0.0141
-						var s := (min_d - dd) * w / dd
-						px += ddx * s
-						pz += ddz * s
-			if px != 0.0 or pz != 0.0:
-				var pl2 := px * px + pz * pz
-				if pl2 > MAX_PUSH_PER_TICK * MAX_PUSH_PER_TICK:
-					var sc := MAX_PUSH_PER_TICK / sqrt(pl2)
-					px *= sc
-					pz *= sc
-				if pl2 > push_track2:
-					pushed[i] = 1
-				nx += px
-				nz += pz
+							tol = ENEMY_OVERLAP_OK
+						var lim: float = (r + rad_arr[j]) * tol + CONTACT_PAD
+						if d2 >= lim * lim:
+							continue
+						var worst := 0
+						var wd2: float = cd2[0]
+						for s in range(1, CONTACT_SLOTS):
+							if cd2[s] > wd2:
+								wd2 = cd2[s]
+								worst = s
+						if d2 < wd2:
+							contacts[cbase + worst] = j
+							cd2[worst] = d2
+		else:
+			for s in range(CONTACT_SLOTS):
+				var j: int = contacts[cbase + s]
+				if j < 0:
+					continue
+				if (flg_arr[j] & F_ALIVE) == 0:
+					contacts[cbase + s] = -1
+					continue
+				var tol := FRIENDLY_OVERLAP_OK
+				if own_arr[j] != my_owner and not (my_neutral and (flg_arr[j] & F_NEUTRAL) != 0):
+					tol = ENEMY_OVERLAP_OK
+				var drop: float = (r + rad_arr[j]) * tol + CONTACT_PAD + CONTACT_DROP_MARGIN
+				var ddx: float = x - px_arr[j]
+				var ddz: float = z - pz_arr[j]
+				if ddx * ddx + ddz * ddz > drop * drop:
+					contacts[cbase + s] = -1
+
+		# --- slide: never step deeper into a contact than its overlap limit ---
+		# Only the inward part past the limit is removed, so the unit slides around. If that
+		# leaves almost nothing (head-on), it sidesteps to the left of the contact normal; the
+		# other unit sees the opposite normal, so the two pass each other.
+		var sx := nx - x
+		var sz := nz - z
+		var s_len2 := sx * sx + sz * sz
+		if s_len2 > 1e-8:
+			var side := sqrt(s_len2) * SIDESTEP_FRAC
+			for s in range(CONTACT_SLOTS):
+				var j: int = contacts[cbase + s]
+				if j < 0:
+					continue
+				var ox: float = x - px_arr[j]
+				var oz: float = z - pz_arr[j]
+				var od := sqrt(ox * ox + oz * oz)
+				if od < 0.01:
+					continue
+				var ux := ox / od
+				var uz := oz / od
+				var inward := -(sx * ux + sz * uz)
+				if inward <= 0.0:
+					continue
+				var tol := FRIENDLY_OVERLAP_OK
+				if own_arr[j] != my_owner and not (my_neutral and (flg_arr[j] & F_NEUTRAL) != 0):
+					tol = ENEMY_OVERLAP_OK
+				var allowed := maxf(0.0, od - (r + rad_arr[j]) * tol)
+				if inward <= allowed:
+					continue
+				var cut := inward - allowed
+				sx += ux * cut
+				sz += uz * cut
+				if sx * sx + sz * sz < side * side:
+					sx -= uz * side
+					sz += ux * side
+			nx = x + sx
+			nz = z + sz
+
+		# --- weak push: ease overlap left past the limit, never against the order ---
+		var ppx := 0.0
+		var ppz := 0.0
+		for s in range(CONTACT_SLOTS):
+			var j: int = contacts[cbase + s]
+			if j < 0:
+				continue
+			var ddx: float = nx - px_arr[j]
+			var ddz: float = nz - pz_arr[j]
+			var d2 := ddx * ddx + ddz * ddz
+			var w := FRIENDLY_PUSH
+			var tol := FRIENDLY_OVERLAP_OK
+			if own_arr[j] != my_owner and not (my_neutral and (flg_arr[j] & F_NEUTRAL) != 0):
+				w = ENEMY_PUSH
+				tol = ENEMY_OVERLAP_OK
+			var lim: float = (r + rad_arr[j]) * tol
+			if d2 >= lim * lim:
+				continue
+			var dd := sqrt(d2)
+			if dd < 0.01:
+				# Coincident: deterministic nudge by id parity.
+				ddx = 0.01 if (i & 1) == 0 else -0.01
+				ddz = 0.01 if (j & 1) == 0 else -0.01
+				dd = 0.0141
+			var sc := (lim - dd) * w / dd
+			ppx += ddx * sc
+			ppz += ddz * sc
+		if ppx != 0.0 or ppz != 0.0:
+			sx = nx - x
+			sz = nz - z
+			s_len2 = sx * sx + sz * sz
+			if s_len2 > 1e-8:
+				var along := (ppx * sx + ppz * sz) / s_len2
+				if along < 0.0:
+					ppx -= sx * along
+					ppz -= sz * along
+			if army_moving and ai >= 0:
+				var hx: float = a_dir_x[ai]
+				var hz: float = a_dir_z[ai]
+				var ah := ppx * hx + ppz * hz
+				if ah < 0.0:
+					ppx -= hx * ah
+					ppz -= hz * ah
+			var pl2 := ppx * ppx + ppz * ppz
+			var cap := step_len * PUSH_STEP_FRAC
+			if pl2 > cap * cap:
+				var k2 := cap / sqrt(pl2)
+				ppx *= k2
+				ppz *= k2
+			if pl2 > push_track2:
+				pushed[i] = 1
+			nx += ppx
+			nz += ppz
 
 		# --- walkability slide (try full, then x-only, then z-only) ---
 		if nx != x or nz != z:

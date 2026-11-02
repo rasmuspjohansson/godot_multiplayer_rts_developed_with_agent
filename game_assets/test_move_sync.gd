@@ -31,7 +31,7 @@ const ANCHOR_CONFIRM_TOLERANCE := 2.0
 ## Quantisation of a 16-bit snapshot coordinate on a 1280x720 map (~0.02) plus float slack.
 const QUANT_EPS := 0.05
 ## A step counts as backwards when it travels against the soldier's own goal direction by more
-## than this. Friendly separation nudges are <= FRIENDLY_PUSH (0.25) per neighbour and happen
+## than this. Separation pushes are capped at PUSH_STEP_FRAC of a walk step and happen
 ## on every peer alike (e.g. while a column opens into its slots); a blended correction
 ## that walked a soldier backwards would be >= 0.35 * RECONCILE_IGNORE = 0.7.
 const BACKWARD_EPS := 0.5

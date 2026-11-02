@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+"""Convert a painted map image into a game map JSON.
+
+Colours: green = ground, light grey = low walkable hills (large areas become flat
+plateaus), dark grey = impassable mountains, blue = water, red dots = start markers.
+
+Usage:
+    python3 tools/png_to_map.py source_art/maps/map_1.png Valleys --width 3200 --height 3136
+
+The terrain is rebuilt with the same formulas as game_assets/MapConfig.gd and checked on
+the game's 20-unit walkability grid before the JSON is written.
+"""
+
+import argparse
+import json
+import math
+import random
+import sys
+from collections import deque
+from pathlib import Path
+
+import cv2
+import numpy as np
+from PIL import Image
+
+REPO = Path(__file__).resolve().parent.parent
+MAPS_DIR = REPO / "game_assets" / "maps"
+
+GROUND, LIGHT, DARK, WATER, RED = 0, 1, 2, 3, 4
+PALETTE = np.array([
+    (99, 151, 62),
+    (146, 146, 144),
+    (122, 122, 121),
+    (45, 132, 227),
+    (151, 64, 60),
+], dtype=np.float32)
+
+# Must match game_assets/MapConfig.gd, World.gd, WalkabilityGrid.gd, WaterBuilder.gd.
+GROUND_HEIGHT = 5.0
+STEP = 20.0
+MAX_SLOPE_DEG = 45.0
+SURFACE_CLIP_EPSILON = 0.05
+EDGE_STOP = 80.0
+SPAWN_SPREAD = 40.0
+
+FRAME_PX = 14
+MIN_REGION_PX = 120
+
+DARK_HEIGHT = (62.0, 82.0)
+DARK_FALLOFF = 24.0
+LIGHT_FLAT_HEIGHT = 30.0
+LIGHT_SMALL_HEIGHT = (14.0, 20.0)
+LIGHT_LARGE_AREA_PX = 6000
+LIGHT_FALLOFF = 160.0
+WATER_DEPTH = 40.0
+WATER_SURFACE = 3.0
+
+
+def classify(path):
+    rgb = np.array(Image.open(path).convert("RGB"), dtype=np.float32)
+    rgb = rgb[FRAME_PX:-FRAME_PX, FRAME_PX:-FRAME_PX]
+    d = ((rgb[:, :, None, :] - PALETTE[None, None, :, :]) ** 2).sum(axis=3)
+    # Blur between two colours averages to something near dark grey in RGB, so only
+    # near-neutral pixels may be grey; everything else picks among the hues.
+    sat = rgb.max(axis=2) - rgb.min(axis=2)
+    neutral = sat < 14.0
+    d[neutral] = np.where(np.isin(np.arange(5), [LIGHT, DARK]), d[neutral], np.inf)
+    d[~neutral] = np.where(np.isin(np.arange(5), [LIGHT, DARK]), np.inf, d[~neutral])
+    labels = d.argmin(axis=2).astype(np.uint8)
+    red = labels == RED
+    # Majority filter: blur fringes between colours snap to the dominant neighbour.
+    # Start dots take whatever terrain surrounds them.
+    votes = np.stack([
+        cv2.blur((labels == c).astype(np.float32), (9, 9)) for c in range(4)
+    ], axis=2)
+    wide = np.stack([
+        cv2.blur((labels == c).astype(np.float32), (41, 41)) for c in range(4)
+    ], axis=2)
+    near_red = cv2.dilate(red.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+    votes[near_red] = wide[near_red]
+    labels = votes.argmax(axis=2).astype(np.uint8)
+    return labels, red
+
+
+def components(mask, min_px=MIN_REGION_PX):
+    n, cc, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=4)
+    out = []
+    for k in range(1, n):
+        if stats[k, cv2.CC_STAT_AREA] >= min_px:
+            out.append(cc == k)
+    return out
+
+
+def contour_of(mask, max_points=40):
+    m = mask.astype(np.uint8)
+    cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not cs:
+        return None
+    c = max(cs, key=cv2.contourArea)
+    eps = 1.0
+    approx = cv2.approxPolyDP(c, eps, True)
+    while len(approx) > max_points:
+        eps *= 1.25
+        approx = cv2.approxPolyDP(c, eps, True)
+    if len(approx) < 3:
+        return None
+    return approx[:, 0, :].astype(np.float64)
+
+
+class Scale:
+    def __init__(self, img_w, img_h, map_w, map_h):
+        self.sx = map_w / img_w
+        self.sy = map_h / img_h
+
+    def pt(self, px, py):
+        return ((px + 0.5) * self.sx, (py + 0.5) * self.sy)
+
+    def poly(self, pts):
+        return [{"x": round(self.pt(p[0], p[1])[0], 1), "y": round(self.pt(p[0], p[1])[1], 1)} for p in pts]
+
+    def to_px(self, x, z):
+        return (x / self.sx - 0.5, z / self.sy - 0.5)
+
+
+def dark_features(labels, scale, rng):
+    feats = []
+    for mask in components(labels == DARK):
+        pts = contour_of(mask)
+        if pts is None:
+            continue
+        feats.append({
+            "type": "plateau_polygon",
+            "points": scale.poly(pts),
+            "height": round(rng.uniform(*DARK_HEIGHT), 1),
+            "falloff": DARK_FALLOFF,
+        })
+        # Crags at distance-transform peaks, sized to stay well inside the region.
+        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        avail = dist.copy()
+        for _ in range(14):
+            j, i = np.unravel_index(np.argmax(avail), avail.shape)
+            r_px = float(dist[j, i])
+            if r_px < 6.0:
+                break
+            x, z = scale.pt(i, j)
+            r_world = r_px * min(scale.sx, scale.sy)
+            feats.append({
+                "type": "hill",
+                "x": round(x, 1),
+                "y": round(z, 1),
+                "base_width": round(1.8 * r_world, 1),
+                "height": round(rng.uniform(95.0, 155.0) * min(1.0, 0.55 + r_px / 60.0), 1),
+            })
+            yy, xx = np.ogrid[:avail.shape[0], :avail.shape[1]]
+            avail[(xx - i) ** 2 + (yy - j) ** 2 <= (1.3 * r_px) ** 2] = 0
+    return feats
+
+
+def light_features(labels, scale, rng):
+    feats = []
+    for mask in components(labels == LIGHT):
+        area = int(mask.sum())
+        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        thick = float(dist.max())
+        # The exterior falloff spreads outward; pull the edge in so the slope sits
+        # inside the painted shape.
+        erode_px = int(min(7.0, thick * 0.4))
+        m = mask.astype(np.uint8)
+        if erode_px >= 1:
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1))
+            eroded = cv2.erode(m, k)
+            if eroded.sum() > area * 0.3:
+                m = eroded
+        pts = contour_of(m)
+        if pts is None:
+            continue
+        if area >= LIGHT_LARGE_AREA_PX:
+            height = LIGHT_FLAT_HEIGHT
+        else:
+            t = min(1.0, thick / 25.0)
+            height = LIGHT_SMALL_HEIGHT[0] + (LIGHT_SMALL_HEIGHT[1] - LIGHT_SMALL_HEIGHT[0]) * t
+            height += rng.uniform(-1.5, 1.5)
+        feats.append({
+            "type": "plateau_polygon",
+            "points": scale.poly(pts),
+            "height": round(height, 1),
+            "falloff": LIGHT_FALLOFF,
+        })
+    return feats
+
+
+def water_features(labels, scale):
+    feats = []
+    regions = []
+    for mask in components(labels == WATER):
+        pts = contour_of(mask, max_points=48)
+        if pts is None:
+            continue
+        dist = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 5)
+        # Rim from the typical channel half-width so narrow river parts still carve deep.
+        inner = dist[dist > 0]
+        half_w = float(np.percentile(inner, 75)) * min(scale.sx, scale.sy)
+        rim = max(25.0, min(60.0, half_w * 0.7))
+        feats.append({
+            "type": "valley_polygon",
+            "points": scale.poly(pts),
+            "depth": WATER_DEPTH,
+            "falloff": round(rim, 1),
+        })
+        regions.append(mask)
+    return feats, regions
+
+
+def green_hills(labels, scale, starts_world, rng, count=38):
+    green = (labels == GROUND).astype(np.uint8)
+    clear = cv2.distanceTransform(green, cv2.DIST_L2, 5) * min(scale.sx, scale.sy)
+    ys, xs = np.nonzero(clear > 150.0)
+    feats = []
+    placed = []
+    order = rng.sample(range(len(xs)), len(xs))
+    for idx in order:
+        if len(feats) >= count:
+            break
+        x, z = scale.pt(xs[idx], ys[idx])
+        if any((x - sx) ** 2 + (z - sz) ** 2 < 260.0 ** 2 for sx, sz in starts_world):
+            continue
+        if any((x - px) ** 2 + (z - pz) ** 2 < 280.0 ** 2 for px, pz in placed):
+            continue
+        c = float(clear[ys[idx], xs[idx]])
+        bw = min(rng.uniform(250.0, 500.0), c * 2.6)
+        placed.append((x, z))
+        feats.append({
+            "type": "hill",
+            "x": round(x, 1),
+            "y": round(z, 1),
+            "base_width": round(bw, 1),
+            "height": round(rng.uniform(8.0, 16.0), 1),
+        })
+    return feats
+
+
+def start_markers(red, scale):
+    n, _, stats, cents = cv2.connectedComponentsWithStats(red.astype(np.uint8))
+    pts = [cents[k] for k in range(1, n) if stats[k, cv2.CC_STAT_AREA] >= 6]
+    world = [scale.pt(p[0], p[1]) for p in pts]
+    if len(world) != 4:
+        sys.exit("expected 4 red start markers, found %d" % len(world))
+    cx = sum(p[0] for p in world) / 4.0
+    cz = sum(p[1] for p in world) / 4.0
+
+    def corner(p):
+        return ("N" if p[1] < cz else "S") + ("W" if p[0] < cx else "E")
+
+    by = {corner(p): p for p in world}
+    order = ["NW", "SE", "NE", "SW"]
+    if set(by) != set(order):
+        sys.exit("start markers are not one per corner: %s" % sorted(by))
+    return [(c, by[c]) for c in order]
+
+
+# ---- Height model (mirrors MapConfig.sample_height) ----
+
+def _point_in_poly(px, pz, poly):
+    inside = np.zeros(px.shape, dtype=bool)
+    n = len(poly)
+    for k in range(n):
+        ax, az = poly[k]
+        bx, bz = poly[(k + 1) % n]
+        cond = (az > pz) != (bz > pz)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            xint = (bx - ax) * (pz - az) / (bz - az) + ax
+        inside ^= cond & (px < xint)
+    return inside
+
+
+def _edge_dist(px, pz, poly):
+    best = np.full(px.shape, np.inf)
+    n = len(poly)
+    for k in range(n):
+        ax, az = poly[k]
+        bx, bz = poly[(k + 1) % n]
+        dx, dz = bx - ax, bz - az
+        ll = dx * dx + dz * dz
+        if ll < 1e-9:
+            t = np.zeros(px.shape)
+        else:
+            t = np.clip(((px - ax) * dx + (pz - az) * dz) / ll, 0.0, 1.0)
+        cx, cz = ax + dx * t, az + dz * t
+        best = np.minimum(best, (px - cx) ** 2 + (pz - cz) ** 2)
+    return np.sqrt(best)
+
+
+def _smoothstep(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def heights_grid(features, map_w, map_h):
+    cols = int(math.ceil(map_w / STEP)) + 1
+    rows = int(math.ceil(map_h / STEP)) + 1
+    pz, px = np.meshgrid(np.arange(rows) * STEP, np.arange(cols) * STEP, indexing="ij")
+    positive = np.zeros(px.shape)
+    carve = np.zeros(px.shape)
+    for f in features:
+        t = f["type"]
+        if t == "hill":
+            s = f["base_width"] / 6.0
+            d2 = (px - f["x"]) ** 2 + (pz - f["y"]) ** 2
+            positive = np.maximum(positive, f["height"] * np.exp(-d2 / (2 * s * s)))
+        elif t == "plateau_polygon":
+            poly = [(p["x"], p["y"]) for p in f["points"]]
+            s = f["falloff"] / 6.0
+            inside = _point_in_poly(px, pz, poly)
+            ed = _edge_dist(px, pz, poly)
+            h = np.where(inside, f["height"], f["height"] * np.exp(-(ed * ed) / (2 * s * s)))
+            positive = np.maximum(positive, h)
+        elif t == "valley_polygon":
+            poly = [(p["x"], p["y"]) for p in f["points"]]
+            inside = _point_in_poly(px, pz, poly)
+            ed = _edge_dist(px, pz, poly)
+            c = np.where(inside, f["depth"] * _smoothstep(0.0, f["falloff"], ed), 0.0)
+            carve = np.maximum(carve, c)
+    return np.maximum(positive, GROUND_HEIGHT) - carve
+
+
+def slope_blocked(h):
+    rows, cols = h.shape
+    pad = np.pad(h, 1, mode="edge")
+    worst = np.zeros(h.shape)
+    for dj in (-1, 0, 1):
+        for di in (-1, 0, 1):
+            if di == 0 and dj == 0:
+                continue
+            nb = pad[1 + dj:1 + dj + rows, 1 + di:1 + di + cols]
+            dist = STEP * (math.sqrt(2.0) if di and dj else 1.0)
+            worst = np.maximum(worst, np.degrees(np.arctan(np.abs(nb - h) / dist)))
+    return worst > MAX_SLOPE_DEG
+
+
+def flood(h, si, sj, surface):
+    rows, cols = h.shape
+    mask = np.zeros(h.shape, dtype=bool)
+    seen = np.zeros(h.shape, dtype=bool)
+    q = deque([(si, sj)])
+    seen[sj, si] = True
+    while q:
+        i, j = q.popleft()
+        if h[j, i] >= surface - SURFACE_CLIP_EPSILON:
+            continue
+        mask[j, i] = True
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ni, nj = i + di, j + dj
+            if 0 <= ni < cols and 0 <= nj < rows and not seen[nj, ni]:
+                seen[nj, ni] = True
+                q.append((ni, nj))
+    return mask
+
+
+def region_cells(region_mask, scale, shape):
+    rows, cols = shape
+    out = np.zeros(shape, dtype=bool)
+    ih, iw = region_mask.shape
+    for j in range(rows):
+        for i in range(cols):
+            x, y = scale.to_px(i * STEP, j * STEP)
+            xi, yi = int(round(x)), int(round(y))
+            if 0 <= xi < iw and 0 <= yi < ih and region_mask[yi, xi]:
+                out[j, i] = True
+    return out
+
+
+def lake_seeds(h, water_regions, scale):
+    seeds = []
+    water = np.zeros(h.shape, dtype=bool)
+    coverage = []
+    for k, region in enumerate(water_regions):
+        cells = region_cells(region, scale, h.shape)
+        covered = np.zeros(h.shape, dtype=bool)
+        for _ in range(8):
+            todo = cells & ~covered & ~water & (h < WATER_SURFACE - 1.0)
+            if not todo.any():
+                break
+            hv = np.where(todo, h, np.inf)
+            sj, si = np.unravel_index(np.argmin(hv), h.shape)
+            rise = WATER_SURFACE - float(h[sj, si])
+            m = flood(h, si, sj, WATER_SURFACE)
+            if m.sum() < 3:
+                covered[sj, si] = True
+                continue
+            seeds.append({"x": round(si * STEP, 1), "y": round(sj * STEP, 1), "rise": round(rise, 2)})
+            covered |= m
+            water |= m
+        frac = float((covered & cells).sum()) / max(1, int(cells.sum()))
+        coverage.append((k, int(cells.sum()), frac))
+    return seeds, water, coverage
+
+
+def reach(walk, si, sj):
+    rows, cols = walk.shape
+    seen = np.zeros(walk.shape, dtype=bool)
+    if not walk[sj, si]:
+        return seen
+    q = deque([(si, sj)])
+    seen[sj, si] = True
+    while q:
+        i, j = q.popleft()
+        for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ni, nj = i + di, j + dj
+            if 0 <= ni < cols and 0 <= nj < rows and walk[nj, ni] and not seen[nj, ni]:
+                seen[nj, ni] = True
+                q.append((ni, nj))
+    return seen
+
+
+def reach8(walk, si, sj):
+    rows, cols = walk.shape
+    seen = np.zeros(walk.shape, dtype=bool)
+    if not walk[sj, si]:
+        return seen
+    q = deque([(si, sj)])
+    seen[sj, si] = True
+    while q:
+        i, j = q.popleft()
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                ni, nj = i + di, j + dj
+                if 0 <= ni < cols and 0 <= nj < rows and walk[nj, ni] and not seen[nj, ni]:
+                    seen[nj, ni] = True
+                    q.append((ni, nj))
+    return seen
+
+
+def cell_of(x, z, shape):
+    rows, cols = shape
+    return (min(cols - 1, max(0, int(round(x / STEP)))), min(rows - 1, max(0, int(round(z / STEP)))))
+
+
+def nearest_in(mask, x, z):
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    i0, j0 = x / STEP, z / STEP
+    k = int(np.argmin((xs - i0) ** 2 + (ys - j0) ** 2))
+    return (float(xs[k] * STEP), float(ys[k] * STEP))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("image")
+    ap.add_argument("name")
+    ap.add_argument("--width", type=float, default=3200.0)
+    ap.add_argument("--height", type=float, default=3136.0)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--debug", help="write a walkability preview PNG here")
+    args = ap.parse_args()
+
+    rng = random.Random(args.seed)
+    labels, red = classify(args.image)
+    ih, iw = labels.shape
+    scale = Scale(iw, ih, args.width, args.height)
+
+    starts = start_markers(red, scale)
+    starts_world = [p for _, p in starts]
+
+    features = []
+    features += green_hills(labels, scale, starts_world, rng)
+    features += light_features(labels, scale, rng)
+    features += dark_features(labels, scale, rng)
+    water_feats, water_regions = water_features(labels, scale)
+    features += water_feats
+
+    h = heights_grid(features, args.width, args.height)
+    seeds, water, coverage = lake_seeds(h, water_regions, scale)
+    walk = ~slope_blocked(h) & ~water
+
+    fails = []
+    for k, n, frac in coverage:
+        print("water region %d: %d cells, %.0f%% flooded" % (k, n, frac * 100))
+        if n >= 6 and frac < 0.6:
+            fails.append("water region %d is only %.0f%% flooded" % (k, frac * 100))
+
+    base = starts_world[0]
+    bi, bj = cell_of(base[0], base[1], h.shape)
+    main_area = reach(walk, bi, bj)
+    if not walk[bj, bi]:
+        fails.append("start NW is not walkable")
+    for corner, (x, z) in starts:
+        i, j = cell_of(x, z, h.shape)
+        if not main_area[j, i]:
+            fails.append("start %s is not connected to NW" % corner)
+        edge_x = EDGE_STOP if x <= args.width - x else args.width - EDGE_STOP
+        for dz in (-SPAWN_SPREAD, 0.0, SPAWN_SPREAD):
+            ei, ej = cell_of(edge_x, z + dz, h.shape)
+            if not main_area[ej, ei]:
+                fails.append("start %s: edge entry at z=%.0f cannot reach the start" % (corner, z + dz))
+
+    dark_cells = region_cells(labels == DARK, scale, h.shape)
+    dark_core = cv2.erode(dark_cells.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+    leak = reach8(walk, bi, bj) & dark_core
+    if leak.any():
+        ys, xs = np.nonzero(leak)
+        fails.append("%d dark grey cells are reachable, e.g. (%.0f, %.0f)" % (len(xs), xs[0] * STEP, ys[0] * STEP))
+
+    # Capture points: preferred spots in image pixels (uncropped), snapped to reachable
+    # ground with some clearance.
+    green_cells = region_cells(labels == GROUND, scale, h.shape)
+    clearance = cv2.erode((main_area & green_cells).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    wanted = [
+        ("Stables", "Stables", 250, 560),
+        ("Blacksmith", "Blacksmith", 470, 420),
+        ("Village", "Village", 890, 700),
+        ("Archery", "Archery", 560, 840),
+    ]
+    capture_points = []
+    for cid, ctype, px, py in wanted:
+        x, z = scale.pt(px - FRAME_PX, py - FRAME_PX)
+        p = nearest_in(clearance, x, z)
+        if p is None:
+            fails.append("no reachable ground for %s" % cid)
+            continue
+        capture_points.append({"id": cid, "type": ctype, "x": p[0], "y": p[1]})
+
+    if args.debug:
+        dbg = np.zeros(h.shape + (3,), dtype=np.uint8)
+        dbg[walk] = (90, 160, 70)
+        dbg[~walk] = (60, 60, 60)
+        dbg[water] = (40, 110, 220)
+        dbg[main_area] = (140, 210, 110)
+        for _, (x, z) in starts:
+            i, j = cell_of(x, z, h.shape)
+            dbg[max(0, j - 1):j + 2, max(0, i - 1):i + 2] = (230, 40, 40)
+        Image.fromarray(dbg).resize((h.shape[1] * 4, h.shape[0] * 4), Image.Resampling.NEAREST).save(args.debug)
+        print("debug image:", args.debug)
+
+    walk_frac = walk.mean()
+    print("features: %d (%s)" % (len(features), ", ".join(
+        "%s=%d" % (t, sum(1 for f in features if f["type"] == t))
+        for t in ("hill", "plateau_polygon", "valley_polygon"))))
+    print("lake seeds: %d, walkable cells: %.0f%%, height range %.1f..%.1f" % (
+        len(seeds), walk_frac * 100, h.min(), h.max()))
+
+    if fails:
+        for f in fails:
+            print("FAIL:", f)
+        sys.exit(1)
+
+    out = {
+        "name": args.name,
+        "size": {"width": args.width, "height": args.height},
+        "terrain": {"type": "hills", "features": features},
+        "lakes": seeds,
+        "lighting": {
+            "sun_azimuth_deg": 275.0,
+            "sun_elevation_deg": 0.0,
+            "energy": 0.12,
+            "color": [1.0, 0.98, 0.95],
+            "shadow_max_distance": None,
+        },
+        "vegetation": {"count": 0, "forest_clusters": 0},
+        "capture_points": capture_points,
+        "start_positions": [{"x": round(p[0], 1), "y": round(p[1], 1)} for _, p in starts],
+        "player_starts": [
+            {"slot": k, "corner": c, "armies": []} for k, (c, _) in enumerate(starts)
+        ],
+        "props": [],
+    }
+    path = MAPS_DIR / ("map_%s.json" % args.name)
+    path.write_text(json.dumps(out, indent=1) + "\n")
+    print("wrote", path)
+
+
+if __name__ == "__main__":
+    main()
