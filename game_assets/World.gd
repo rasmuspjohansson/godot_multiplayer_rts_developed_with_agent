@@ -68,6 +68,14 @@ const CAMERA_MIN_DISTANCE := 200.0 / 3.0
 const CAMERA_MAX_DISTANCE := 1200.0
 const CAMERA_PAN_SPEED := 400.0
 const CAMERA_ZOOM_SPEED := 80.0
+## Free view camera (Total War style): yaw + free pitch, WASD relative to the view.
+const CAMERA_SETTINGS_PATH := "user://camera_settings.cfg"
+const FREE_VIEW_PITCH_MIN_DEG := 8.0
+const FREE_VIEW_PITCH_MAX_DEG := 80.0
+const FREE_VIEW_PITCH_DEFAULT_DEG := 35.0
+const FREE_VIEW_KEY_ROTATE_DEG_PER_SEC := 90.0
+const FREE_VIEW_DRAG_ROTATE_DEG_PER_PX := 0.3
+const FREE_VIEW_DRAG_PITCH_DEG_PER_PX := 0.2
 const ARMY_CLICK_RADIUS := 80.0
 const MOVE_GOAL_MARKER_HIDE_DIST := 1.0
 const BG_MUSIC_PATH := "res://sound/Glade_of_Sun_and_Water.mp3"
@@ -116,6 +124,11 @@ var _pan_bounds_cache_dist: float = -1.0
 var _pan_bounds_cache_result: Vector4 = Vector4.ZERO
 var _pan_drag := false
 var _last_mouse: Vector2
+var free_view_camera := false
+## Radians; 0 = looking north (-Z), positive turns the view left (counter-clockwise from above).
+var _camera_yaw := 0.0
+var _free_pitch_deg := FREE_VIEW_PITCH_DEFAULT_DEG
+var _free_view_checkbox: CheckBox = null
 
 var armies: Array = []
 var _map_dragons: Array = []
@@ -328,6 +341,20 @@ func _setup_settings_menu() -> void:
 			_on_anim_speed_changed,
 			"anim_speed"
 		)
+		var cam_title := Label.new()
+		cam_title.text = "Camera"
+		cam_title.add_theme_font_size_override("font_size", 14)
+		vbox.add_child(cam_title)
+		_free_view_checkbox = CheckBox.new()
+		_free_view_checkbox.name = "FreeViewCameraCheckBox"
+		_free_view_checkbox.text = "free_view_camera"
+		_free_view_checkbox.tooltip_text = "W/S forward/back, A/D strafe, Q/E or middle-drag rotate, middle-drag up/down tilt"
+		_free_view_checkbox.focus_mode = Control.FOCUS_NONE
+		_free_view_checkbox.toggled.connect(set_free_view_camera)
+		vbox.add_child(_free_view_checkbox)
+		# Auto-test visibility checks assume the default camera.
+		if not GameState.is_auto_test:
+			set_free_view_camera(_load_free_view_setting(), false)
 
 	var hint := Label.new()
 	hint.text = "Copy for map JSON:"
@@ -1244,8 +1271,55 @@ func _camera_zoom_t() -> float:
 	return clampf((max_dist - _camera_distance) / span, 0.0, 1.0)
 
 func _target_pitch_deg_for_zoom() -> float:
+	if free_view_camera:
+		return _free_pitch_deg
 	var t := _camera_zoom_t()
 	return lerpf(CAMERA_PITCH_MAX_DEG, CAMERA_PITCH_MIN_DEG, t)
+
+## Ground direction the camera looks along (map X/Z).
+func camera_forward_xz() -> Vector2:
+	return Vector2(-sin(_camera_yaw), -cos(_camera_yaw))
+
+func camera_right_xz() -> Vector2:
+	return Vector2(cos(_camera_yaw), -sin(_camera_yaw))
+
+## Camera position relative to the focus point for the given pitch.
+func _camera_offset(pitch_rad: float) -> Vector3:
+	var horiz := _camera_distance * cos(pitch_rad)
+	return Vector3(horiz * sin(_camera_yaw), _camera_distance * sin(pitch_rad), horiz * cos(_camera_yaw))
+
+## Free view pan per second for inputs in -1..1 (forward = W, strafe = D).
+func free_view_pan_vector(forward: float, strafe: float) -> Vector2:
+	var v := camera_forward_xz() * forward + camera_right_xz() * strafe
+	if v.length_squared() > 1.0:
+		v = v.normalized()
+	return v * _camera_pan_speed()
+
+func rotate_free_view(yaw_delta_rad: float, pitch_delta_deg: float = 0.0) -> void:
+	_camera_yaw = wrapf(_camera_yaw + yaw_delta_rad, -PI, PI)
+	_free_pitch_deg = clampf(_free_pitch_deg + pitch_delta_deg, FREE_VIEW_PITCH_MIN_DEG, FREE_VIEW_PITCH_MAX_DEG)
+
+func set_free_view_camera(enabled: bool, save := true) -> void:
+	free_view_camera = enabled
+	_camera_yaw = 0.0
+	_free_pitch_deg = FREE_VIEW_PITCH_DEFAULT_DEG
+	_pan_drag = false
+	_camera_smoothing_initialized = false
+	_invalidate_pan_bounds_cache()
+	_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+	if _free_view_checkbox != null and _free_view_checkbox.button_pressed != enabled:
+		_free_view_checkbox.set_pressed_no_signal(enabled)
+	if save:
+		var cfg := ConfigFile.new()
+		cfg.load(CAMERA_SETTINGS_PATH)
+		cfg.set_value("camera", "free_view_camera", enabled)
+		cfg.save(CAMERA_SETTINGS_PATH)
+
+func _load_free_view_setting() -> bool:
+	var cfg := ConfigFile.new()
+	if cfg.load(CAMERA_SETTINGS_PATH) != OK:
+		return false
+	return bool(cfg.get_value("camera", "free_view_camera", false))
 
 func _terrain_focus_y(zoom_t: float, ground_y: float) -> float:
 	var eye := lerpf(CAMERA_EYE_HEIGHT_MAX, CAMERA_EYE_HEIGHT_MIN, zoom_t)
@@ -1255,7 +1329,7 @@ func _terrain_camera_clearance(zoom_t: float) -> float:
 	return lerpf(CAMERA_CLEARANCE_MAX, CAMERA_CLEARANCE_MIN, zoom_t)
 
 func _look_ahead_xz_unclamped(base: Vector2) -> Vector2:
-	return base + Vector2(0.0, -CAMERA_SLOPE_LOOK_AHEAD)
+	return base + camera_forward_xz() * CAMERA_SLOPE_LOOK_AHEAD
 
 func _viewport_ground_sample_screens() -> Array:
 	var vp_size: Vector2 = get_viewport().get_visible_rect().size
@@ -1294,8 +1368,7 @@ func _apply_camera_pose_for_extents(look_xz: Vector2) -> void:
 	var focus := Vector3(look_xz.x, focus_y, look_xz.y)
 	_camera_pivot.position = focus
 	var rad := deg_to_rad(_smoothed_pitch_deg)
-	var offset := Vector3(0.0, _camera_distance * sin(rad), _camera_distance * cos(rad))
-	var cam_pos := focus + offset
+	var cam_pos := focus + _camera_offset(rad)
 	var ground_cam := get_ground_height_at(cam_pos.x, cam_pos.z)
 	var min_cam_y := ground_cam + _terrain_camera_clearance(zoom_t)
 	if cam_pos.y < min_cam_y:
@@ -1372,7 +1445,8 @@ func _visible_ground_xz_bounds(look_xz: Vector2) -> Vector4:
 
 func _clamp_look_at_xz(v: Vector2) -> Vector2:
 	var zoom_t := _camera_zoom_t()
-	if zoom_t > 0.85:
+	# The visible-ground clamp below assumes a north-facing camera.
+	if zoom_t > 0.85 or free_view_camera:
 		return Vector2(
 			clampf(v.x, 0.0, MapConfig.width),
 			clampf(v.y, 0.0, MapConfig.height)
@@ -1446,8 +1520,7 @@ func _update_camera_position(delta: float = 0.0) -> void:
 	var focus := Vector3(_look_at_xz.x, focus_y, _look_at_xz.y)
 	_camera_pivot.position = focus
 	var rad := deg_to_rad(_smoothed_pitch_deg)
-	var offset := Vector3(0.0, _camera_distance * sin(rad), _camera_distance * cos(rad))
-	var cam_pos := focus + offset
+	var cam_pos := focus + _camera_offset(rad)
 	var ground_cam := get_ground_height_at(cam_pos.x, cam_pos.z)
 	var min_cam_y := ground_cam + _terrain_camera_clearance(zoom_t)
 	if cam_pos.y < min_cam_y:
@@ -1489,7 +1562,16 @@ func _unhandled_input(event: InputEvent):
 			_handle_world3d_mouse_extended(event)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion:
-		if _pan_drag:
+		if _pan_drag and free_view_camera:
+			var mm := event as InputEventMouseMotion
+			var delta := mm.position - _last_mouse
+			_last_mouse = mm.position
+			rotate_free_view(
+				-deg_to_rad(delta.x * FREE_VIEW_DRAG_ROTATE_DEG_PER_PX),
+				delta.y * FREE_VIEW_DRAG_PITCH_DEG_PER_PX
+			)
+			get_viewport().set_input_as_handled()
+		elif _pan_drag:
 			var mm := event as InputEventMouseMotion
 			var delta := mm.position - _last_mouse
 			_last_mouse = mm.position
@@ -1558,16 +1640,24 @@ func _process(delta: float):
 		return
 	if multiplayer.is_server():
 		return
-	var pan_speed := _camera_pan_speed()
 	var pan := Vector2.ZERO
-	if Input.is_key_pressed(KEY_A):
-		pan.x -= pan_speed
-	if Input.is_key_pressed(KEY_D):
-		pan.x += pan_speed
-	if Input.is_key_pressed(KEY_W):
-		pan.y -= pan_speed
-	if Input.is_key_pressed(KEY_S):
-		pan.y += pan_speed
+	if free_view_camera:
+		var forward := float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S))
+		var strafe := float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A))
+		pan = free_view_pan_vector(forward, strafe)
+		var turn := float(Input.is_key_pressed(KEY_Q)) - float(Input.is_key_pressed(KEY_E))
+		if turn != 0.0:
+			rotate_free_view(deg_to_rad(turn * FREE_VIEW_KEY_ROTATE_DEG_PER_SEC) * delta)
+	else:
+		var pan_speed := _camera_pan_speed()
+		if Input.is_key_pressed(KEY_A):
+			pan.x -= pan_speed
+		if Input.is_key_pressed(KEY_D):
+			pan.x += pan_speed
+		if Input.is_key_pressed(KEY_W):
+			pan.y -= pan_speed
+		if Input.is_key_pressed(KEY_S):
+			pan.y += pan_speed
 	if pan != Vector2.ZERO:
 		_look_at_xz += pan * delta
 		_invalidate_pan_bounds_cache()
@@ -3560,10 +3650,12 @@ func _handle_key(event: InputEventKey):
 	if sel.is_empty():
 		return
 	var rotate_amount := deg_to_rad(15.0)
-	if event.keycode == KEY_LEFT or event.keycode == KEY_Q:
+	# Free view uses Q/E to turn the camera.
+	var q_rotates := not free_view_camera
+	if event.keycode == KEY_LEFT or (q_rotates and event.keycode == KEY_Q):
 		for army in sel:
 			rpc_id(1, "_server_rotate_army", army.army_id, -rotate_amount)
-	elif event.keycode == KEY_RIGHT or event.keycode == KEY_E:
+	elif event.keycode == KEY_RIGHT or (q_rotates and event.keycode == KEY_E):
 		for army in sel:
 			rpc_id(1, "_server_rotate_army", army.army_id, rotate_amount)
 

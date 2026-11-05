@@ -8,4 +8,7 @@ Ideas and open tasks.
 - Add one-time capture points (loot) that give the player a single resource boost when captured.
 - Add wall building and stone capture points.
 - make 4 images for each unit type instead of the singel image used now. fomr this make the videos so unit behaves like age of empries
+- Capture points are impossible to tell apart. Give each type a clear look, e.g. clear colours and archery targets at the archery range, horses outside the stable.
+- Maps might need more obstructions: high cliffs and bigger height differences.
+- Add a horse + spear unit and a shield resource.
 

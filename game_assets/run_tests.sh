@@ -34,6 +34,7 @@ run_test test_world3d_goal_arrival.gd
 run_test test_terrain_feature_types.gd
 run_test_map XL test_xl_map_bounds.gd
 run_test_map XL test_camera_w_pan_zoom_out.gd
+run_test_map XL test_free_view_camera.gd
 run_test_map XL test_water_lakes.gd
 run_test test_water_polygon.gd
 run_test test_water_basin_filter.gd
@@ -41,6 +42,7 @@ run_test_map XL test_map_lighting.gd
 run_test_map XL test_walkability.gd
 run_test test_walkability_mask.gd
 run_test test_spawn_walkability.gd
+run_test_map Valleys test_map_balance.gd
 run_test_map XL test_vegetation.gd
 run_test test_spatial_hash.gd
 run_test test_unit_sim.gd

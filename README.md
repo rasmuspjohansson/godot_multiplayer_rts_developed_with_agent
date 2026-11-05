@@ -43,10 +43,12 @@ You need this repository, Godot 4.6.1 (downloaded by the install script), and th
 | Right-drag ground | Move and set the front line: from press (first file) to release (last file) |
 | `M` / `A` / `G` | Order mode: Move / Attack / Attack-Move (or use the bottom bar) |
 | Bottom bar | Stances (Aggressive, Defensive, Hold, Passive), Show range, Draft |
-| `Q` / `E` or arrow keys | Rotate the selected armies |
+| `Q` / `E` or arrow keys | Rotate the selected armies (with free view on: arrow keys only) |
 | `W` `A` `S` `D`, middle-drag | Pan the camera |
 | Mouse wheel | Zoom (the camera tilts toward the horizon as you zoom in) |
-| **Menu** (top-right) | Music/SFX volume, sun lighting, animation speed |
+| **Menu** (top-right) | Music/SFX volume, sun lighting, animation speed, `free_view_camera` |
+
+With **free_view_camera** checked in the Menu (remembered between games) the camera works like Total War: `W`/`S` move forward/back along the view, `A`/`D` strafe, `Q`/`E` turn the camera, middle-drag turns (left/right) and tilts (up/down), and the mouse wheel zooms without changing the tilt.
 
 ## More documentation
 

@@ -180,6 +180,10 @@
       "implementation": "godot --headless --path . --map=XL -s test_camera_w_pan_zoom_out.gd 2>&1 | grep -q 'TEST_CAMERA_W_PAN_OK'"
     },
     {
+      "description_of_test": "free_view_camera: yaw/pitch rotate the view, W/D move relative to it, look-at stays in the map, camera stays above terrain, and turning it off faces north again",
+      "implementation": "godot --headless --path . --map=XL -s test_free_view_camera.gd 2>&1 | grep -q 'TEST_FREE_VIEW_CAMERA_OK'"
+    },
+    {
       "description_of_test": "XL auto-detected lakes: terrain basins spawn water planes with lakes_water.png",
       "implementation": "godot --headless --path . --map=XL -s test_water_lakes.gd 2>&1 | grep -q 'TEST_WATER_OK'"
     },
@@ -206,6 +210,10 @@
     {
       "description_of_test": "Map start rally points sit on walkable terrain (match-start spawn is off-map and marches to these markers)",
       "implementation": "godot --headless --path . -s test_spawn_walkability.gd 2>&1 | grep -q 'TEST_SPAWN_WALKABILITY_OK'"
+    },
+    {
+      "description_of_test": "Valleys is balanced: every start has its own Village nearby, and the walking distance from each start to its nearest capture point of each type differs by at most 10%",
+      "implementation": "godot --headless --path . --map=Valleys -s test_map_balance.gd 2>&1 | grep -q 'TEST_MAP_BALANCE_OK'"
     },
     {
       "description_of_test": "XL vegetation: ~30 decorative trees/spruce/bushes on walkable terrain",

@@ -12,6 +12,8 @@ the game's 20-unit walkability grid before the JSON is written.
 """
 
 import argparse
+import heapq
+import itertools
 import json
 import math
 import random
@@ -54,6 +56,16 @@ LIGHT_LARGE_AREA_PX = 6000
 LIGHT_FALLOFF = 160.0
 WATER_DEPTH = 40.0
 WATER_SURFACE = 3.0
+
+# Capture-point placement (walking distances in world units).
+VILLAGE_DIST = 350.0
+VILLAGE_EDGE_MARGIN = 150.0
+CP_MIN_START_DIST = 700.0
+CP_SPACING = 450.0
+PAIR_SPACING = 500.0
+# (type, target walking distance from each start to its nearest one)
+PAIR_TYPES = [("Stables", 1900.0), ("Blacksmith", 1600.0), ("Archery", 2300.0)]
+BALANCE_TOLERANCE = 0.05
 
 
 def classify(path):
@@ -430,18 +442,106 @@ def reach8(walk, si, sj):
     return seen
 
 
+def walk_distance(walk, si, sj):
+    """Walking distance (world units) from cell (si, sj) over 8-connected walkable cells."""
+    rows, cols = walk.shape
+    dist = np.full(walk.shape, np.inf)
+    if not walk[sj, si]:
+        return dist
+    dist[sj, si] = 0.0
+    pq = [(0.0, si, sj)]
+    diag = STEP * math.sqrt(2.0)
+    while pq:
+        d, i, j = heapq.heappop(pq)
+        if d > dist[j, i]:
+            continue
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                if di == 0 and dj == 0:
+                    continue
+                ni, nj = i + di, j + dj
+                if not (0 <= ni < cols and 0 <= nj < rows) or not walk[nj, ni]:
+                    continue
+                if di and dj and not (walk[j, ni] and walk[nj, i]):
+                    continue
+                nd = d + (diag if di and dj else STEP)
+                if nd < dist[nj, ni]:
+                    dist[nj, ni] = nd
+                    heapq.heappush(pq, (nd, ni, nj))
+    return dist
+
+
+def place_villages(dist, candidates):
+    """One village per start, the same walking distance from its own start, far from the
+    others, on the side of the start that faces the map centre."""
+    rows, cols = candidates.shape
+    jj, ii = np.mgrid[:rows, :cols]
+    margin = int(round(VILLAGE_EDGE_MARGIN / STEP))
+    inside = (ii >= margin) & (ii < cols - margin) & (jj >= margin) & (jj < rows - margin)
+    to_centre = np.hypot(ii - (cols - 1) / 2.0, jj - (rows - 1) / 2.0) * STEP
+    out = []
+    for k in range(len(dist)):
+        own = dist[k]
+        others = np.min(np.delete(dist, k, axis=0), axis=0)
+        ok = candidates & inside & (np.abs(own - VILLAGE_DIST) <= 3 * STEP) & (others >= 2.0 * own) & np.isfinite(others)
+        if not ok.any():
+            return None
+        score = np.full(own.shape, np.inf)
+        score[ok] = np.abs(own[ok] - VILLAGE_DIST) + 0.1 * to_centre[ok]
+        j, i = np.unravel_index(np.argmin(score), score.shape)
+        out.append((float(i * STEP), float(j * STEP)))
+    return out
+
+
+def place_balanced_pair(dist, candidates, placed, target):
+    """Two spots of one type so every start has the same walking distance to its nearest one.
+
+    Scored by the spread of the nearest distance across starts, then the spread of the
+    second-nearest, then closeness to `target`."""
+    sub = np.zeros(candidates.shape, dtype=bool)
+    sub[::2, ::2] = True
+    ys, xs = np.nonzero(candidates & sub)
+    pos = np.stack([xs * STEP, ys * STEP], axis=1).astype(np.float64)
+    d = dist[:, ys, xs]
+    ok = np.ones(len(xs), dtype=bool)
+    for p in placed:
+        ok &= ((pos - np.array(p)) ** 2).sum(axis=1) >= CP_SPACING ** 2
+    idx = np.nonzero(ok)[0]
+    best = None
+    for a in idx:
+        b = idx[idx > a]
+        b = b[((pos[b] - pos[a]) ** 2).sum(axis=1) >= PAIR_SPACING ** 2]
+        if len(b) == 0:
+            continue
+        near = np.minimum(d[:, a][:, None], d[:, b])
+        far = np.maximum(d[:, a][:, None], d[:, b])
+        sn = (near.max(axis=0) - near.min(axis=0)) / near.max(axis=0)
+        sf = (far.max(axis=0) - far.min(axis=0)) / far.max(axis=0)
+        score = sn + 0.3 * sf + 0.05 * np.abs(near.mean(axis=0) - target) / target
+        k = int(np.argmin(score))
+        if best is None or score[k] < best[0]:
+            best = (score[k], tuple(pos[a]), tuple(pos[b[k]]))
+    if best is None:
+        return None
+    return [best[1], best[2]]
+
+
+def nearest_dists(dist, spots, shape):
+    """Per start: walking distance to the nearest of `spots`."""
+    return [
+        min(float(dist[k][cell_of(x, z, shape)[::-1]]) for x, z in spots)
+        for k in range(len(dist))
+    ]
+
+
+def nearest_spread(dist, spots, shape):
+    nearest = nearest_dists(dist, spots, shape)
+    return (max(nearest) - min(nearest)) / max(nearest)
+
+
 def cell_of(x, z, shape):
     rows, cols = shape
     return (min(cols - 1, max(0, int(round(x / STEP)))), min(rows - 1, max(0, int(round(z / STEP)))))
-
-
-def nearest_in(mask, x, z):
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None
-    i0, j0 = x / STEP, z / STEP
-    k = int(np.argmin((xs - i0) ** 2 + (ys - j0) ** 2))
-    return (float(xs[k] * STEP), float(ys[k] * STEP))
 
 
 def main():
@@ -501,24 +601,63 @@ def main():
         ys, xs = np.nonzero(leak)
         fails.append("%d dark grey cells are reachable, e.g. (%.0f, %.0f)" % (len(xs), xs[0] * STEP, ys[0] * STEP))
 
-    # Capture points: preferred spots in image pixels (uncropped), snapped to reachable
-    # ground with some clearance.
+    # Capture points on reachable green ground with some clearance: a Village in every
+    # start valley, then two of each other type placed so every start has the same
+    # walking distance to its nearest one.
     green_cells = region_cells(labels == GROUND, scale, h.shape)
     clearance = cv2.erode((main_area & green_cells).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
-    wanted = [
-        ("Stables", "Stables", 250, 560),
-        ("Blacksmith", "Blacksmith", 470, 420),
-        ("Village", "Village", 890, 700),
-        ("Archery", "Archery", 560, 840),
-    ]
+    dist = np.stack([walk_distance(walk, *cell_of(x, z, h.shape)) for _, (x, z) in starts])
     capture_points = []
-    for cid, ctype, px, py in wanted:
-        x, z = scale.pt(px - FRAME_PX, py - FRAME_PX)
-        p = nearest_in(clearance, x, z)
-        if p is None:
-            fails.append("no reachable ground for %s" % cid)
+    placed = []
+    walk_clearance = cv2.erode(main_area.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+    villages = place_villages(dist, walk_clearance)
+    if villages is None:
+        fails.append("no village spot at %.0f walking units from every start" % VILLAGE_DIST)
+        villages = []
+    for k, p in enumerate(villages):
+        capture_points.append({"id": "Village" if k == 0 else "Village_%d" % (k + 1), "type": "Village", "x": p[0], "y": p[1]})
+        placed.append(p)
+    pair_clearance = cv2.erode(main_area.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+    pair_area = pair_clearance & np.isfinite(dist).all(axis=0) & (dist.min(axis=0) >= CP_MIN_START_DIST)
+    # Placement is greedy (earlier types take the best spots), so try every type order.
+    best_layout = None
+    for order in itertools.permutations(PAIR_TYPES):
+        layout = {}
+        taken = list(placed)
+        for ctype, target in order:
+            pair = place_balanced_pair(dist, pair_area, taken, target)
+            if pair is None:
+                break
+            layout[ctype] = pair
+            taken += pair
+        if len(layout) < len(PAIR_TYPES):
             continue
-        capture_points.append({"id": cid, "type": ctype, "x": p[0], "y": p[1]})
+        worst = max(nearest_spread(dist, pair, h.shape) for pair in layout.values())
+        if best_layout is None or worst < best_layout[0]:
+            best_layout = (worst, layout)
+    if best_layout is None:
+        fails.append("no balanced spots for %s" % ", ".join(t for t, _ in PAIR_TYPES))
+    else:
+        for ctype, _ in PAIR_TYPES:
+            for k, p in enumerate(best_layout[1][ctype]):
+                capture_points.append({"id": ctype if k == 0 else "%s_2" % ctype, "type": ctype, "x": p[0], "y": p[1]})
+
+    print("walking distance from each start to its nearest capture point of each type:")
+    for ctype in ["Village"] + [t for t, _ in PAIR_TYPES]:
+        spots = [(cp["x"], cp["y"]) for cp in capture_points if cp["type"] == ctype]
+        if not spots:
+            continue
+        nearest = nearest_dists(dist, spots, h.shape)
+        spread = nearest_spread(dist, spots, h.shape)
+        print("  %-10s %s  spread %.1f%%" % (
+            ctype, "  ".join("%s=%.0f" % (c, d) for (c, _), d in zip(starts, nearest)), spread * 100))
+        if spread > BALANCE_TOLERANCE:
+            fails.append("%s is unbalanced: nearest walking distances differ by %.0f%%" % (ctype, spread * 100))
+    for k, cp in enumerate(capture_points[:len(villages)]):
+        own = float(dist[k][cell_of(cp["x"], cp["y"], h.shape)[::-1]])
+        for m in range(len(starts)):
+            if m != k and float(dist[m][cell_of(cp["x"], cp["y"], h.shape)[::-1]]) <= own:
+                fails.append("%s is not closest to start %s" % (cp["id"], starts[k][0]))
 
     if args.debug:
         dbg = np.zeros(h.shape + (3,), dtype=np.uint8)

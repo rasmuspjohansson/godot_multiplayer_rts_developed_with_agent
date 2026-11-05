@@ -53,6 +53,10 @@ void vertex() {
 		t = mod(floor(time_now * play_fps + phase), fc);
 	}
 	float u = q.x + 0.5;
+	// `flip` is relative to world +X; a rotated camera can see +X on the screen's left.
+	if (cam_right.x < 0.0) {
+		flip = 1.0 - flip;
+	}
 	if (flip > 0.5) {
 		u = 1.0 - u;
 	}

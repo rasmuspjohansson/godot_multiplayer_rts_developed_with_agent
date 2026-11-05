@@ -4120,28 +4120,64 @@
  },
  "capture_points": [
   {
+   "id": "Village",
+   "type": "Village",
+   "x": 460.0,
+   "y": 400.0
+  },
+  {
+   "id": "Village_2",
+   "type": "Village",
+   "x": 2340.0,
+   "y": 2980.0
+  },
+  {
+   "id": "Village_3",
+   "type": "Village",
+   "x": 2620.0,
+   "y": 440.0
+  },
+  {
+   "id": "Village_4",
+   "type": "Village",
+   "x": 300.0,
+   "y": 2700.0
+  },
+  {
    "id": "Stables",
    "type": "Stables",
-   "x": 780.0,
-   "y": 1800.0
+   "x": 1600.0,
+   "y": 1720.0
+  },
+  {
+   "id": "Stables_2",
+   "type": "Stables",
+   "x": 2160.0,
+   "y": 2200.0
   },
   {
    "id": "Blacksmith",
    "type": "Blacksmith",
-   "x": 1500.0,
-   "y": 1340.0
+   "x": 1840.0,
+   "y": 1000.0
   },
   {
-   "id": "Village",
-   "type": "Village",
-   "x": 2900.0,
-   "y": 2260.0
+   "id": "Blacksmith_2",
+   "type": "Blacksmith",
+   "x": 1120.0,
+   "y": 2280.0
   },
   {
    "id": "Archery",
    "type": "Archery",
-   "x": 1860.0,
-   "y": 2620.0
+   "x": 560.0,
+   "y": 1560.0
+  },
+  {
+   "id": "Archery_2",
+   "type": "Archery",
+   "x": 2800.0,
+   "y": 1600.0
   }
  ],
  "start_positions": [

@@ -6,6 +6,8 @@ extends Control
 @onready var name_edit: LineEdit = $VBoxContainer/NameEdit
 @onready var color_box_container: HBoxContainer = $VBoxContainer/ColorBoxContainer
 
+const COLOR_BOX_BORDER := 3
+
 var local_ready := false
 var color_boxes: Array = []
 var _map_option: OptionButton
@@ -68,9 +70,13 @@ func _build_color_boxes():
 		child.queue_free()
 	color_boxes.clear()
 	for i in range(GameState.PLAYER_COLORS.size()):
-		var box = ColorRect.new()
+		var box := Panel.new()
 		box.custom_minimum_size = Vector2(32, 32)
-		box.color = GameState.PLAYER_COLORS[i]
+		var style := StyleBoxFlat.new()
+		style.bg_color = GameState.PLAYER_COLORS[i]
+		style.set_border_width_all(COLOR_BOX_BORDER)
+		style.border_color = Color.TRANSPARENT
+		box.add_theme_stylebox_override("panel", style)
 		box.set_meta("color_index", i)
 		box.gui_input.connect(_on_color_box_gui_input.bind(i))
 		color_box_container.add_child(box)
@@ -100,12 +106,10 @@ func _update_ui():
 			if pid != my_id and GameState.players[pid].get("color_index", 0) == i:
 				taken_by_other = true
 				break
-		if taken_by_other:
-			box.modulate = Color(0.4, 0.4, 0.4)
-		elif i == my_color_index:
-			box.modulate = Color(1.2, 1.2, 1.2)
-		else:
-			box.modulate = Color.WHITE
+		var style: StyleBoxFlat = box.get_theme_stylebox("panel")
+		var base: Color = GameState.PLAYER_COLORS[i]
+		style.bg_color = base.darkened(0.6) if taken_by_other else base
+		style.border_color = Color.WHITE if i == my_color_index and not multiplayer.is_server() else Color.TRANSPARENT
 
 	for id in GameState.players:
 		var info = GameState.players[id]
