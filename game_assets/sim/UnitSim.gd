@@ -32,7 +32,7 @@ const MAX_UNIT_PATHS_PER_TICK := 8
 const UNIT_PATH_WAYPOINT_REACH := 4.0
 const RADIUS_FOOT := 4.5
 const RADIUS_HORSE := 6.5
-const RADIUS_DRAGON := 18.0
+const RADIUS_DRAGON := 54.0
 const SEPARATION_QUERY_PAD := 7.0
 ## Separation is order-first: units remember up to CONTACT_SLOTS neighbours, slide along
 ## them while steering, and a weak push eases leftover overlap. Overlap is allowed, jumps
@@ -57,7 +57,8 @@ const KNIGHT_HP := 200.0
 const MELEE_ATTACK_RANGE := 22.0
 const SPEAR_ATTACK_RANGE := 30.0
 const RANGED_ATTACK_RANGE := 120.0
-const DRAGON_ATTACK_RANGE := 70.0
+## Reach past the body stays 52 (the old 70 − 18) after the body grew to 3×.
+const DRAGON_ATTACK_RANGE := 106.0
 const MELEE_PURSUIT := 80.0
 const MELEE_ACQUIRE_RADIUS := 50.0
 const ENEMY_NEAR_MARGIN := 40.0
@@ -226,8 +227,8 @@ static func speed_for_type(t: int) -> float:
 static func stats_for_type(t: int) -> Dictionary:
 	match t:
 		UnitType.DRAGON:
-			return {"hp": 300.0, "attack": 28.0, "defense": 10.0, "range": DRAGON_ATTACK_RANGE,
-				"radius": RADIUS_DRAGON, "half_height": 33.0, "ranged": false, "horse": false}
+			return {"hp": 600.0, "attack": 56.0, "defense": 10.0, "range": DRAGON_ATTACK_RANGE,
+				"radius": RADIUS_DRAGON, "half_height": 99.0, "ranged": false, "horse": false}
 		UnitType.KNIGHT:
 			return {"hp": KNIGHT_HP, "attack": 10.0, "defense": 2.0, "range": MELEE_ATTACK_RANGE,
 				"radius": RADIUS_HORSE, "half_height": 14.0, "ranged": false, "horse": true}

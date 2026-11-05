@@ -26,6 +26,18 @@ You need this repository, Godot 4.6.1 (downloaded by the install script), and th
 
 **3. In the lobby**, pick a color and press **Ready**. The match starts when every player is ready. The map is chosen in the lobby and synced from the server.
 
+## Run a local game (Linux)
+
+`./run_test.sh` starts a server and two clients on your own machine. By default the two clients are bots that play a scripted test match; add `--no-test` to play both clients yourself.
+
+```bash
+./run_test.sh --map demo --dragons   # demo map, with its dragons (auto-test skips dragons without --dragons)
+./run_test.sh --map Valleys          # Valleys map
+./run_test.sh -h                     # all options
+```
+
+Available maps (`--map NAME`, default `S`): `S`, `L`, `XL`, `Valleys`, `demo`, `New`, `New2`. Any `game_assets/maps/map_<NAME>.json` works; see [docs/maps.md](docs/maps.md).
+
 ## How to play
 
 - Each player starts with a few armies that march in from their side of the map.

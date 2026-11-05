@@ -5,7 +5,7 @@ const TEAM_COLOR_FOLDERS: Array[String] = ["red", "blue", "green", "orange", "pu
 const AI_SPRITES_ROOT := "res://AI_generated_sprites"
 const STATIC_SPEARMAN_REL := "spearman/spearman.png"
 const DRAGON_SPRITE_WORLD_HEIGHT := 66.0
-const DRAGON_ATTACK_RANGE := 70.0
+const DRAGON_ATTACK_RANGE := 106.0
 const NEUTRAL_DRAGON_OWNER_ID := 0
 
 static func dragon_aggro_radius() -> float:

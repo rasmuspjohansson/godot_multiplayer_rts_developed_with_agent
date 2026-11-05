@@ -23,7 +23,7 @@ The equipment decides the type, checked in this order: Horse+Bow, Bow, Horse, Sp
 | Knight | horse | 200 | 10 | 2 | 22 | fast |
 | Spearman | spear | 100 | 13 | 2 | 30 | normal |
 | Clubman | none | 100 | 10 | 2 | 22 | normal |
-| Dragon (neutral) | — | 300 | 28 | 10 | 70 | slow |
+| Dragon (neutral) | — | 600 | 56 | 10 | 106 | slow |
 
 Fast is 1.4× normal speed and slow is 0.9×. The values live in `UnitSim.stats_for_type` / `speed_for_type`. Ranged units can shoot while moving.
 

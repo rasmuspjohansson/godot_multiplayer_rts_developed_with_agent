@@ -11,4 +11,6 @@ Ideas and open tasks.
 - Capture points are impossible to tell apart. Give each type a clear look, e.g. clear colours and archery targets at the archery range, horses outside the stable.
 - Maps might need more obstructions: high cliffs and bigger height differences.
 - Add a horse + spear unit and a shield resource.
+- The village capture point should not be one image. Build it from several different assets placed together as a group.
+- The dragon sprite should be placed so its flames point downward and forward. Extra fire should be a separate temporary asset.
 

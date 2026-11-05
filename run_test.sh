@@ -11,6 +11,7 @@
 #
 # Optional: --server-window — run the dedicated server with a visible window (OpenGL).
 # Optional: --map NAME — map JSON name (default S). S/L/XL or any maps/map_NAME.json.
+# Run ./run_test.sh -h for all options.
 #
 # Set GODOT_BIN to the full path to your Godot executable if "godot" is not in PATH.
 
@@ -33,11 +34,45 @@ MAP_SIZE="S"
 # Forwarded to server and clients (e.g. --stress-units=1000, --match-timeout=300, --dragons).
 PASSTHROUGH_ARGS=()
 
+usage() {
+  local maps
+  maps="$(cd "$GAME_PATH/maps" 2>/dev/null && ls map_*.json 2>/dev/null | sed 's/^map_//; s/\.json$//' | tr '\n' ' ')"
+  cat <<EOF
+Usage: ./run_test.sh [options]
+
+Starts a dedicated server and two clients on this machine. Logs go to logs/.
+
+Options:
+  -h, --help                Show this help and exit.
+  --map NAME, --map=NAME    Map to play (default: S). Available: ${maps:-none found}
+  --no-test, --no_test      Two human-playable clients (Player1, Player2) instead of
+                            the two auto-test bots (A, B).
+  --dragons                 Spawn the map's dragons in auto-test runs (they are skipped
+                            by default in auto-test; human games always spawn them).
+  --match-timeout=SECONDS   Auto-test match cap in seconds (default: 120).
+  --stress-units=N          Add armies until each player has N soldiers (e.g. 1000).
+  --server-window           Run the server with a visible window instead of headless.
+  --remote-debug            Connect to the Godot editor debugger (tcp://127.0.0.1:6007).
+  --remote-debug-uri=URI    Same, with a custom URI (e.g. tcp://127.0.0.1:6007).
+
+Environment:
+  GODOT_BIN                 Godot executable (default: tools/godot/... or "godot").
+  GODOT_REMOTE_DEBUG=URI    Same as --remote-debug-uri=URI.
+
+Examples:
+  ./run_test.sh
+  ./run_test.sh --map demo --dragons
+  ./run_test.sh --map Valleys
+  ./run_test.sh --map XL --no-test
+EOF
+}
+
 args=("$@")
 i=0
 while [ $i -lt ${#args[@]} ]; do
   arg="${args[$i]}"
   case "$arg" in
+    -h|--help) usage; exit 0 ;;
     --no_test|--no-test) AUTO_TEST=false ;;
     --remote-debug) REMOTE_DEBUG=true ;;
     --remote-debug-uri=*) REMOTE_DEBUG=true; REMOTE_DEBUG_URI="${arg#*=}" ;;
