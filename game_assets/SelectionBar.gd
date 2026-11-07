@@ -9,6 +9,7 @@ extends CanvasLayer
 
 signal stance_pressed(stance: int)
 signal army_pressed(army, shift: bool)
+signal army_focus_requested(army)
 signal show_range_toggled(pressed: bool)
 
 const UnitSpritePaths := preload("res://UnitSpritePaths.gd")
@@ -276,12 +277,15 @@ func _make_portrait(a, is_selected: bool) -> Control:
 	btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 	btn.texture_normal = _portrait_texture(a)
 	btn.focus_mode = Control.FOCUS_NONE
-	btn.tooltip_text = "%s — %d soldiers\nClick: add / remove from selection" % [a.army_id, _alive_count(a)]
+	btn.tooltip_text = "%s — %d soldiers\nClick: add / remove from selection\nDouble-click: move the camera to this army" % [a.army_id, _alive_count(a)]
 	btn.set_meta("army", a)
 	var army = a
 	btn.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-			army_pressed.emit(army, ev.shift_pressed)
+			if ev.double_click:
+				army_focus_requested.emit(army)
+			else:
+				army_pressed.emit(army, ev.shift_pressed)
 			btn.accept_event()
 	)
 	var plate := Panel.new()

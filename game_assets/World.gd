@@ -127,6 +127,8 @@ var _last_mouse: Vector2
 var free_view_camera := false
 ## Radians; 0 = looking north (-Z), positive turns the view left (counter-clockwise from above).
 var _camera_yaw := 0.0
+## Portrait double-click: glide _look_at_xz toward this army until it arrives or the player pans.
+var _camera_focus_army = null
 var _free_pitch_deg := FREE_VIEW_PITCH_DEFAULT_DEG
 var _free_view_checkbox: CheckBox = null
 
@@ -348,7 +350,7 @@ func _setup_settings_menu() -> void:
 		_free_view_checkbox = CheckBox.new()
 		_free_view_checkbox.name = "FreeViewCameraCheckBox"
 		_free_view_checkbox.text = "free_view_camera"
-		_free_view_checkbox.tooltip_text = "W/S forward/back, A/D strafe, Q/E or middle-drag rotate, middle-drag up/down tilt"
+		_free_view_checkbox.tooltip_text = "W/S forward/back, A/D strafe, Q clockwise / E counter-clockwise or middle-drag rotate, middle-drag up/down tilt"
 		_free_view_checkbox.focus_mode = Control.FOCUS_NONE
 		_free_view_checkbox.toggled.connect(set_free_view_camera)
 		vbox.add_child(_free_view_checkbox)
@@ -500,6 +502,7 @@ func _ready():
 		_spawn_armies()
 		_spawn_capture_points()
 	if not multiplayer.is_server():
+		_look_at_xz = _local_start_look_xz()
 		_setup_camera()
 		_setup_selection_overlay()
 		_setup_background_music()
@@ -1318,8 +1321,8 @@ func set_free_view_camera(enabled: bool, save := true) -> void:
 func _load_free_view_setting() -> bool:
 	var cfg := ConfigFile.new()
 	if cfg.load(CAMERA_SETTINGS_PATH) != OK:
-		return false
-	return bool(cfg.get_value("camera", "free_view_camera", false))
+		return true
+	return bool(cfg.get_value("camera", "free_view_camera", true))
 
 func _terrain_focus_y(zoom_t: float, ground_y: float) -> float:
 	var eye := lerpf(CAMERA_EYE_HEIGHT_MAX, CAMERA_EYE_HEIGHT_MIN, zoom_t)
@@ -1556,6 +1559,7 @@ func _unhandled_input(event: InputEvent):
 			_pan_drag = mb.pressed
 			if mb.pressed:
 				_last_mouse = mb.position
+				_camera_focus_army = null
 			get_viewport().set_input_as_handled()
 			return
 		if mb.button_index == MOUSE_BUTTON_LEFT or mb.button_index == MOUSE_BUTTON_RIGHT:
@@ -1645,7 +1649,7 @@ func _process(delta: float):
 		var forward := float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S))
 		var strafe := float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A))
 		pan = free_view_pan_vector(forward, strafe)
-		var turn := float(Input.is_key_pressed(KEY_Q)) - float(Input.is_key_pressed(KEY_E))
+		var turn := float(Input.is_key_pressed(KEY_E)) - float(Input.is_key_pressed(KEY_Q))
 		if turn != 0.0:
 			rotate_free_view(deg_to_rad(turn * FREE_VIEW_KEY_ROTATE_DEG_PER_SEC) * delta)
 	else:
@@ -1659,9 +1663,12 @@ func _process(delta: float):
 		if Input.is_key_pressed(KEY_S):
 			pan.y += pan_speed
 	if pan != Vector2.ZERO:
+		_camera_focus_army = null
 		_look_at_xz += pan * delta
 		_invalidate_pan_bounds_cache()
 		_look_at_xz = _clamp_look_at_xz(_look_at_xz)
+	else:
+		_step_camera_focus(delta)
 	_update_camera_position(delta)
 
 func _preview_camera_process(delta: float) -> void:
@@ -1890,6 +1897,7 @@ func _setup_selection_bar() -> void:
 	add_child(_selection_bar)
 	_selection_bar.stance_pressed.connect(_on_command_bar_stance)
 	_selection_bar.army_pressed.connect(_on_selection_bar_army_pressed)
+	_selection_bar.army_focus_requested.connect(_on_selection_bar_army_focus)
 	_selection_bar.show_range_toggled.connect(_on_show_range_toggled)
 	_build_draft_controls(_selection_bar.draft_panel())
 
@@ -3380,6 +3388,48 @@ func _refresh_selection_bar() -> void:
 ## Bar portrait clicked: toggle this army in the selection.
 func _on_selection_bar_army_pressed(army, _shift: bool) -> void:
 	_toggle_selection(army)
+
+## Portrait double-click: keep the army selected and glide the camera onto it.
+func _on_selection_bar_army_focus(army) -> void:
+	if army == null or not is_instance_valid(army) or army.is_routed:
+		return
+	if army not in selected_armies:
+		selected_armies.append(army)
+		army.select()
+		_refresh_selection_bar()
+	_camera_focus_army = army
+
+func _local_start_look_xz() -> Vector2:
+	var center := Vector2(MapConfig.width / 2.0, MapConfig.height / 2.0)
+	if not _multiplayer_active() or multiplayer.is_server():
+		return center
+	var my_id := multiplayer.get_unique_id()
+	var ids = GameState.players.keys()
+	for i in range(ids.size()):
+		if int(ids[i]) == my_id:
+			return MapConfig.get_start_position(i)
+	return center
+
+func _step_camera_focus(delta: float) -> void:
+	if _camera_focus_army == null:
+		return
+	if not is_instance_valid(_camera_focus_army) or _camera_focus_army.is_routed or _camera_focus_army.fc == null:
+		_camera_focus_army = null
+		return
+	var target: Vector2 = _camera_focus_army.anchor()
+	if _sim != null:
+		target = _sim.army_centroid(_camera_focus_army.fc)
+	var to := target - _look_at_xz
+	var dist := to.length()
+	var step := _camera_pan_speed() * delta
+	if dist <= 1.0 or step >= dist:
+		_look_at_xz = _clamp_look_at_xz(target)
+		_invalidate_pan_bounds_cache()
+		_camera_focus_army = null
+		return
+	_look_at_xz += to / dist * step
+	_invalidate_pan_bounds_cache()
+	_look_at_xz = _clamp_look_at_xz(_look_at_xz)
 
 func _get_selected_non_routed() -> Array:
 	var out := []
