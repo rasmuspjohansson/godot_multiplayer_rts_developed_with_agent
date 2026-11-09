@@ -2,7 +2,42 @@
 
 Ideas and open tasks.
 
+
+
+
 ## Open
+fixa demo2.
+viktigaste:fler sorters trupper, , height advantage, flanking, kavalerichock. sprangmars. 
+
+
+stamina and speed , tired over time and depending on march-state(run marcg  )
+height influcence .
+more kinds of soldiers: helmet, armour,many kinds of armour,  shield,hourse armour,,   length of spear. 
+kavaleri-chock, flanknign.
+  
+ablity to strengthen a position. 
+ability to dig and modulate ground. dangerous if this makes it to dfensive. 
+x-antal stenar at bygga.  ramp med stup pa ena sidan. 
+
+
+
+theme: more agency in battle
+         doable time 
+	dig down
+	fortify posision, walls -dig down
+	
+, rubberband effects: how do i come back when im in abad position(detailed controll of units should give better outcome )
+flank attack , heigh advantage. 
+vilages and otehr recources grow over time and shrink if taken over. pillage funcion. . 
+more kind of thigns to produce -  
+ 
+ - sprint ()
+
+
+
+more kind of thigns to produce in the capture pounts, crosbow , bow, long short spear et. contolled with % if not all should produce the same. 
+
+
 - Make cavalry charges work. cavalary should be able to gradually get more speed and if hitting an enemy at speed it should make the unit be pushed/fly away in a slightly exagurated way. (it should look cool not be realistic)
 - Add one-time capture points (loot) that give the player a single resource boost when captured.
 - Add wall building and stone capture points.

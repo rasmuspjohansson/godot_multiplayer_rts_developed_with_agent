@@ -18,14 +18,25 @@ The equipment decides the type, checked in this order: Horse+Bow, Bow, Horse, Sp
 
 | Type | Equipment | HP | Attack | Defense | Range | Speed |
 |------|-----------|----|--------|---------|-------|-------|
-| Horse archer (`bauer_horse_archer`) | horse + bow | 200 | 12 | 2 | 120 (ranged) | fast |
-| Bowman | bow | 100 | 12 | 2 | 120 (ranged) | normal |
+| Horse archer (`bauer_horse_archer`) | horse + bow | 200 | 6 | 2 | 120 (ranged) | fast |
+| Bowman | bow | 100 | 6 | 2 | 120 (ranged) | normal |
 | Knight | horse | 200 | 10 | 2 | 22 | fast |
 | Spearman | spear | 100 | 13 | 2 | 30 | normal |
-| Clubman | none | 100 | 10 | 2 | 22 | normal |
+| Clubman | none | 100 | 8 | 2 | 22 | normal |
 | Dragon (neutral) | — | 600 | 56 | 10 | 106 | slow |
 
-Fast is 1.4× normal speed and slow is 0.9×. The values live in `UnitSim.stats_for_type` / `speed_for_type`. Ranged units can shoot while moving.
+Fast is 1.4× normal speed and slow is 0.9× (foot `100 × 2/3 / 6`, horse `140/6`, dragon `90/6`). Base stats live in [`game_assets/units.json`](../game_assets/units.json) and are loaded by `UnitSim.stats_for_type` / `speed_for_type`. Situational bonuses live in [`game_assets/bonuses.json`](../game_assets/bonuses.json). Ranged units can shoot while moving.
+
+Bonuses, all applied on top of the stored attack or speed:
+
+- A spearman has **+1 attack** against a mounted target (knight or horse archer). The stored attack of 13 is unchanged against foot units and dragons.
+- A knight has **+2 attack** against unmounted units other than spearmen (clubmen, bowmen, dragons). Horse archers and other knights do not get this.
+- A knight who is moving at least **10% faster** than its flat-ground speed (`knight_charge_min_speed_ratio`) lands one hit with **+30 attack**, then cannot do so again for **2 seconds**. Flat ground is not fast enough; a downhill run is. The bonus is one hit, not every hit while fast.
+- Any unit has **+1 attack** when the target stands on lower ground. Equal or higher ground gives nothing. This stacks with the spear bonus.
+- Move speed scales with the slope of the step. A 45° climb is 25% slower and a 45° descent is 25% faster; flat ground is unchanged. Steeper than 45° is already unwalkable, and the factor is clamped there. The formation anchor uses the same scale.
+- Speed does not jump to that max. Cruise eases toward it so about 95% of the gap closes in `speed_ramp_seconds` (2 seconds), both when speeding up from a standstill and when slowing because the ground no longer allows the old max. A knight who rides off a hill is still fast on the flat and eases down. Reaching the ordered point stops immediately and the next move starts from a standstill.
+- **Double time** (`Space` on the selected armies) adds `double_time_speed` (5) to that max. Above each army portrait the pace reads **walk** or **double time**, and above that a tiredness count. It stays **0** until the army is both in double time and actually moving, then it falls one point at a time and reaches **-8** after `double_time_tired_seconds` (5 seconds). At -8 double time turns off and cannot be turned on again until the count rises. Standing still rests back toward 0 at the same rate, even if double time is still on. Pressing Space again also turns it off so the army can rest.
+- Bowman and horse archer range scales with the height gap. `max_height_bonus_height` (20) is a full bonus: shooting downhill by that much or more reaches **50% farther**, shooting uphill by that much reaches **50% shorter**, and a gap of zero stays at the base range. Gaps in between scale linearly. Melee range, including the dragon, stays a circle. With **Show range** on, a bow army’s ring follows this, so it is longer downhill than on flat or uphill ground. The ring is rebuilt only after the army center moves about 2 units.
 
 ### Drafting
 - The draft panel is opened from the bottom bar. Check **Horse**, **Spear** and/or **Bow**, pick the soldier count, then **Create army**.
@@ -50,6 +61,7 @@ Fast is 1.4× normal speed and slow is 0.9×. The values live in `UnitSim.stats_
 | **Attack-Move** (`G`) | Like Move, but units engage enemies along the way. |
 | **Attack** (`A`) | LMB on an enemy army or dragon: pursue and attack that target. |
 | **Aggressive / Defensive / Hold / Passive** | Stance buttons on the bottom bar. |
+| **Space** | Toggle double time on the selected armies. |
 
 - A move or attack-move keeps one path for the army. Every soldier walks that path at their own speed, in a column about one spacing wide, and opens into the clicked grid or the dragged line when about 12 seconds of the path are left. Nobody waits for the formation to turn first.
 - Move orders are **not** cancelled when attacked.

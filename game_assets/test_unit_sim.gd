@@ -36,6 +36,11 @@ func _spawn_army(sim, aid: String, pid: int, x: float, z: float, n: int, t: int,
 
 func _init():
 	_test_move_and_flags()
+	_test_speed_ramp()
+	_test_double_time()
+	_test_spear_vs_horse()
+	_test_knight_bonuses()
+	_test_height_rules()
 	_test_combat_and_rout()
 	_test_snapshot_roundtrip()
 	_test_budget()
@@ -85,6 +90,184 @@ func _test_move_and_flags() -> void:
 	print("TEST_UNIT_SIM_MOVE: arrived_tick=%d backjumps=%d anchor=(%.1f,%.1f)" % [
 		arrived_tick, backjumps, a.anchor.x, a.anchor.y
 	])
+
+func _test_speed_ramp() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var army = _spawn_army(sim, "R", 1, 200.0, 300.0, 1, UnitSim.UnitType.KNIGHT, 0.0)
+	var id: int = army.members[0]
+	var top: float = sim.speed[id]
+	# Parked army, goal set by hand, so the target is the flat max and not the march catch-up.
+	army.clear_order()
+	army.slots_dirty = false
+	sim.goal_x[id] = 900.0
+	sim.goal_z[id] = 300.0
+	sim.step(UnitSim.SIM_DT)
+	var first: float = sim._cruise[id]
+	_check(first < top * 0.2, "first step should be well under full speed (%.2f)" % first)
+	for _i in range(39):
+		sim.step(UnitSim.SIM_DT)
+	var built: float = sim._cruise[id]
+	_check(built > top * 0.9 and built < top * 1.05, "about 95%% of flat speed after 2s (%.2f vs %.2f)" % [built, top])
+	sim._cruise[id] = top * 1.25
+	sim.step(UnitSim.SIM_DT)
+	var carried: float = sim._cruise[id]
+	_check(carried > top * 1.1, "downhill speed carries onto flat ground (%.2f)" % carried)
+	for _i in range(39):
+		sim.step(UnitSim.SIM_DT)
+	_check(sim._cruise[id] < top * 1.05, "carried speed eases back to flat in about 2s (%.2f)" % sim._cruise[id])
+	sim.goal_x[id] = sim.pos_x[id]
+	sim.goal_z[id] = sim.pos_z[id]
+	sim._cruise[id] = top
+	sim.step(UnitSim.SIM_DT)
+	_check(sim._cruise[id] == 0.0, "reaching the goal zeros cruise")
+	sim.goal_x[id] = 900.0
+	sim.goal_z[id] = 320.0
+	sim.step(UnitSim.SIM_DT)
+	_check(sim._cruise[id] < top * 0.2, "the next move starts from a standstill")
+	print("TEST_UNIT_SIM_RAMP: first=%.2f built=%.2f carried=%.2f" % [first, built, carried])
+
+func _test_double_time() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var army = _spawn_army(sim, "D", 1, 200.0, 300.0, 8, UnitSim.UnitType.KNIGHT, 0.0)
+	var top: float = sim.speed[army.members[0]]
+	sim.recentre_anchor(army)
+	army.issue_move(Vector2(900.0, 300.0))
+	army.double_time = true
+	var ticks := int(round(5.0 / UnitSim.SIM_DT))
+	for _i in range(ticks):
+		sim.step(UnitSim.SIM_DT)
+	_check(is_equal_approx(army.tiredness, -8.0), "moving in double time reaches -8 in 5s (%.2f)" % army.tiredness)
+	_check(not army.double_time, "double time turns off at -8")
+	var boosted: float = army.cruise_speed
+	_check(boosted > top, "double time raised the march above flat speed (%.2f vs %.2f)" % [boosted, top])
+	army.clear_order()
+	for _i in range(ticks):
+		sim.step(UnitSim.SIM_DT)
+	_check(is_equal_approx(army.tiredness, 0.0), "standing still rests back to 0 (%.2f)" % army.tiredness)
+	army.double_time = true
+	army.tiredness = -4.0
+	for _i in range(ticks):
+		sim.step(UnitSim.SIM_DT)
+	_check(is_equal_approx(army.tiredness, 0.0), "double time while standing still still rests (%.2f)" % army.tiredness)
+	print("TEST_UNIT_SIM_DOUBLE: tired_after_move=-8.0 cruise=%.2f rested=%.1f" % [boosted, army.tiredness])
+
+func _test_spear_vs_horse() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var spear = _spawn_army(sim, "S", 1, 100.0, 100.0, 1, UnitSim.UnitType.SPEARMAN, 0.0)
+	var knight = _spawn_army(sim, "K", 2, 200.0, 100.0, 1, UnitSim.UnitType.KNIGHT, PI)
+	var horse = _spawn_army(sim, "H", 2, 300.0, 100.0, 1, UnitSim.UnitType.HORSE_ARCHER, PI)
+	var club = _spawn_army(sim, "C", 2, 400.0, 100.0, 1, UnitSim.UnitType.CLUBMAN, PI)
+	var club_atk = _spawn_army(sim, "C2", 1, 500.0, 100.0, 1, UnitSim.UnitType.CLUBMAN, 0.0)
+	var sid: int = spear.members[0]
+	var kid: int = knight.members[0]
+	var hid: int = horse.members[0]
+	var cid: int = club.members[0]
+	var aid: int = club_atk.members[0]
+	var spear_knight := _hit_damage(sim, sid, kid)
+	var spear_horse := _hit_damage(sim, sid, hid)
+	var spear_club := _hit_damage(sim, sid, cid)
+	var club_knight := _hit_damage(sim, aid, kid)
+	_check(is_equal_approx(spear_knight, 14.0 - sim.defense[kid]), "spear vs knight should be attack 14")
+	_check(is_equal_approx(spear_horse, 14.0 - sim.defense[hid]), "spear vs horse archer should be attack 14")
+	_check(is_equal_approx(spear_club, 13.0 - sim.defense[cid]), "spear vs clubman stays attack 13")
+	_check(is_equal_approx(club_knight, sim.attack[aid] - sim.defense[kid]), "clubman vs knight has no spear bonus")
+	print("TEST_UNIT_SIM_SPEAR: knight=%.1f horse=%.1f club=%.1f clubman=%.1f" % [
+		spear_knight, spear_horse, spear_club, club_knight
+	])
+
+func _test_knight_bonuses() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var knight = _spawn_army(sim, "K", 1, 100.0, 100.0, 1, UnitSim.UnitType.KNIGHT, 0.0)
+	var club = _spawn_army(sim, "C", 2, 140.0, 100.0, 1, UnitSim.UnitType.CLUBMAN, PI)
+	var spear = _spawn_army(sim, "S", 2, 180.0, 100.0, 1, UnitSim.UnitType.SPEARMAN, PI)
+	var horse = _spawn_army(sim, "H", 2, 220.0, 100.0, 1, UnitSim.UnitType.HORSE_ARCHER, PI)
+	var kid: int = knight.members[0]
+	var cid: int = club.members[0]
+	var sid: int = spear.members[0]
+	var hid: int = horse.members[0]
+	_check(is_equal_approx(sim.attack[cid], 8.0), "clubman attack should be 8")
+	_check(is_equal_approx(UnitSim.stats_for_type(UnitSim.UnitType.BOWMAN).attack, 6.0), "bowman attack should be 6")
+	var foot := _hit_damage(sim, kid, cid)
+	_check(is_equal_approx(foot, 12.0 - sim.defense[cid]), "knight vs clubman is +2 and no charge when standing")
+	sim._travel_speed[kid] = sim.speed[kid]
+	var flat := _hit_damage(sim, kid, cid)
+	_check(is_equal_approx(flat, foot), "flat-ground speed is not fast enough to charge")
+	sim._charge_cd[kid] = 0.0
+	sim._travel_speed[kid] = sim.speed[kid] * 1.1
+	var charged := _hit_damage(sim, kid, cid)
+	_check(is_equal_approx(charged, 42.0 - sim.defense[cid]), "fast knight vs clubman is +2 and +30")
+	var cooled := _hit_damage(sim, kid, cid)
+	_check(is_equal_approx(cooled, foot), "charge does not repeat inside the cooldown")
+	sim._charge_cd[kid] = 0.0
+	var vs_spear := _hit_damage(sim, kid, sid)
+	_check(is_equal_approx(vs_spear, 40.0 - sim.defense[sid]), "charge vs spearman has no +2")
+	sim._charge_cd[kid] = 0.0
+	var vs_horse := _hit_damage(sim, kid, hid)
+	_check(is_equal_approx(vs_horse, 40.0 - sim.defense[hid]), "charge vs horse archer has no +2")
+	print("TEST_UNIT_SIM_KNIGHT: foot=%.1f flat=%.1f charge=%.1f cooled=%.1f spear=%.1f horse=%.1f" % [
+		foot, flat, charged, cooled, vs_spear, vs_horse
+	])
+
+func _test_height_rules() -> void:
+	_check(is_equal_approx(UnitSim.speed_for_type(UnitSim.UnitType.SPEARMAN), 100.0 * 2.0 / 3.0 / 6.0), "foot speed drifted from units.json")
+	_check(is_equal_approx(UnitSim.speed_for_type(UnitSim.UnitType.KNIGHT), 140.0 / 6.0), "horse speed drifted from units.json")
+	_check(is_equal_approx(UnitSim.slope_speed_multiplier(0.0, 10.0), 1.0), "flat slope should be 1")
+	_check(is_equal_approx(UnitSim.slope_speed_multiplier(1.0, 1.0), 0.75), "45° uphill should be 0.75")
+	_check(is_equal_approx(UnitSim.slope_speed_multiplier(-1.0, 1.0), 1.25), "45° downhill should be 1.25")
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var step := 20.0
+	var cols := 3
+	var rows := 2
+	var heights := PackedFloat32Array()
+	heights.resize(cols * rows)
+	# (0,0)=20, (20,0)=10, (40,0)=0, second row all 40.
+	heights[0] = 20.0
+	heights[1] = 10.0
+	heights[2] = 0.0
+	heights[3] = 40.0
+	heights[4] = 40.0
+	heights[5] = 40.0
+	sim.set_height_grid(heights, cols, rows, step)
+	var base := 120.0
+	_check(is_equal_approx(sim.ranged_reach(0.0, 0.0, 0.0, 0.0, base), base), "flat bow range")
+	_check(is_equal_approx(sim.ranged_reach(0.0, 0.0, 20.0, 0.0, base), base * 1.25), "half-gap downhill bow range")
+	_check(is_equal_approx(sim.ranged_reach(0.0, 0.0, 40.0, 0.0, base), base * 1.5), "capped downhill bow range")
+	_check(is_equal_approx(sim.ranged_reach(0.0, 0.0, 0.0, 20.0, base), base * 0.5), "capped uphill bow range")
+	var high = _spawn_army(sim, "H1", 1, 0.0, 0.0, 1, UnitSim.UnitType.SPEARMAN, 0.0)
+	var low_knight = _spawn_army(sim, "K1", 2, 40.0, 0.0, 1, UnitSim.UnitType.KNIGHT, PI)
+	var low_club = _spawn_army(sim, "C1", 2, 40.0, 0.0, 1, UnitSim.UnitType.CLUBMAN, PI)
+	var hid: int = high.members[0]
+	var kid: int = low_knight.members[0]
+	var cid: int = low_club.members[0]
+	sim.pos_x[hid] = 0.0
+	sim.pos_z[hid] = 0.0
+	sim.pos_x[kid] = 40.0
+	sim.pos_z[kid] = 0.0
+	sim.pos_x[cid] = 40.0
+	sim.pos_z[cid] = 0.0
+	var spear_knight := _hit_damage(sim, hid, kid)
+	var spear_club := _hit_damage(sim, hid, cid)
+	_check(is_equal_approx(spear_knight, 15.0 - sim.defense[kid]), "spear on high ground vs knight is attack 15")
+	_check(is_equal_approx(spear_club, 14.0 - sim.defense[cid]), "high ground vs clubman is +1 attack only")
+	var uphill := _hit_damage(sim, cid, hid)
+	_check(is_equal_approx(uphill, sim.attack[cid] - sim.defense[hid]), "attacking uphill has no height bonus")
+	sim.pos_x[cid] = 0.0
+	sim.pos_z[cid] = 0.0
+	var flat := _hit_damage(sim, hid, cid)
+	_check(is_equal_approx(flat, 13.0 - sim.defense[cid]), "equal height has no height bonus")
+	print("TEST_UNIT_SIM_HEIGHT: spear_knight=%.1f spear_club=%.1f uphill=%.1f flat=%.1f" % [
+		spear_knight, spear_club, uphill, flat
+	])
+
+func _hit_damage(sim, attacker: int, target: int) -> float:
+	var before: float = sim.hp[target]
+	sim._perform_attack(attacker, target)
+	return before - sim.hp[target]
 
 func _test_combat_and_rout() -> void:
 	var sim = UnitSim.new()

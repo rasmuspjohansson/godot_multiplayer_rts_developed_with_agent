@@ -18,7 +18,7 @@ const UnitSim := preload("res://sim/UnitSim.gd")
 
 enum OrderMode { MOVE, ATTACK, ATTACK_MOVE }
 
-const BAR_HEIGHT := 110
+const BAR_HEIGHT := 156
 const PORTRAIT_PX := 72
 const ORDER_LABELS := ["Move", "Attack", "Attack-Move"]
 const ORDER_KEYS := ["M", "A", "G"]
@@ -246,13 +246,24 @@ func refresh_counts() -> void:
 		var a = c.get_meta("army")
 		if a == null or not is_instance_valid(a) or a.is_routed:
 			continue
-		var count_label: Label = c.get_node_or_null("Count")
+		var count_label: Label = c.get_node_or_null("Portrait/Count")
 		if count_label != null:
 			count_label.text = str(_alive_count(a))
-		var stance_label: Label = c.get_node_or_null("Stance")
+		var stance_label: Label = c.get_node_or_null("Portrait/Stance")
 		if stance_label != null:
 			stance_label.text = STANCE_GLYPHS[clampi(a.stance, 0, STANCE_GLYPHS.size() - 1)]
-		var plate: Panel = c.get_node_or_null("Plate")
+		var tired_label: Label = c.get_node_or_null("Tired")
+		var pace_label: Label = c.get_node_or_null("Pace")
+		if tired_label != null and pace_label != null:
+			var tired := 0
+			var pace := "walk"
+			if a.fc != null:
+				tired = int(a.fc.tiredness)
+				if a.fc.double_time:
+					pace = "double time"
+			tired_label.text = str(tired)
+			pace_label.text = pace
+		var plate: Panel = c.get_node_or_null("Portrait/Plate")
 		if plate != null:
 			_apply_portrait_border(plate, a in _selected)
 
@@ -269,10 +280,33 @@ func _apply_portrait_border(plate: Panel, is_selected: bool) -> void:
 	sb.set_corner_radius_all(4)
 	plate.add_theme_stylebox_override("panel", sb)
 
+func _pace_label(text: String, color: Color) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", 11)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_outline_color", Color.BLACK)
+	l.add_theme_constant_override("outline_size", 3)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
 func _make_portrait(a, is_selected: bool) -> Control:
+	var col := VBoxContainer.new()
+	col.name = "Army_" + a.army_id
+	col.set_meta("army", a)
+	col.add_theme_constant_override("separation", 0)
+	col.custom_minimum_size = Vector2(96, 0)
+	var tired := _pace_label("0", Color(0.75, 0.9, 1.0))
+	tired.name = "Tired"
+	col.add_child(tired)
+	var pace := _pace_label("walk", Color(1, 1, 1, 0.85))
+	pace.name = "Pace"
+	col.add_child(pace)
 	var btn := TextureButton.new()
-	btn.name = "Army_" + a.army_id
+	btn.name = "Portrait"
 	btn.custom_minimum_size = Vector2(PORTRAIT_PX, PORTRAIT_PX)
+	btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	btn.ignore_texture_size = true
 	btn.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
 	btn.texture_normal = _portrait_texture(a)
@@ -319,7 +353,12 @@ func _make_portrait(a, is_selected: bool) -> Control:
 	stance.position = Vector2(4, 2)
 	stance.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(stance)
-	return btn
+	col.add_child(btn)
+	if a.fc != null:
+		tired.text = str(int(a.fc.tiredness))
+		if a.fc.double_time:
+			pace.text = "double time"
+	return col
 
 ## Idle frame 0 of the army's unit sprite (256x256, faces right), cached per colour/type.
 func _portrait_texture(a) -> Texture2D:

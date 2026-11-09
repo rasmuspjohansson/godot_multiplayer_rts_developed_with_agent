@@ -102,7 +102,8 @@ func _run_straight(fails: Array[String]) -> void:
 			for id in fc.members:
 				var step := Vector2(sim.pos_x[id] - spawn_x[id], sim.pos_z[id] - spawn_z[id])
 				var to_goal := Vector2(sim.goal_x[id] - spawn_x[id], sim.goal_z[id] - spawn_z[id])
-				if step.length() < 0.4 or to_goal.length() < 1.0 or step.dot(to_goal) <= 0.0:
+				# Cruise is still building after three ticks, so the step is short. Direction is the check.
+				if step.length() < 0.05 or to_goal.length() < 1.0 or step.dot(to_goal) <= 0.0:
 					moved_ok = false
 		if not fc.moving and _arrived(sim, fc):
 			arrived = true

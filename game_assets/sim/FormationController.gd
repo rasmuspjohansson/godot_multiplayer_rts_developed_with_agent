@@ -18,6 +18,9 @@ const CATCH_UP_SPEED := 1.35
 ## from their slot the anchor crawls at COHESION_CRAWL_SPEED so the block never stretches.
 const COHESION_STRAGGLER_FRACTION := 0.25
 const COHESION_CRAWL_SPEED := 0.25
+## Longest flat step used when sampling slope, matching UnitSim.SIM_DT so a replay
+## of many seconds follows the same hills as one tick at a time.
+const SLOPE_CHUNK_DT := 0.05
 ## Anchor slows to a press while this fraction of soldiers is fighting (formation holds the line).
 const CONTACT_PAUSE_FRACTION := 0.35
 const CONTACT_RESUME_FRACTION := 0.15
@@ -72,6 +75,20 @@ var march_seq: int = 0
 var moving: bool = false
 var paused_for_contact: bool = false
 var anchor_speed: float = 10.0
+## Speed the anchor is actually moving. Eases toward the slope-limited max; 0 when the move ends.
+var cruise_speed: float = 0.0
+## Seconds to close about 95% of the gap between cruise and the current max. Set from bonuses.json.
+static var speed_ramp_seconds := 2.0
+## Flat speed added while double time is on, and how far tiredness can fall. Set from bonuses.json.
+static var double_time_speed := 5.0
+static var double_time_tired_max := 8.0
+static var double_time_tired_seconds := 5.0
+## Player toggle. Tiredness falls only while this is on and the anchor actually moves.
+var double_time: bool = false
+## 0 at rest, down to -double_time_tired_max. Displayed as an integer on the army portrait.
+var tiredness: float = 0.0
+## (from, to) -> speed multiplier. Empty when the sim has no height grid.
+var slope_scale: Callable = Callable()
 var slots_dirty: bool = true
 var packed_count: int = 0
 var _target_eval_t: float = TARGET_REEVAL_SEC
@@ -306,27 +323,38 @@ func repath_from(new_anchor: Vector2, elapsed: float) -> void:
 		advance_anchor(elapsed, 0.0)
 	slots_dirty = true
 
+## Ease `current` toward `target`. About 95% of the gap closes in `speed_ramp_seconds`.
+static func approach_cruise(current: float, target: float, dt: float) -> float:
+	if speed_ramp_seconds <= 0.0:
+		return target
+	var tau := speed_ramp_seconds / 3.0
+	return target + (current - target) * exp(-dt / tau)
+
 ## Advance the anchor one tick along the path. Returns true if the anchor moved.
 ## `cohesion_scale` < 1 slows the block while too many soldiers are straggling.
+## Cruise eases toward the slope-limited max inside SLOPE_CHUNK_DT slices, so a long
+## replay follows the same hills and the same acceleration as one tick at a time.
 func advance_anchor(dt: float, contact_fraction: float, cohesion_scale: float = 1.0) -> bool:
 	if not moving:
+		cruise_speed = 0.0
 		return false
-	var budget := anchor_speed * dt * cohesion_scale
+	var speed_scale := cohesion_scale
 	if paused_for_contact:
 		if contact_fraction < CONTACT_RESUME_FRACTION:
 			paused_for_contact = false
 		elif order_type == OrderType.ATTACK:
-			budget *= CONTACT_PRESS_SPEED
+			speed_scale *= CONTACT_PRESS_SPEED
 		else:
 			return false
 	elif contact_fraction >= CONTACT_PAUSE_FRACTION and order_type != OrderType.MOVE:
 		paused_for_contact = true
 		if order_type == OrderType.ATTACK:
-			budget *= CONTACT_PRESS_SPEED
+			speed_scale *= CONTACT_PRESS_SPEED
 		else:
 			return false
 	var moved := false
-	while budget > 0.0 and path_i < path.size():
+	var time_left := dt
+	while time_left > 1e-6 and path_i < path.size():
 		var wp: Vector2 = path[path_i]
 		var to := wp - anchor
 		var d := to.length()
@@ -338,14 +366,30 @@ func advance_anchor(dt: float, contact_fraction: float, cohesion_scale: float = 
 				moved = true
 			path_i += 1
 			continue
-		var step := minf(d, budget)
-		anchor += to / d * step
-		budget -= step
-		moved = true
-		if step >= d:
+		var chunk := minf(time_left, SLOPE_CHUNK_DT)
+		var dir := to / d
+		var mult := 1.0
+		if slope_scale.is_valid():
+			var probe := minf(d, maxf(anchor_speed * chunk, 0.05))
+			mult = float(slope_scale.call(anchor, anchor + dir * probe))
+			if mult < 0.05:
+				mult = 0.05
+		var target := anchor_speed * mult * speed_scale
+		if double_time and tiredness > -double_time_tired_max:
+			target += double_time_speed
+		cruise_speed = approach_cruise(cruise_speed, target, chunk)
+		var step := minf(d, cruise_speed * chunk)
+		if step > 0.0:
+			anchor += dir * step
+			moved = true
+		if cruise_speed > 0.001 and step + 0.0001 >= d:
+			time_left -= step / cruise_speed
 			path_i += 1
+		else:
+			time_left -= chunk
 	if path_i >= path.size():
 		moving = false
+		cruise_speed = 0.0
 		direction = dest_direction
 		if order_type == OrderType.MOVE:
 			# Arrived: keep formation, order complete.

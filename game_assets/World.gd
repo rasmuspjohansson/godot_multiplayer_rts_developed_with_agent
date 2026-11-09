@@ -566,6 +566,8 @@ func _alive_unit_count() -> int:
 func _setup_sim() -> void:
 	_sim = _UnitSim.new()
 	_sim.setup(_walkability, float(MapConfig.width), float(MapConfig.height), multiplayer.is_server())
+	if not _terrain_heights.is_empty():
+		_sim.set_height_grid(_terrain_heights, _terrain_cols, _terrain_rows, _terrain_step)
 	_net = _NetSync.new()
 	_net.setup(float(MapConfig.width), float(MapConfig.height))
 	if not multiplayer.is_server():
@@ -829,6 +831,8 @@ func _build_terrain() -> void:
 	_terrain_step = step
 	if _unit_renderer != null:
 		_unit_renderer.set_height_grid(heights, cols, rows, step)
+	if _sim != null:
+		_sim.set_height_grid(heights, cols, rows, step)
 	# Build the visual ArrayMesh.
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
@@ -1821,6 +1825,47 @@ func _make_range_ring_mesh(radius: float) -> ArrayMesh:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
+## Ring whose radius follows bow reach. Vertices sit in local XZ around the origin.
+func _make_directional_range_ring(origin: Vector2, base_range: float, half_width: float) -> ArrayMesh:
+	var segments := 64
+	var line_width := 1.4
+	var radii := PackedFloat32Array()
+	radii.resize(segments)
+	for i in range(segments):
+		var a := TAU * float(i) / float(segments)
+		radii[i] = _sim.ranged_reach_along(origin.x, origin.y, a, base_range) + half_width
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for i in range(segments):
+		var a0 := TAU * float(i) / float(segments)
+		var a1 := TAU * float(i + 1) / float(segments)
+		var r0: float = radii[i]
+		var r1: float = radii[(i + 1) % segments]
+		var inner0 := maxf(0.5, r0 - line_width * 0.5)
+		var outer0 := r0 + line_width * 0.5
+		var inner1 := maxf(0.5, r1 - line_width * 0.5)
+		var outer1 := r1 + line_width * 0.5
+		var c0 := Vector2(cos(a0), sin(a0))
+		var c1 := Vector2(cos(a1), sin(a1))
+		var base := verts.size()
+		verts.append_array([
+			Vector3(c0.x * inner0, 0.0, c0.y * inner0),
+			Vector3(c0.x * outer0, 0.0, c0.y * outer0),
+			Vector3(c1.x * outer1, 0.0, c1.y * outer1),
+			Vector3(c1.x * inner1, 0.0, c1.y * inner1),
+		])
+		uvs.append_array([Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO])
+		indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
 ## Range rings: one ring per selected army (attack range + formation half width), pooled.
 func _update_unit_range_markers_3d() -> void:
 	if not _show_unit_range or _sim == null:
@@ -1836,9 +1881,11 @@ func _update_unit_range_markers_3d() -> void:
 			continue
 		var fc = a.fc
 		var rng := 0.0
+		var ranged := false
 		for id in fc.members:
 			if _sim.is_alive(id):
 				rng = _sim.attack_range[id]
+				ranged = (_sim.flags[id] & _UnitSim.F_RANGED) != 0
 				break
 		if rng <= 0.0:
 			continue
@@ -1856,12 +1903,26 @@ func _update_unit_range_markers_3d() -> void:
 			_range_markers_3d.add_child(mi)
 			pool.append(mi)
 		mi.visible = true
-		if mi.mesh == null or absf(radius - _range_ring_radius(mi.mesh)) > 0.5:
-			mi.mesh = _make_range_ring_mesh(radius)
+		var c: Vector2 = _sim.army_centroid(fc)
+		var built_at: Vector2 = mi.get_meta("range_origin", Vector2(INF, INF))
+		var built_ranged: bool = bool(mi.get_meta("range_directional", false))
+		var same_army: bool = str(mi.get_meta("range_army", "")) == str(fc.army_id)
+		var rebuild := mi.mesh == null or not same_army or built_ranged != ranged
+		if not rebuild and ranged:
+			rebuild = built_at.distance_to(c) > 2.0
+		elif not rebuild:
+			rebuild = absf(radius - _range_ring_radius(mi.mesh)) > 0.5
+		if rebuild:
+			if ranged:
+				mi.mesh = _make_directional_range_ring(c, rng, fc.half_width())
+			else:
+				mi.mesh = _make_range_ring_mesh(radius)
+			mi.set_meta("range_origin", c)
+			mi.set_meta("range_directional", ranged)
+			mi.set_meta("range_army", str(fc.army_id))
 		var mat2: StandardMaterial3D = mi.material_override as StandardMaterial3D
 		if mat2 != null:
 			mat2.albedo_color = _range_color_for_owner(a.owner_id)
-		var c: Vector2 = _sim.army_centroid(fc)
 		mi.position = Vector3(c.x, get_ground_height_at(c.x, c.y) + 0.18, c.y)
 		used += 1
 	for i in range(used, pool.size()):
@@ -1965,7 +2026,7 @@ func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool, soldier_cou
 
 const ORDER_DELAY_TICKS_MIN := 4
 const ANCHOR_CONFIRM_TOLERANCE := 2.0
-enum OrderKind { MOVE, ATTACK, CLEAR, STANCE, ROTATE, REPACK, DEATHS }
+enum OrderKind { MOVE, ATTACK, CLEAR, STANCE, ROTATE, REPACK, DEATHS, DOUBLE_TIME }
 
 ## Sorted by (exec, seq): [{"exec": int, "seq": int, "kind": int, "p": Dictionary}, ...]
 var _order_queue: Array = []
@@ -2072,6 +2133,16 @@ func _execute_order(o: Dictionary) -> void:
 				army.fc.set_stance(stance)
 				if stance == _Formation.Stance.AGGRESSIVE:
 					army.fc.clear_order()
+		OrderKind.DOUBLE_TIME:
+			var cap: float = _Formation.double_time_tired_max
+			for aid in p["ids"]:
+				var army = _find_army(str(aid))
+				if army == null or army.fc == null or army.is_routed:
+					continue
+				if army.fc.double_time:
+					army.fc.double_time = false
+				elif army.fc.tiredness > -cap:
+					army.fc.double_time = true
 		OrderKind.ROTATE:
 			var army = _find_army(str(p.get("aid", "")))
 			if army != null and army.fc != null:
@@ -2233,6 +2304,17 @@ func _server_armies_set_stance(army_ids: Array, stance: int):
 		ids.append(army.army_id)
 	if not ids.is_empty():
 		_schedule_order(OrderKind.STANCE, {"ids": ids, "stance": stance})
+
+@rpc("any_peer", "reliable")
+func _server_armies_toggle_double_time(army_ids: Array):
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	var ids: Array = []
+	for army in _owned_live_armies(sender, army_ids):
+		ids.append(army.army_id)
+	if not ids.is_empty():
+		_schedule_order(OrderKind.DOUBLE_TIME, {"ids": ids})
 
 @rpc("any_peer", "reliable")
 func _server_armies_order_attack(army_ids: Array, target_army_id: String, target_unit: int):
@@ -3696,6 +3778,12 @@ func _handle_key(event: InputEventKey):
 				_selection_bar._set_order_mode(_SelectionBar.OrderMode.ATTACK)
 			elif event.keycode == KEY_G:
 				_selection_bar._set_order_mode(_SelectionBar.OrderMode.ATTACK_MOVE)
+			elif event.keycode == KEY_SPACE:
+				var ids: Array = []
+				for a in _get_selected_non_routed():
+					ids.append(a.army_id)
+				if not ids.is_empty():
+					rpc_id(1, "_server_armies_toggle_double_time", ids)
 	var sel := _get_selected_non_routed()
 	if sel.is_empty():
 		return

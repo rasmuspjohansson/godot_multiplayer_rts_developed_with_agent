@@ -54,6 +54,7 @@ Available maps (`--map NAME`, default `S`): `S`, `L`, `XL`, `Valleys`, `demo`, `
 | Right-click ground | Move the selected armies |
 | Right-drag ground | Move and set the front line: from press (first file) to release (last file) |
 | `M` / `A` / `G` | Order mode: Move / Attack / Attack-Move (or use the bottom bar) |
+| `Space` | Double time for the selected armies (faster until they tire) |
 | Bottom bar | Stances (Aggressive, Defensive, Hold, Passive), Show range, Draft |
 | `Q` / `E` or arrow keys | Rotate the selected armies (with free view on: arrow keys only) |
 | `W` `A` `S` `D`, middle-drag | Pan the camera |

@@ -117,6 +117,30 @@ var walkability = null
 var map_w: float = 1280.0
 var map_h: float = 720.0
 var hash := SpatialHash.new()
+## Terrain samples, same triangle split as the ground mesh. Empty until World calls set_height_grid.
+var _hg := PackedFloat32Array()
+## Distance travelled last tick divided by SIM_DT. The knight charge reads this, because the
+## attack is resolved before this tick's step is applied.
+var _travel_speed := PackedFloat32Array()
+var _charge_cd := PackedFloat32Array()
+## Ordered speed, eased toward the slope max. Not reduced by pushes.
+var _cruise := PackedFloat32Array()
+var _hg_cols: int = 0
+var _hg_rows: int = 0
+var _hg_inv: float = 1.0
+
+static var _rules_loaded := false
+static var _unit_stats: Dictionary = {}
+static var _spear_vs_horse_attack := 1.0
+static var _knight_vs_unmounted_attack := 2.0
+static var _knight_charge_attack := 30.0
+static var _knight_charge_cooldown := 2.0
+static var _knight_charge_min_speed_ratio := 1.1
+static var _height_attack := 1.0
+static var _slope_speed_at_45 := 0.25
+static var _max_slope_deg := 45.0
+static var _range_height_bonus_max := 0.5
+static var _max_height_bonus_height := 20.0
 
 ## Per-step outputs, cleared at the start of each step().
 var died_ids := PackedInt32Array()
@@ -219,31 +243,150 @@ static func unit_type_name(t: int) -> String:
 		_: return "clubman"
 
 static func speed_for_type(t: int) -> float:
-	match t:
-		UnitType.KNIGHT, UnitType.HORSE_ARCHER: return 140.0 / 6.0
-		UnitType.DRAGON: return 90.0 / 6.0
-		_: return 100.0 * 2.0 / 3.0 / 6.0
+	return float(stats_for_type(t).speed)
 
 static func stats_for_type(t: int) -> Dictionary:
-	match t:
-		UnitType.DRAGON:
-			return {"hp": 600.0, "attack": 56.0, "defense": 10.0, "range": DRAGON_ATTACK_RANGE,
-				"radius": RADIUS_DRAGON, "half_height": 99.0, "ranged": false, "horse": false}
-		UnitType.KNIGHT:
-			return {"hp": KNIGHT_HP, "attack": 10.0, "defense": 2.0, "range": MELEE_ATTACK_RANGE,
-				"radius": RADIUS_HORSE, "half_height": 14.0, "ranged": false, "horse": true}
-		UnitType.HORSE_ARCHER:
-			return {"hp": KNIGHT_HP, "attack": 12.0, "defense": 2.0, "range": RANGED_ATTACK_RANGE,
-				"radius": RADIUS_HORSE, "half_height": 14.0, "ranged": true, "horse": true}
-		UnitType.BOWMAN:
-			return {"hp": BASE_HP, "attack": 12.0, "defense": 2.0, "range": RANGED_ATTACK_RANGE,
-				"radius": RADIUS_FOOT, "half_height": 11.0, "ranged": true, "horse": false}
-		UnitType.SPEARMAN:
-			return {"hp": BASE_HP, "attack": 13.0, "defense": 2.0, "range": SPEAR_ATTACK_RANGE,
-				"radius": RADIUS_FOOT, "half_height": 11.0, "ranged": false, "horse": false}
-		_:
-			return {"hp": BASE_HP, "attack": 10.0, "defense": 2.0, "range": MELEE_ATTACK_RANGE,
-				"radius": RADIUS_FOOT, "half_height": 11.0, "ranged": false, "horse": false}
+	_ensure_rules()
+	var name := unit_type_name(t)
+	if not _unit_stats.has(name):
+		push_error("UnitSim: units.json has no entry for '%s'" % name)
+		return {}
+	return _unit_stats[name]
+
+static func _ensure_rules() -> void:
+	if _rules_loaded:
+		return
+	_rules_loaded = true
+	var units: Variant = _read_json("res://units.json")
+	var bonuses: Variant = _read_json("res://bonuses.json")
+	if typeof(units) != TYPE_DICTIONARY or typeof(bonuses) != TYPE_DICTIONARY:
+		push_error("UnitSim: units.json and bonuses.json must be JSON objects")
+		return
+	_unit_stats = units
+	_spear_vs_horse_attack = float(bonuses.get("spear_vs_horse_attack", 0))
+	_knight_vs_unmounted_attack = float(bonuses.get("knight_vs_unmounted_attack", 0))
+	_knight_charge_attack = float(bonuses.get("knight_charge_attack", 0))
+	_knight_charge_cooldown = float(bonuses.get("knight_charge_cooldown", 0))
+	_knight_charge_min_speed_ratio = float(bonuses.get("knight_charge_min_speed_ratio", 1))
+	_height_attack = float(bonuses.get("height_attack", 0))
+	_slope_speed_at_45 = float(bonuses.get("slope_speed_at_45_deg", 0))
+	_max_slope_deg = maxf(float(bonuses.get("max_slope_deg", 45)), 0.001)
+	_range_height_bonus_max = float(bonuses.get("range_height_bonus_max", 0))
+	_max_height_bonus_height = maxf(float(bonuses.get("max_height_bonus_height", 1)), 0.001)
+	Formation.speed_ramp_seconds = maxf(float(bonuses.get("speed_ramp_seconds", 2)), 0.0)
+	Formation.double_time_speed = float(bonuses.get("double_time_speed", 5))
+	Formation.double_time_tired_max = maxf(float(bonuses.get("double_time_tired_max", 8)), 1.0)
+	Formation.double_time_tired_seconds = maxf(float(bonuses.get("double_time_tired_seconds", 5)), 0.001)
+	for key in ["spear_vs_horse_attack", "knight_vs_unmounted_attack", "knight_charge_attack", "knight_charge_cooldown", "knight_charge_min_speed_ratio", "height_attack", "speed_ramp_seconds", "double_time_speed", "double_time_tired_max", "double_time_tired_seconds", "slope_speed_at_45_deg", "max_slope_deg", "range_height_bonus_max", "max_height_bonus_height"]:
+		if not bonuses.has(key):
+			push_error("UnitSim: bonuses.json missing '%s'" % key)
+
+static func _read_json(path: String) -> Variant:
+	if not FileAccess.file_exists(path):
+		push_error("UnitSim: required file missing: %s" % path)
+		return null
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if parsed == null:
+		push_error("UnitSim: failed to parse %s" % path)
+	return parsed
+
+## Copy of the terrain grid. Soldiers and the formation anchor both read it; no per-unit Callable.
+func set_height_grid(heights: PackedFloat32Array, cols: int, rows: int, step: float) -> void:
+	_hg = heights
+	_hg_cols = cols
+	_hg_rows = rows
+	_hg_inv = 1.0 / maxf(step, 0.001)
+	var cb := Callable()
+	if cols >= 2 and rows >= 2:
+		cb = Callable(self, "slope_between")
+	for fc in armies:
+		fc.slope_scale = cb
+
+func height_at(x: float, z: float) -> float:
+	if _hg_cols < 2 or _hg_rows < 2:
+		return 0.0
+	return _height_inline(_hg, _hg_cols, _hg_rows, _hg_inv, x, z)
+
+static func _height_inline(hg: PackedFloat32Array, cols: int, rows: int, inv_step: float, x: float, z: float) -> float:
+	var gx: float = clampf(x * inv_step, 0.0, float(cols - 1))
+	var gz: float = clampf(z * inv_step, 0.0, float(rows - 1))
+	var i0: int = int(gx)
+	var j0: int = int(gz)
+	var i1: int = mini(i0 + 1, cols - 1)
+	var j1: int = mini(j0 + 1, rows - 1)
+	var tx: float = gx - float(i0)
+	var tz: float = gz - float(j0)
+	var r0: int = j0 * cols
+	var r1: int = j1 * cols
+	var h00: float = hg[r0 + i0]
+	var h10: float = hg[r0 + i1]
+	var h01: float = hg[r1 + i0]
+	var h11: float = hg[r1 + i1]
+	if tx + tz <= 1.0:
+		return h00 + (h10 - h00) * tx + (h01 - h00) * tz
+	return h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
+
+## Speed scale for a step. Uphill 45° is 1 - slope_speed_at_45_deg, downhill is the reverse.
+static func slope_speed_multiplier(dh: float, run: float) -> float:
+	_ensure_rules()
+	if run <= 0.0001:
+		return 1.0
+	var slope_deg := rad_to_deg(atan2(dh, run))
+	return 1.0 - _slope_speed_at_45 * clampf(slope_deg / _max_slope_deg, -1.0, 1.0)
+
+## Step length after easing cruise toward base speed × slope × catch-up. Zeros cruise when dist_cap is 0.
+func _cruise_step(i: int, dir_x: float, dir_z: float, dist_cap: float, base_speed: float, catch: float, dt: float, hg: PackedFloat32Array, hg_cols: int, hg_rows: int, hg_inv: float, has_hg: bool, slope_at_45: float, slope_deg_max: float) -> float:
+	if dist_cap <= 0.0:
+		_cruise[i] = 0.0
+		return 0.0
+	var mult := 1.0
+	if has_hg:
+		var probe := minf(dist_cap, maxf(base_speed * dt, 0.05))
+		var h0 := _height_inline(hg, hg_cols, hg_rows, hg_inv, pos_x[i], pos_z[i])
+		var h1 := _height_inline(hg, hg_cols, hg_rows, hg_inv, pos_x[i] + dir_x * probe, pos_z[i] + dir_z * probe)
+		mult = 1.0 - slope_at_45 * clampf(rad_to_deg(atan2(h1 - h0, probe)) / slope_deg_max, -1.0, 1.0)
+		if mult < 0.05:
+			mult = 0.05
+	var target := base_speed * mult * catch
+	var ai: int = army[i]
+	if ai >= 0 and ai < armies.size():
+		var fc = armies[ai]
+		if fc.double_time and fc.tiredness > -Formation.double_time_tired_max:
+			target += Formation.double_time_speed
+	_cruise[i] = Formation.approach_cruise(_cruise[i], target, dt)
+	return minf(dist_cap, _cruise[i] * dt)
+
+func slope_between(from: Vector2, to: Vector2) -> float:
+	var dx := to.x - from.x
+	var dz := to.y - from.y
+	var run := sqrt(dx * dx + dz * dz)
+	if run <= 0.0001 or _hg_cols < 2:
+		return 1.0
+	return slope_speed_multiplier(height_at(to.x, to.y) - height_at(from.x, from.y), run)
+
+static func range_mult_for_gap(gap: float) -> float:
+	_ensure_rules()
+	return 1.0 + _range_height_bonus_max * clampf(gap / _max_height_bonus_height, -1.0, 1.0)
+
+## Weapon reach from shooter to a target point. Positive gap (shooter higher) lengthens it.
+func ranged_reach(x0: float, z0: float, x1: float, z1: float, base_range: float) -> float:
+	return base_range * range_mult_for_gap(height_at(x0, z0) - height_at(x1, z1))
+
+## Reach along a direction, sampling the ground twice because the landing point depends on the distance.
+func ranged_reach_along(x: float, z: float, angle: float, base_range: float) -> float:
+	var dist := base_range
+	var h0 := height_at(x, z)
+	var c := cos(angle)
+	var s := sin(angle)
+	for _step in 2:
+		dist = base_range * range_mult_for_gap(h0 - height_at(x + c * dist, z + s * dist))
+	return dist
+
+func _max_ranged_reach(base_range: float) -> float:
+	if _hg_cols < 2:
+		return base_range
+	_ensure_rules()
+	return base_range * (1.0 + _range_height_bonus_max)
 
 static func pursuit_for_type(t: int) -> float:
 	match t:
@@ -254,6 +397,8 @@ static func pursuit_for_type(t: int) -> float:
 func add_army(fc) -> int:
 	fc.index = armies.size()
 	fc._pathfinder = _find_path
+	if _hg_cols >= 2 and _hg_rows >= 2:
+		fc.slope_scale = Callable(self, "slope_between")
 	armies.append(fc)
 	_army_alive.resize(armies.size())
 	_army_fighting.resize(armies.size())
@@ -291,6 +436,9 @@ func ensure_capacity(n: int) -> void:
 	_contacts.resize(n * CONTACT_SLOTS)
 	_march_i.resize(n)
 	_march_deploy.resize(n)
+	_travel_speed.resize(n)
+	_charge_cd.resize(n)
+	_cruise.resize(n)
 	while _reversal_ticks.size() < n:
 		_reversal_ticks.append([])
 	for i in range(old, n):
@@ -775,6 +923,19 @@ func _step_formations(dt: float) -> void:
 		if a.slots_dirty or moved or marching:
 			_assign_slots(a)
 			a.slots_dirty = false
+		_step_double_time(a, dt, moved)
+
+## Double time tires the army only while the anchor actually moved. Standing still rests,
+## including when the order is still on. At -max the order turns itself off.
+func _step_double_time(a, dt: float, moved: bool) -> void:
+	var cap: float = Formation.double_time_tired_max
+	var rate: float = cap / Formation.double_time_tired_seconds
+	if a.double_time and moved:
+		a.tiredness = maxf(-cap, a.tiredness - rate * dt)
+		if a.tiredness <= -cap:
+			a.double_time = false
+	elif a.tiredness < 0.0:
+		a.tiredness = minf(0.0, a.tiredness + rate * dt)
 
 func _attack_order_target_xz(a) -> Vector2:
 	if a.order_target_unit >= 0:
@@ -956,6 +1117,14 @@ func _step_units(dt: float) -> void:
 	var wk_rows := _wk_rows
 	var wk_inv := _wk_inv_step
 	var has_wk := wk_cols > 0
+	var hg := _hg
+	var hg_cols := _hg_cols
+	var hg_rows := _hg_rows
+	var hg_inv := _hg_inv
+	var has_hg := hg_cols >= 2 and hg_rows >= 2
+	_ensure_rules()
+	var slope_at_45 := _slope_speed_at_45
+	var slope_deg_max := _max_slope_deg
 	var mw := map_w
 	var mh := map_h
 	var tk := tick
@@ -969,6 +1138,8 @@ func _step_units(dt: float) -> void:
 		var f: int = flg_arr[i]
 		if (f & F_ALIVE) == 0:
 			continue
+		if _charge_cd[i] > 0.0:
+			_charge_cd[i] = maxf(0.0, _charge_cd[i] - dt)
 		alive_count += 1
 		var ai: int = army_arr[i]
 		var offensive := false
@@ -993,10 +1164,11 @@ func _step_units(dt: float) -> void:
 		var acq: float = rng
 		if offensive and (f & F_RANGED) == 0:
 			acq = maxf(rng, MELEE_ACQUIRE_RADIUS)
+		var ranged := (f & F_RANGED) != 0
 		if t >= 0:
 			if (flg_arr[t] & F_ALIVE) == 0:
 				t = -1
-			else:
+			elif not ranged:
 				var tdx: float = px_arr[t] - x
 				var tdz: float = pz_arr[t] - z
 				if tdx * tdx + tdz * tdz > acq * acq * 1.21:
@@ -1005,13 +1177,21 @@ func _step_units(dt: float) -> void:
 			if t < 0 or attack_order:
 				# Wide scans (ranged, or melee acquisition radius) cover many cells; do them
 				# half as often and use the cheap weapon-range scan in between.
+				# Ranged search uses the longest downhill reach; the check below drops anyone
+				# the slope does not actually let them shoot.
 				var wide: bool = ((tk >> 2) & 1) == (i & 1)
 				var fc = armies[ai] if ai >= 0 else null
-				if (f & F_RANGED) != 0:
+				if ranged:
 					if wide:
-						t = _scan_target(i, fc, rng)
+						t = _scan_target(i, fc, _max_ranged_reach(rng))
 				else:
 					t = _scan_target(i, fc, acq if wide else rng)
+		if ranged and t >= 0 and (flg_arr[t] & F_ALIVE) != 0:
+			var keep := ranged_reach(x, z, px_arr[t], pz_arr[t], rng)
+			var kdx: float = px_arr[t] - x
+			var kdz: float = pz_arr[t] - z
+			if kdx * kdx + kdz * kdz > keep * keep * 1.21:
+				t = -1
 		tgt_arr[i] = t
 		var in_combat := t >= 0
 		if in_combat:
@@ -1028,6 +1208,7 @@ func _step_units(dt: float) -> void:
 				var idz: float = gz_arr[i] - z
 				if idx * idx + idz * idz <= STEER_DEADZONE * STEER_DEADZONE and cx_arr[i] == 0.0 and cz_arr[i] == 0.0:
 					f &= ~F_MOVING
+					_cruise[i] = 0.0
 					if f != flg_arr[i]:
 						dirty[i] = tk
 						flg_arr[i] = f
@@ -1040,7 +1221,11 @@ func _step_units(dt: float) -> void:
 		if in_combat and at <= 0.0:
 			var tdx2: float = px_arr[t] - x
 			var tdz2: float = pz_arr[t] - z
-			if tdx2 * tdx2 + tdz2 * tdz2 <= rng * rng:
+			var reach2 := rng * rng
+			if (f & F_RANGED) != 0:
+				var rr := ranged_reach(x, z, px_arr[t], pz_arr[t], rng)
+				reach2 = rr * rr
+			if tdx2 * tdx2 + tdz2 * tdz2 <= reach2:
 				at = 1.0
 				_perform_attack(i, t)
 		atk_t[i] = at
@@ -1054,9 +1239,12 @@ func _step_units(dt: float) -> void:
 			var td := sqrt(tdx3 * tdx3 + tdz3 * tdz3)
 			var reach := rng * 0.85
 			if td > reach:
-				var stp2 := minf(td - reach, step_len)
-				nx = x + tdx3 / td * stp2
-				nz = z + tdz3 / td * stp2
+				var inv_td := 1.0 / td
+				var stp2 := _cruise_step(i, tdx3 * inv_td, tdz3 * inv_td, td - reach, spd, 1.0, dt, hg, hg_cols, hg_rows, hg_inv, has_hg, slope_at_45, slope_deg_max)
+				nx = x + tdx3 * inv_td * stp2
+				nz = z + tdz3 * inv_td * stp2
+			else:
+				_cruise[i] = 0.0
 			if tdx3 > 0.5:
 				f |= F_FACING_RIGHT
 			elif tdx3 < -0.5:
@@ -1096,21 +1284,21 @@ func _step_units(dt: float) -> void:
 			var dead: float = MARCH_DEADZONE if army_moving else STEER_DEADZONE
 			if d2s > dead * dead:
 				var d := sqrt(d2s)
-				var stp := step_len
+				var catch := 1.0
 				if army_moving:
-					# Rigid march: a soldier in its slot follows the anchor exactly (the slot
-					# advances one anchor step per tick and the step is clamped to `d`, so it
-					# lands on the slot and locks); a soldier behind its slot runs at
-					# CATCH_UP_SPEED until it does. Beyond CATCH_UP_DIST it counts as a
-					# straggler and slows the block (cohesion).
-					stp *= Formation.CATCH_UP_SPEED
+					# The anchor eases up the same way, so a soldier in its slot matches it.
+					# One behind the slot aims at CATCH_UP_SPEED and still eases there.
+					# Beyond CATCH_UP_DIST it counts as a straggler and slows the block.
+					catch = Formation.CATCH_UP_SPEED
 					if far2 > catch_up_d2 and ai >= 0:
 						a_strag[ai] += 1
-				if stp > d:
-					stp = d
-				var inv := stp / d
-				nx = x + dx * inv
-				nz = z + dz * inv
+				var inv_d := 1.0 / d
+				var stp := _cruise_step(i, dx * inv_d, dz * inv_d, d, spd, catch, dt, hg, hg_cols, hg_rows, hg_inv, has_hg, slope_at_45, slope_deg_max)
+				nx = x + dx * inv_d * stp
+				nz = z + dz * inv_d * stp
+			else:
+				_cruise[i] = 0.0
+			if d2s > dead * dead:
 				if dx > 0.05 * step_len:
 					f |= F_FACING_RIGHT
 				elif dx < -0.05 * step_len:
@@ -1366,7 +1554,8 @@ func _step_units(dt: float) -> void:
 			pz_arr[i] = nz
 		var mdx := nx - x
 		var mdz := nz - z
-		var min_disp := step_len * 0.15
+		_travel_speed[i] = sqrt(mdx * mdx + mdz * mdz) / dt
+		var min_disp := maxf(_cruise[i] * dt * 0.15, 0.01)
 		if mdx * mdx + mdz * mdz > min_disp * min_disp:
 			f |= F_MOVING
 			dirty[i] = tk
@@ -1462,7 +1651,10 @@ func _update_enemy_near(a) -> void:
 		maxx = maxf(maxx, x)
 		minz = minf(minz, z)
 		maxz = maxf(maxz, z)
-		reach = maxf(reach, attack_range[id])
+		var rch: float = attack_range[id]
+		if (f & F_RANGED) != 0:
+			rch = _max_ranged_reach(rch)
+		reach = maxf(reach, rch)
 		my_neutral = (f & F_NEUTRAL) != 0
 	if minx == INF:
 		_army_enemy_near[ix] = 0
@@ -1507,7 +1699,18 @@ func _perform_attack(i: int, t: int) -> void:
 	combat_hits += 1
 	if not is_authority:
 		return
-	var dmg := maxf(1.0, attack[i] - defense[t]) * damage_multiplier
+	_ensure_rules()
+	var atk := attack[i]
+	if utype[i] == UnitType.SPEARMAN and (flags[t] & F_HORSE) != 0:
+		atk += _spear_vs_horse_attack
+	if utype[i] == UnitType.KNIGHT and (flags[t] & F_HORSE) == 0 and utype[t] != UnitType.SPEARMAN:
+		atk += _knight_vs_unmounted_attack
+	if utype[i] == UnitType.KNIGHT and _charge_cd[i] <= 0.0 and _travel_speed[i] >= speed[i] * _knight_charge_min_speed_ratio:
+		atk += _knight_charge_attack
+		_charge_cd[i] = _knight_charge_cooldown
+	if height_at(pos_x[i], pos_z[i]) - height_at(pos_x[t], pos_z[t]) > 0.0:
+		atk += _height_attack
+	var dmg := maxf(1.0, atk - defense[t]) * damage_multiplier
 	if (flags[i] & F_RANGED) != 0:
 		var dx: float = pos_x[t] - pos_x[i]
 		var dz: float = pos_z[t] - pos_z[i]
