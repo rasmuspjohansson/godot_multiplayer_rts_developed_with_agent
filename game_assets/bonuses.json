@@ -1,0 +1,16 @@
+{
+  "spear_vs_horse_attack": 1,
+  "knight_vs_unmounted_attack": 2,
+  "knight_charge_attack": 30,
+  "knight_charge_cooldown": 2,
+  "knight_charge_min_speed_ratio": 1.1,
+  "height_attack": 1,
+  "speed_ramp_seconds": 2,
+  "double_time_speed": 5,
+  "double_time_tired_max": 8,
+  "double_time_tired_seconds": 5,
+  "slope_speed_at_45_deg": 0.25,
+  "max_slope_deg": 45,
+  "range_height_bonus_max": 0.5,
+  "max_height_bonus_height": 20
+}

@@ -1,0 +1,68 @@
+{
+  "spearman": {
+    "hp": 100,
+    "attack": 13,
+    "defense": 2,
+    "range": 30,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "knight": {
+    "hp": 200,
+    "attack": 10,
+    "defense": 2,
+    "range": 22,
+    "speed": 23.333333333333332,
+    "radius": 6.5,
+    "half_height": 14,
+    "ranged": false,
+    "horse": true
+  },
+  "bowman": {
+    "hp": 100,
+    "attack": 6,
+    "defense": 2,
+    "range": 120,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": true,
+    "horse": false
+  },
+  "bauer_horse_archer": {
+    "hp": 200,
+    "attack": 6,
+    "defense": 2,
+    "range": 120,
+    "speed": 23.333333333333332,
+    "radius": 6.5,
+    "half_height": 14,
+    "ranged": true,
+    "horse": true
+  },
+  "clubman": {
+    "hp": 100,
+    "attack": 8,
+    "defense": 2,
+    "range": 22,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "dragon": {
+    "hp": 600,
+    "attack": 56,
+    "defense": 10,
+    "range": 106,
+    "speed": 15,
+    "radius": 54,
+    "half_height": 99,
+    "ranged": false,
+    "horse": false
+  }
+}
