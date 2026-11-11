@@ -65,6 +65,9 @@ const ENEMY_NEAR_MARGIN := 40.0
 const ENEMY_NEAR_PERIOD := 10
 const RANGED_PURSUIT := 40.0
 const CAVALRY_PURSUIT := 100.0
+## Once a ranged army is walking away from melee, keep going until every soldier is this far
+## past the attacker's weapon reach, so the block does not step straight back into the swing.
+const MELEE_FLEE_CLEAR := 12.0
 const NEUTRAL_OWNER := 0
 const MAP_MARGIN := 200.0
 ## Fail if a living unit reverses its step direction more than this many times
@@ -203,6 +206,16 @@ var _army_dir_z := PackedFloat32Array()
 var _army_offensive := PackedByteArray()
 var _army_attack_order := PackedByteArray()
 var _army_enemy_near := PackedByteArray()
+## Ranged army walking away from non-ranged attackers. Set at the end of _step_units and
+## applied on the next _step_formations. Direction is the summed away-vector, normalised.
+var _army_melee_flee := PackedByteArray()
+var _army_was_fleeing := PackedByteArray()
+var _army_flee_x := PackedFloat32Array()
+var _army_flee_z := PackedFloat32Array()
+var _army_flee_acc_x := PackedFloat32Array()
+var _army_flee_acc_z := PackedFloat32Array()
+var _army_flee_want := PackedByteArray()
+var _army_flee_near := PackedByteArray()
 ## Per-soldier index into the army path. Only moves forward, and restarts when march_seq changes.
 var _march_i := PackedInt32Array()
 ## 1 once a soldier has entered the last stretch, so a wide slot cannot pull them back onto the path.
@@ -410,6 +423,14 @@ func add_army(fc) -> int:
 	_army_attack_order.resize(armies.size())
 	_army_enemy_near.resize(armies.size())
 	_army_enemy_near[fc.index] = 1
+	_army_melee_flee.resize(armies.size())
+	_army_was_fleeing.resize(armies.size())
+	_army_flee_x.resize(armies.size())
+	_army_flee_z.resize(armies.size())
+	_army_flee_acc_x.resize(armies.size())
+	_army_flee_acc_z.resize(armies.size())
+	_army_flee_want.resize(armies.size())
+	_army_flee_near.resize(armies.size())
 	_army_march_seen.resize(armies.size())
 	return fc.index
 
@@ -860,12 +881,25 @@ func _step_formations(dt: float) -> void:
 			or a.order_type == Formation.OrderType.ATTACK_MOVE
 			or a.stance == Formation.Stance.AGGRESSIVE
 		) else 0
+		var fleeing := ix < _army_melee_flee.size() and _army_melee_flee[ix] != 0
+		var was_fleeing := ix < _army_was_fleeing.size() and _army_was_fleeing[ix] != 0
+		a.melee_fleeing = fleeing
 		if a.is_routed or a.members.is_empty():
+			a.melee_fleeing = false
+			if ix < _army_was_fleeing.size():
+				_army_was_fleeing[ix] = 0
 			continue
 		var alive: int = _army_alive[a.index]
 		var fighting: int = _army_fighting[a.index]
 		var contact := 0.0 if alive == 0 else float(fighting) / float(alive)
-		if a.order_type == Formation.OrderType.ATTACK:
+		# The order is kept. Fleeing only steps the anchor off the path; when contact breaks
+		# the same destination is pathed again from where the army now stands.
+		if was_fleeing and not fleeing:
+			if a.order_type == Formation.OrderType.MOVE or a.order_type == Formation.OrderType.ATTACK_MOVE:
+				a.rebuild_current_path()
+			elif a.order_type == Formation.OrderType.ATTACK:
+				a._target_eval_t = Formation.TARGET_REEVAL_SEC
+		if a.order_type == Formation.OrderType.ATTACK and not fleeing:
 			var tgt := _attack_order_target_xz(a)
 			if tgt.x == INF:
 				a.clear_order()
@@ -902,11 +936,20 @@ func _step_formations(dt: float) -> void:
 				ac = Vector2.ZERO
 			a.anchor_corr = ac
 			a.slots_dirty = true
-		var moved: bool = a.advance_anchor(dt, contact, cohesion)
-		_army_moving[ix] = 1 if a.moving else 0
+		var moved: bool
+		if fleeing:
+			moved = _retreat_anchor(a, dt, _army_flee_x[ix], _army_flee_z[ix])
+		else:
+			moved = a.advance_anchor(dt, contact, cohesion)
+		if ix < _army_was_fleeing.size():
+			_army_was_fleeing[ix] = 1 if fleeing else 0
+		_army_moving[ix] = 1 if a.moving or fleeing else 0
 		_army_dir_x[ix] = 0.0
 		_army_dir_z[ix] = 0.0
-		if a.moving and a.path_i < a.path.size():
+		if fleeing:
+			_army_dir_x[ix] = _army_flee_x[ix]
+			_army_dir_z[ix] = _army_flee_z[ix]
+		elif a.moving and a.path_i < a.path.size():
 			var hd: Vector2 = a.path[a.path_i] - a.anchor
 			if hd.length_squared() > 1e-6:
 				hd = hd.normalized()
@@ -919,11 +962,48 @@ func _step_formations(dt: float) -> void:
 			repack_requests.append(ix)
 		# Attack slots follow the anchor. A player march refreshes path goals every tick,
 		# because each soldier's cursor advances on its own.
-		var marching: bool = player_march and a.moving and not a.path.is_empty()
+		var marching: bool = player_march and a.moving and not a.path.is_empty() and not fleeing
 		if a.slots_dirty or moved or marching:
 			_assign_slots(a)
 			a.slots_dirty = false
 		_step_double_time(a, dt, moved)
+
+## Walk the anchor directly away from melee attackers. The player's order is left in place.
+func _retreat_anchor(a, dt: float, dir_x: float, dir_z: float) -> bool:
+	var len2 := dir_x * dir_x + dir_z * dir_z
+	if len2 < 1e-6:
+		a.cruise_speed = Formation.approach_cruise(a.cruise_speed, 0.0, dt)
+		return false
+	var inv: float = 1.0 / sqrt(len2)
+	dir_x *= inv
+	dir_z *= inv
+	var target: float = a.anchor_speed
+	if a.double_time and a.tiredness > -Formation.double_time_tired_max:
+		target += Formation.double_time_speed
+	if a.slope_scale.is_valid():
+		var probe: float = maxf(a.anchor_speed * dt, 0.05)
+		var mult: float = float(a.slope_scale.call(a.anchor, a.anchor + Vector2(dir_x, dir_z) * probe))
+		if mult < 0.05:
+			mult = 0.05
+		target *= mult
+	a.cruise_speed = Formation.approach_cruise(a.cruise_speed, target, dt)
+	var step: float = a.cruise_speed * dt
+	var nx: float = a.anchor.x + dir_x * step
+	var nz: float = a.anchor.y + dir_z * step
+	if not is_walkable(nx, nz):
+		if is_walkable(nx, a.anchor.y):
+			nz = a.anchor.y
+		elif is_walkable(a.anchor.x, nz):
+			nx = a.anchor.x
+		else:
+			return false
+	if absf(nx - a.anchor.x) < 1e-6 and absf(nz - a.anchor.y) < 1e-6:
+		return false
+	var delta := Vector2(nx - a.anchor.x, nz - a.anchor.y)
+	a.anchor = Vector2(nx, nz)
+	a.hold_position += delta
+	a.slots_dirty = true
+	return true
 
 ## Double time tires the army only while the anchor actually moved. Standing still rests,
 ## including when the order is still on. At -max the order turns itself off.
@@ -955,7 +1035,7 @@ func _assign_slots(a) -> void:
 	var members: PackedInt32Array = a.members
 	var slots: PackedInt32Array = a.slot_index
 	var last: int = offs.size() - 1
-	var marching: bool = (a.order_type == Formation.OrderType.MOVE or a.order_type == Formation.OrderType.ATTACK_MOVE) and a.moving and not a.path.is_empty()
+	var marching: bool = not a.melee_fleeing and (a.order_type == Formation.OrderType.MOVE or a.order_type == Formation.OrderType.ATTACK_MOVE) and a.moving and not a.path.is_empty()
 	if marching and a.index >= 0 and a.index < _army_march_seen.size() and _army_march_seen[a.index] != a.march_seq:
 		_army_march_seen[a.index] = a.march_seq
 		for id in members:
@@ -1075,6 +1155,10 @@ func _step_units(dt: float) -> void:
 	_army_alive.fill(0)
 	_army_fighting.fill(0)
 	_army_straggling.fill(0)
+	_army_flee_acc_x.fill(0.0)
+	_army_flee_acc_z.fill(0.0)
+	_army_flee_want.fill(0)
+	_army_flee_near.fill(0)
 	alive_count = 0
 	var paths_this_tick := 0
 	var phase := tick % COMBAT_SCAN_PHASES
@@ -1194,6 +1278,31 @@ func _step_units(dt: float) -> void:
 				t = -1
 		tgt_arr[i] = t
 		var in_combat := t >= 0
+		# A ranged soldier inside a non-ranged enemy's weapon reach cannot shoot. The army
+		# keeps walking away until everyone is clear of that reach (see MELEE_FLEE_CLEAR).
+		var melee_id := -1
+		var in_swing := false
+		if ranged:
+			melee_id = _nearest_melee_attacker(i)
+			if melee_id >= 0:
+				var mdx0: float = x - px_arr[melee_id]
+				var mdz0: float = z - pz_arr[melee_id]
+				var md2 := mdx0 * mdx0 + mdz0 * mdz0
+				var mreach: float = rng_arr[melee_id]
+				in_swing = md2 <= mreach * mreach
+				var keep_flee := in_swing or (ai >= 0 and _army_melee_flee[ai] != 0)
+				if not keep_flee:
+					melee_id = -1
+				elif ai >= 0:
+					_army_flee_near[ai] = 1
+					if in_swing:
+						_army_flee_want[ai] = 1
+					var md := sqrt(md2)
+					if md > 0.001:
+						_army_flee_acc_x[ai] += mdx0 / md
+						_army_flee_acc_z[ai] += mdz0 / md
+					else:
+						_army_flee_acc_x[ai] += 1.0 if (i & 1) == 0 else -1.0
 		if in_combat:
 			f |= F_IN_COMBAT
 			if ai >= 0:
@@ -1203,7 +1312,8 @@ func _step_units(dt: float) -> void:
 			# Idle fast path: standing in its slot with no target, no pending correction and a
 			# parked formation. Only every 4th tick runs the full separation/steering pass so
 			# neighbours can still push it; the rest of the time it costs a handful of ops.
-			if ((tk + i) & 3) != 0 and not army_moving and has_path[i] == 0:
+			# A ranged soldier in a melee swing still has to walk away, so this path is skipped.
+			if not in_swing and ((tk + i) & 3) != 0 and not army_moving and has_path[i] == 0:
 				var idx: float = gx_arr[i] - x
 				var idz: float = gz_arr[i] - z
 				if idx * idx + idz * idz <= STEER_DEADZONE * STEER_DEADZONE and cx_arr[i] == 0.0 and cz_arr[i] == 0.0:
@@ -1218,7 +1328,9 @@ func _step_units(dt: float) -> void:
 
 		# --- attack on cooldown ---
 		var at: float = atk_t[i] - dt
-		if in_combat and at <= 0.0:
+		if in_swing and at < 0.0:
+			at = 0.0
+		if in_combat and at <= 0.0 and not in_swing:
 			var tdx2: float = px_arr[t] - x
 			var tdz2: float = pz_arr[t] - z
 			var reach2 := rng * rng
@@ -1231,9 +1343,34 @@ func _step_units(dt: float) -> void:
 		atk_t[i] = at
 
 		# --- steering: melee closes on its target unless a normal MOVE is in progress ---
+		# Ranged soldiers already in a melee swing walk straight away when their slot does not.
 		var nx := x
 		var nz := z
-		if in_combat and (f & F_RANGED) == 0 and (offensive or not army_moving):
+		var flee_steer := false
+		var adx := 0.0
+		var adz := 0.0
+		if in_swing and melee_id >= 0:
+			adx = x - px_arr[melee_id]
+			adz = z - pz_arr[melee_id]
+			var gdx: float = gx_arr[i] - x
+			var gdz: float = gz_arr[i] - z
+			flee_steer = gdx * adx + gdz * adz <= 0.0
+		if flee_steer:
+			var ad2 := adx * adx + adz * adz
+			if ad2 < 0.0001:
+				adx = 1.0 if (i & 1) == 0 else -1.0
+				adz = 0.0
+				ad2 = 1.0
+			var inv_ad := 1.0 / sqrt(ad2)
+			var stp_f := _cruise_step(i, adx * inv_ad, adz * inv_ad, 10000.0, spd, 1.0, dt, hg, hg_cols, hg_rows, hg_inv, has_hg, slope_at_45, slope_deg_max)
+			nx = x + adx * inv_ad * stp_f
+			nz = z + adz * inv_ad * stp_f
+			if adx > 0.05 * step_len:
+				f |= F_FACING_RIGHT
+			elif adx < -0.05 * step_len:
+				f &= ~F_FACING_RIGHT
+			stuck_arr[i] = 0.0
+		elif in_combat and (f & F_RANGED) == 0 and (offensive or not army_moving):
 			var tdx3: float = px_arr[t] - x
 			var tdz3: float = pz_arr[t] - z
 			var td := sqrt(tdx3 * tdx3 + tdz3 * tdz3)
@@ -1564,6 +1701,70 @@ func _step_units(dt: float) -> void:
 		if f != flg_arr[i]:
 			dirty[i] = tk
 			flg_arr[i] = f
+	for ai in range(_army_melee_flee.size()):
+		var flee := _army_flee_want[ai] != 0 or (_army_melee_flee[ai] != 0 and _army_flee_near[ai] != 0)
+		_army_melee_flee[ai] = 1 if flee else 0
+		if not flee:
+			_army_flee_x[ai] = 0.0
+			_army_flee_z[ai] = 0.0
+			continue
+		var fx: float = _army_flee_acc_x[ai]
+		var fz: float = _army_flee_acc_z[ai]
+		var fl := sqrt(fx * fx + fz * fz)
+		if fl > 0.001:
+			_army_flee_x[ai] = fx / fl
+			_army_flee_z[ai] = fz / fl
+		else:
+			_army_flee_x[ai] = 0.0
+			_army_flee_z[ai] = 0.0
+
+## Nearest hostile non-ranged unit that can reach `i`, including the flee clear gap.
+## -1 when nobody is that close. Tie goes to the lower id.
+func _nearest_melee_attacker(i: int) -> int:
+	var x: float = pos_x[i]
+	var z: float = pos_z[i]
+	var my_owner: int = owner_pid[i]
+	var my_neutral: bool = (flags[i] & F_NEUTRAL) != 0
+	var rad := DRAGON_ATTACK_RANGE + MELEE_FLEE_CLEAR
+	var px := pos_x
+	var pz := pos_z
+	var own := owner_pid
+	var flg := flags
+	var rngs := attack_range
+	var cell_start: PackedInt32Array = hash._cell_start
+	var cell_items: PackedInt32Array = hash._cell_items
+	var hcols: int = hash.cols
+	var inv_cell: float = 1.0 / hash.cell_size
+	var cx0: int = maxi(int((x - rad) * inv_cell), 0)
+	var cx1: int = mini(int((x + rad) * inv_cell), hcols - 1)
+	var cz0: int = maxi(int((z - rad) * inv_cell), 0)
+	var cz1: int = mini(int((z + rad) * inv_cell), hash.rows - 1)
+	var best := -1
+	var best_d2 := INF
+	for czz in range(cz0, cz1 + 1):
+		var row_base: int = czz * hcols
+		for cxx in range(cx0, cx1 + 1):
+			var c: int = row_base + cxx
+			var kb: int = cell_start[c + 1]
+			for k in range(cell_start[c], kb):
+				var j: int = cell_items[k]
+				if j == i or own[j] == my_owner:
+					continue
+				var jf: int = flg[j]
+				if (jf & F_ALIVE) == 0 or (jf & F_RANGED) != 0:
+					continue
+				if my_neutral and (jf & F_NEUTRAL) != 0:
+					continue
+				var dx: float = px[j] - x
+				var dz: float = pz[j] - z
+				var d2 := dx * dx + dz * dz
+				var reach: float = rngs[j] + MELEE_FLEE_CLEAR
+				if d2 > reach * reach:
+					continue
+				if d2 < best_d2 or (d2 == best_d2 and (best < 0 or j < best)):
+					best_d2 = d2
+					best = j
+	return best
 
 func _scan_target(i: int, fc, acq: float = -1.0) -> int:
 	var stance: int = Formation.Stance.DEFENSIVE

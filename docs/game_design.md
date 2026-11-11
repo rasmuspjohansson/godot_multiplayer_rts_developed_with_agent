@@ -25,7 +25,7 @@ The equipment decides the type, checked in this order: Horse+Bow, Bow, Horse, Sp
 | Clubman | none | 100 | 8 | 2 | 22 | normal |
 | Dragon (neutral) | — | 600 | 56 | 10 | 106 | slow |
 
-Fast is 1.4× normal speed and slow is 0.9× (foot `100 × 2/3 / 6`, horse `140/6`, dragon `90/6`). Base stats live in [`game_assets/units.json`](../game_assets/units.json) and are loaded by `UnitSim.stats_for_type` / `speed_for_type`. Situational bonuses live in [`game_assets/bonuses.json`](../game_assets/bonuses.json). Ranged units can shoot while moving.
+Fast is 1.4× normal speed and slow is 0.9× (foot `100 × 2/3 / 6`, horse `140/6`, dragon `90/6`). Base stats live in [`game_assets/units.json`](../game_assets/units.json) and are loaded by `UnitSim.stats_for_type` / `speed_for_type`. Situational bonuses live in [`game_assets/bonuses.json`](../game_assets/bonuses.json). Ranged units can shoot while moving. A bowman or horse archer inside the weapon reach of a hostile non-ranged unit does not shoot. That army walks straight away from the attacker until every soldier is out of that reach, plus a gap of 12 units, and then resumes its current order. The order itself is not cancelled. Another ranged unit does not trigger this.
 
 Bonuses, all applied on top of the stored attack or speed:
 
@@ -64,7 +64,7 @@ Bonuses, all applied on top of the stored attack or speed:
 | **Space** | Toggle double time on the selected armies. |
 
 - A move or attack-move keeps one path for the army. Every soldier walks that path at their own speed, in a column about one spacing wide, and opens into the clicked grid or the dragged line when about 12 seconds of the path are left. Nobody waits for the formation to turn first.
-- Move orders are **not** cancelled when attacked.
+- Move orders are **not** cancelled when attacked. A bow or horse-archer army keeps the order, but while a non-ranged enemy is in weapon reach it walks away instead of following the path, then picks the order up again once it is clear.
 - Attack orders lock onto the commanded target.
 - Aggressive armies with no order are retargeted to the closest enemy army every second (`AGGRESSIVE_TICK_INTERVAL` in `World.gd`).
 
@@ -185,7 +185,8 @@ Example: bow.
 Default:
 - Prefer maintaining distance.
 - Can attack while moving if the weapon/system supports it.
-- On normal Move orders, prioritize reaching the destination.
+- While a non-ranged enemy is within its own weapon reach, do not shoot. The formation walks directly away from that attacker until every soldier is clear of the reach, then resumes the player's order.
+- On normal Move orders, prioritize reaching the destination once not in a melee swing.
 - On Attack-Move, engage enemies encountered.
 - Pursuit should be limited.
 
@@ -204,6 +205,7 @@ Default:
 - High mobility.
 - Can attack while moving.
 - Prefer maintaining distance.
+- While a non-ranged enemy is within its own weapon reach, do not shoot and walk away with the formation, the same as bow infantry. Resume the order once clear.
 - Limited pursuit is preferable to blindly entering melee.
 - Should be able to disengage and continue moving.
 
@@ -216,11 +218,11 @@ Default:
 | Sword infantry | Continue | Fight | Yes | No |
 | Spear infantry | Continue | Fight | Yes | No |
 | Club infantry | Continue | Fight | Yes | No |
-| Bow infantry | Continue | Shoot | Limited | Yes |
+| Bow infantry | Walk away from melee, then resume | Shoot | Limited | Yes, unless a non-ranged enemy is in reach |
 | Sword cavalry | Continue | Charge/fight | Yes | Usually no |
 | Spear cavalry | Continue | Charge/fight | Yes | Usually no |
 | Club cavalry | Continue | Charge/fight | Yes | Usually no |
-| Horse archer | Continue | Shoot | Limited | Yes |
+| Horse archer | Walk away from melee, then resume | Shoot | Limited | Yes, unless a non-ranged enemy is in reach |
 
 These are **default behaviours**, not absolute restrictions.
 
@@ -233,7 +235,7 @@ Player commands should normally have higher priority than autonomous combat reac
 #### Example: Move order
 
 ```text
-Player: Move unit to X
+Player: Move a melee unit to X
 Enemy: attacks unit
 
 Expected:
@@ -248,6 +250,18 @@ Enemy B: attacks unit
 
 Expected:
 Unit normally continues attacking A
+```
+
+#### Example: archer in melee
+
+```text
+Player: Move archers to X
+Spearman: walks into weapon reach
+
+Expected:
+Archers stop shooting and walk away from the spearman
+The move order is kept
+Once the spearman can no longer reach them, they follow the order again and may shoot
 ```
 
 #### Example: Attack-Move
@@ -972,6 +986,8 @@ An Attack-Move should allow it to:
 - stop/slow as necessary
 - fire
 - continue depending on its configured behaviour
+
+When a non-ranged enemy gets into weapon reach, that changes. The soldiers in reach do not fire, and the formation anchor walks directly away from the attacker until the whole army is clear (plus a short gap). Friendly slots stay with the anchor, so the block retreats together instead of scattering. The player's order is still stored and is followed again after the contact breaks.
 
 ---
 

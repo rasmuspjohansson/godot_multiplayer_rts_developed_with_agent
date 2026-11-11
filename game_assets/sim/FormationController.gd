@@ -74,6 +74,9 @@ var dest_direction: float = 0.0
 var march_seq: int = 0
 var moving: bool = false
 var paused_for_contact: bool = false
+## Set by UnitSim while this ranged army is walking away from non-ranged attackers.
+## Slot goals stay on the anchor instead of the march column for that time.
+var melee_fleeing: bool = false
 var anchor_speed: float = 10.0
 ## Speed the anchor is actually moving. Eases toward the slope-limited max; 0 when the move ends.
 var cruise_speed: float = 0.0
@@ -195,6 +198,16 @@ func clear_order() -> void:
 	moving = false
 	path = PackedVector2Array()
 	path_i = 0
+
+## After a melee flee, the anchor has left the old path. Rebuild a move from here to the
+## same destination so the order continues instead of pulling soldiers back along a stale path.
+func rebuild_current_path() -> void:
+	if order_type != OrderType.MOVE and order_type != OrderType.ATTACK_MOVE:
+		return
+	var d := dest
+	var face := dest_direction
+	path = PackedVector2Array()
+	_start_path_to(d, face)
 
 func end_drag_layout() -> void:
 	if leading_layout:

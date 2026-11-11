@@ -42,6 +42,7 @@ func _init():
 	_test_knight_bonuses()
 	_test_height_rules()
 	_test_combat_and_rout()
+	_test_archer_melee_flee()
 	_test_snapshot_roundtrip()
 	_test_budget()
 	if _fail == 0:
@@ -291,6 +292,63 @@ func _test_combat_and_rout() -> void:
 	_check(b.is_routed, "B not flagged routed")
 	_check(a.order_type == Formation.OrderType.NONE or sim._attack_order_target_xz(a).x == INF, "attack order still targets dead army")
 	print("TEST_UNIT_SIM_COMBAT: died=%d routed=%s a_alive=%d" % [died_total, routed, sim.army_alive_count(a)])
+
+func _park_army(sim, fc, x: float, z: float) -> void:
+	fc.set_rows(1)
+	fc.anchor = Vector2(x, z)
+	fc.clear_order()
+	sim._assign_slots(fc)
+	for id in fc.members:
+		sim.pos_x[id] = sim.goal_x[id]
+		sim.pos_z[id] = sim.goal_z[id]
+		sim.prev_x[id] = sim.pos_x[id]
+		sim.prev_z[id] = sim.pos_z[id]
+		sim._cruise[id] = 0.0
+
+## Bowmen do not shoot while a non-ranged enemy is in weapon reach, and the army walks
+## away until that enemy can no longer hit. Another archer does not trigger the flee.
+func _test_archer_melee_flee() -> void:
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var bows = _spawn_army(sim, "Bows", 1, 400.0, 300.0, 1, UnitSim.UnitType.BOWMAN, 0.0)
+	var spears = _spawn_army(sim, "Spears", 2, 420.0, 300.0, 1, UnitSim.UnitType.SPEARMAN, PI)
+	_park_army(sim, bows, 400.0, 300.0)
+	_park_army(sim, spears, 420.0, 300.0)
+	var bid: int = bows.members[0]
+	var sid: int = spears.members[0]
+	# Stand the spearman in place so the bowman has to open the gap himself.
+	sim.speed[sid] = 0.0
+	var spear_range: float = sim.attack_range[sid]
+	var start_x: float = sim.pos_x[bid]
+	var shots_in_reach := 0
+	var shot_when_clear := false
+	for _step in range(20 * 8):
+		var dist := Vector2(sim.pos_x[sid] - sim.pos_x[bid], sim.pos_z[sid] - sim.pos_z[bid]).length()
+		sim.step(UnitSim.SIM_DT)
+		if sim.arrows.size() > 0 and dist <= spear_range + 0.05:
+			shots_in_reach += 1
+		if sim.arrows.size() > 0 and dist > spear_range + 0.05:
+			shot_when_clear = true
+	_check(shots_in_reach == 0, "bowman shot while the spearman could reach him (%d)" % shots_in_reach)
+	_check(sim.pos_x[bid] < start_x - 15.0, "bowman did not walk away (x %.1f -> %.1f)" % [start_x, sim.pos_x[bid]])
+	_check(shot_when_clear, "bowman did not shoot after leaving spear range (dist %.1f)" % Vector2(sim.pos_x[sid] - sim.pos_x[bid], sim.pos_z[sid] - sim.pos_z[bid]).length())
+	var clear_dist := Vector2(sim.pos_x[sid] - sim.pos_x[bid], sim.pos_z[sid] - sim.pos_z[bid]).length()
+	_check(clear_dist > spear_range + UnitSim.MELEE_FLEE_CLEAR - 1.0, "bowman stopped inside the flee gap (dist %.1f)" % clear_dist)
+	# A ranged attacker does not suppress shooting and does not make the army walk off.
+	var sim2 = UnitSim.new()
+	sim2.setup(null, 1280.0, 720.0, true)
+	var a = _spawn_army(sim2, "A", 1, 400.0, 300.0, 1, UnitSim.UnitType.BOWMAN, 0.0)
+	var b = _spawn_army(sim2, "B", 2, 500.0, 300.0, 1, UnitSim.UnitType.BOWMAN, PI)
+	_park_army(sim2, a, 400.0, 300.0)
+	_park_army(sim2, b, 500.0, 300.0)
+	var ax0: float = sim2.pos_x[a.members[0]]
+	for _step in range(20 * 3):
+		sim2.step(UnitSim.SIM_DT)
+	_check(sim2.hp[b.members[0]] < sim2.max_hp[b.members[0]] - 1.0, "bowmen did not shoot each other")
+	_check(absf(sim2.pos_x[a.members[0]] - ax0) < 4.0, "bowman walked away from another bowman (dx %.1f)" % absf(sim2.pos_x[a.members[0]] - ax0))
+	print("TEST_UNIT_SIM_ARCHER_FLEE: bow_x %.1f clear_dist %.1f archer_duel_hp %.1f" % [
+		sim.pos_x[bid], clear_dist, sim2.hp[b.members[0]]
+	])
 
 func _test_budget() -> void:
 	var sim = UnitSim.new()
