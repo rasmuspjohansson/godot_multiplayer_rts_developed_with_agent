@@ -544,6 +544,81 @@ def cell_of(x, z, shape):
     return (min(cols - 1, max(0, int(round(x / STEP)))), min(rows - 1, max(0, int(round(z / STEP)))))
 
 
+CHEST_MIN_SEP = 150.0
+CHEST_LAKE_CLEAR = 80.0
+CHEST_COUNT = 8
+
+
+def place_chests(width, height, avoid, lakes, count=CHEST_COUNT, min_sep=CHEST_MIN_SEP, lake_clear=CHEST_LAKE_CLEAR):
+    """Eight chest points, each at least min_sep from starts, capture points, and other chests."""
+    width = float(width)
+    height = float(height)
+    obstacles = [(float(p[0]), float(p[1])) for p in avoid]
+    lake_pts = [(float(p[0]), float(p[1])) for p in lakes]
+    placed = []
+    for margin, step in ((100.0, 50.0), (60.0, 25.0), (40.0, 20.0)):
+        candidates = []
+        y = margin
+        while y <= height - margin:
+            x = margin
+            while x <= width - margin:
+                if _chest_clear(x, y, obstacles, lake_pts, min_sep, lake_clear):
+                    candidates.append((x, y))
+                x += step
+            y += step
+        placed = _pick_separated(candidates, obstacles, count, min_sep)
+        if len(placed) >= count:
+            break
+    if len(placed) < count:
+        raise RuntimeError(
+            "could only place %d/%d chests on %.0fx%.0f with separation %.0f" % (
+                len(placed), count, width, height, min_sep))
+    return [{"id": "chest_%d" % (i + 1), "x": round(x, 1), "y": round(y, 1)} for i, (x, y) in enumerate(placed)]
+
+
+def _chest_clear(x, y, obstacles, lakes, min_sep, lake_clear):
+    for ox, oy in obstacles:
+        if (x - ox) * (x - ox) + (y - oy) * (y - oy) < min_sep * min_sep:
+            return False
+    for lx, ly in lakes:
+        if (x - lx) * (x - lx) + (y - ly) * (y - ly) < lake_clear * lake_clear:
+            return False
+    return True
+
+
+def _pick_separated(candidates, obstacles, count, min_sep):
+    placed = []
+    unused = list(candidates)
+    need = min_sep * min_sep
+    for _ in range(count):
+        best_i = -1
+        best_score = -1.0
+        for i, (x, y) in enumerate(unused):
+            ok = True
+            score = 1e9
+            for px, py in placed:
+                d2 = (x - px) * (x - px) + (y - py) * (y - py)
+                if d2 < need:
+                    ok = False
+                    break
+                score = min(score, d2)
+            if not ok:
+                continue
+            if not placed:
+                score = 0.0
+                for ox, oy in obstacles:
+                    score = max(score, (x - ox) * (x - ox) + (y - oy) * (y - oy))
+                if not obstacles:
+                    score = (x - 0.0) * (x - 0.0)
+            if score > best_score:
+                best_score = score
+                best_i = i
+        if best_i < 0:
+            break
+        placed.append(unused.pop(best_i))
+    return placed
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
@@ -697,6 +772,13 @@ def main():
         },
         "vegetation": {"count": 0, "forest_clusters": 0},
         "capture_points": capture_points,
+        "chests": place_chests(
+            args.width,
+            args.height,
+            [(float(p["x"]), float(p["y"])) for p in capture_points]
+            + [(float(p[0]), float(p[1])) for _, p in starts],
+            [(float(s["x"]), float(s["y"])) for s in seeds],
+        ),
         "start_positions": [{"x": round(p[0], 1), "y": round(p[1], 1)} for _, p in starts],
         "player_starts": [
             {"slot": k, "corner": c, "armies": []} for k, (c, _) in enumerate(starts)

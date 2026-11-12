@@ -188,8 +188,8 @@ func _build_draft_panel() -> void:
 	_draft_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_draft_panel.offset_right = -10
 	_draft_panel.offset_bottom = -BAR_HEIGHT - 6
-	_draft_panel.offset_left = -240
-	_draft_panel.offset_top = -BAR_HEIGHT - 6 - 190
+	_draft_panel.offset_left = -280
+	_draft_panel.offset_top = -BAR_HEIGHT - 6 - 360
 	add_child(_draft_panel)
 
 ## Container World puts the draft controls into.

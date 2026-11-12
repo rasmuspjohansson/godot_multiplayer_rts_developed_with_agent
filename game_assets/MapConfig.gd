@@ -22,6 +22,7 @@ var height: float = _FALLBACK_HEIGHT
 var terrain_type: String = "flat"
 var terrain_features: Array = []
 var capture_points: Array = []
+var chests: Array = []
 var player_starts: Array = []
 var start_positions: Array = []
 var neutral_dragon: Dictionary = {}
@@ -167,6 +168,9 @@ func load_from_dict(parsed: Dictionary) -> void:
 	capture_points = parsed.get("capture_points", [])
 	if typeof(capture_points) != TYPE_ARRAY:
 		capture_points = []
+	chests = parsed.get("chests", [])
+	if typeof(chests) != TYPE_ARRAY:
+		chests = []
 	neutral_dragons = parsed.get("neutral_dragons", [])
 	if typeof(neutral_dragons) != TYPE_ARRAY:
 		neutral_dragons = []
@@ -206,6 +210,7 @@ func to_dict() -> Dictionary:
 		out["size"] = {"width": width, "height": height}
 		out["terrain"] = {"type": terrain_type, "features": terrain_features}
 		out["capture_points"] = capture_points
+		out["chests"] = chests
 		out["player_starts"] = player_starts
 		out["start_positions"] = start_positions
 		out["lighting"] = lighting
@@ -224,6 +229,7 @@ func to_dict() -> Dictionary:
 		"size": {"width": width, "height": height},
 		"terrain": {"type": terrain_type, "features": terrain_features},
 		"capture_points": capture_points,
+		"chests": chests,
 		"player_starts": player_starts,
 		"start_positions": start_positions,
 		"lighting": lighting,

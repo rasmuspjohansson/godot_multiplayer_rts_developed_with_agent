@@ -40,6 +40,7 @@ func _init():
 	_test_double_time()
 	_test_spear_vs_horse()
 	_test_knight_bonuses()
+	_test_exact_recipes()
 	_test_height_rules()
 	_test_combat_and_rout()
 	_test_archer_melee_flee()
@@ -212,6 +213,34 @@ func _test_knight_bonuses() -> void:
 	print("TEST_UNIT_SIM_KNIGHT: foot=%.1f flat=%.1f charge=%.1f cooled=%.1f spear=%.1f horse=%.1f" % [
 		foot, flat, charged, cooled, vs_spear, vs_horse
 	])
+
+func _test_exact_recipes() -> void:
+	_check(UnitSim.unit_type_for_loadout(false, false, false) == UnitSim.UnitType.CLUBMAN, "no boxes is a clubman")
+	_check(UnitSim.unit_type_for_loadout(false, true, false) == UnitSim.UnitType.SPEARMAN, "spear only is a spearman")
+	_check(UnitSim.unit_type_for_loadout(true, false, false) == UnitSim.UnitType.KNIGHT, "horse only is a knight")
+	_check(UnitSim.unit_type_for_loadout(false, false, true) == UnitSim.UnitType.BOWMAN, "bow only is a bowman")
+	_check(UnitSim.unit_type_for_loadout(true, false, true) == UnitSim.UnitType.HORSE_ARCHER, "horse and bow is a horse archer")
+	_check(UnitSim.unit_type_for_loadout(false, false, false, true, true) == UnitSim.UnitType.ARMORED_SWORDSMAN, "sword and armour")
+	_check(UnitSim.unit_type_for_loadout(false, false, true, true) == UnitSim.UnitType.ARMORED_BOWMAN, "armour and bow")
+	_check(UnitSim.unit_type_for_loadout(true, false, false, false, false, true) == UnitSim.UnitType.KNIGHT_LONG_SPEAR, "horse and long spear")
+	_check(UnitSim.unit_type_for_loadout(false, false, false, true, true, false, true) < 0, "shield produces nothing")
+	_check(UnitSim.unit_type_for_loadout(true, true, false) < 0, "horse and spear produces nothing")
+	_check(UnitSim.unit_type_for_loadout(false, false, false, false, true) < 0, "sword alone produces nothing")
+	_check(UnitSim.unit_type_for_equipment(true, false, false) == UnitSim.UnitType.KNIGHT, "old horse spawn stays a knight")
+	var swordsman: Dictionary = UnitSim.stats_for_type(UnitSim.UnitType.ARMORED_SWORDSMAN)
+	var armoured_bow: Dictionary = UnitSim.stats_for_type(UnitSim.UnitType.ARMORED_BOWMAN)
+	var lance: Dictionary = UnitSim.stats_for_type(UnitSim.UnitType.KNIGHT_LONG_SPEAR)
+	_check(is_equal_approx(float(swordsman["defense"]), 4.0) and is_equal_approx(float(swordsman["attack"]), 13.0), "armored swordsman uses spearman stats with defense 4")
+	_check(is_equal_approx(float(armoured_bow["defense"]), 4.0) and is_equal_approx(float(armoured_bow["speed"]), 10.0), "armored bowman defense 4 and speed 10")
+	_check(is_equal_approx(float(lance["range"]), 30.0) and bool(lance["horse"]), "long spear knight range 30 and mounted")
+	var sim = UnitSim.new()
+	sim.setup(null, 1280.0, 720.0, true)
+	var attackers = _spawn_army(sim, "L", 1, 100.0, 100.0, 1, UnitSim.UnitType.KNIGHT_LONG_SPEAR, 0.0)
+	var horses = _spawn_army(sim, "H", 2, 200.0, 100.0, 1, UnitSim.UnitType.KNIGHT, PI)
+	var lid: int = attackers.members[0]
+	var hid: int = horses.members[0]
+	_check((sim.flags[lid] & UnitSim.F_HORSE) != 0, "long spear knight gets the horse flag")
+	_check(is_equal_approx(_hit_damage(sim, lid, hid), 11.0 - sim.defense[hid]), "long spear knight counts as a spear against horses")
 
 func _test_height_rules() -> void:
 	_check(is_equal_approx(UnitSim.speed_for_type(UnitSim.UnitType.SPEARMAN), 100.0 * 2.0 / 3.0 / 6.0), "foot speed drifted from units.json")

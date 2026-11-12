@@ -99,6 +99,10 @@ const CP_RESOURCE_BY_TYPE := {
 }
 ## Capture point billboard height in world units.
 const CP_SPRITE_WORLD_HEIGHT := 80.0
+const CHEST_PICKUP_RADIUS := 40.0
+const CHEST_LOOT_AMOUNT := 10
+const CHEST_SPRITE_WORLD_HEIGHT := 48.0
+const CHEST_TEXTURE_PATH := "res://images/background/treasure_chest.png"
 ## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
 const CAPTURE_SYNC_BATCH_SIZE := 6
 
@@ -110,6 +114,8 @@ var player_slot := {}  # pid -> int (index into MapConfig.start_positions)
 var army_index_per_player := {}
 ## Server-only capture sim: { id, type, x, y, owner_pid, resource_timer }
 var _server_captures: Array = []
+var _server_chests: Array = []
+var _chest_nodes: Dictionary = {}
 
 var _camera: Camera3D
 var _camera_pivot: Node3D
@@ -163,6 +169,7 @@ var _pending_client_orders: Array = []
 var _move_osc_logged := false
 var _show_unit_range: bool = false
 var _draft_size_spin: SpinBox = null
+var _draft_status: Label = null
 var _range_markers_3d: Node3D
 var _sun_azimuth_deg: float = 275.0
 var _sun_elevation_deg: float = 0.0
@@ -501,6 +508,7 @@ func _ready():
 		_set_player_sides()
 		_spawn_armies()
 		_spawn_capture_points()
+		_spawn_chests()
 	if not multiplayer.is_server():
 		_look_at_xz = _local_start_look_xz()
 		_setup_camera()
@@ -1982,6 +1990,22 @@ func _build_draft_controls(panel: PanelContainer) -> void:
 	bow_cb.name = "BowCheck"
 	bow_cb.text = "Bow"
 	vbox.add_child(bow_cb)
+	var armour_cb = CheckBox.new()
+	armour_cb.name = "ArmourCheck"
+	armour_cb.text = "Armour"
+	vbox.add_child(armour_cb)
+	var sword_cb = CheckBox.new()
+	sword_cb.name = "SwordCheck"
+	sword_cb.text = "Sword"
+	vbox.add_child(sword_cb)
+	var long_spear_cb = CheckBox.new()
+	long_spear_cb.name = "LongSpearCheck"
+	long_spear_cb.text = "Long spear"
+	vbox.add_child(long_spear_cb)
+	var shield_cb = CheckBox.new()
+	shield_cb.name = "ShieldCheck"
+	shield_cb.text = "Shield"
+	vbox.add_child(shield_cb)
 	var size_row := HBoxContainer.new()
 	var size_label := Label.new()
 	size_label.text = "Soldiers"
@@ -1997,22 +2021,24 @@ func _build_draft_controls(panel: PanelContainer) -> void:
 	var create_btn = Button.new()
 	create_btn.name = "CreateArmyBtn"
 	create_btn.text = "Create army"
-	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb, bow_cb))
+	create_btn.pressed.connect(_on_draft_create_pressed.bind(horse_cb, spear_cb, bow_cb, armour_cb, sword_cb, long_spear_cb, shield_cb))
 	vbox.add_child(create_btn)
+	_draft_status = Label.new()
+	_draft_status.name = "DraftStatus"
+	_draft_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_draft_status.custom_minimum_size = Vector2(240, 0)
+	vbox.add_child(_draft_status)
 
-func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox):
-	var use_horse = horse_cb.button_pressed
-	var use_spear = spear_cb.button_pressed
-	var use_bow = bow_cb.button_pressed
+func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox, armour_cb: CheckBox, sword_cb: CheckBox, long_spear_cb: CheckBox, shield_cb: CheckBox):
 	var count := DEFAULT_SOLDIERS_PER_ARMY
 	if _draft_size_spin != null:
 		count = int(_draft_size_spin.value)
-	_request_draft(use_horse, use_spear, use_bow, count)
-	if _selection_bar != null:
-		_selection_bar.hide_draft_panel()
+	if _draft_status != null:
+		_draft_status.text = ""
+	_request_draft(horse_cb.button_pressed, spear_cb.button_pressed, bow_cb.button_pressed, count, armour_cb.button_pressed, sword_cb.button_pressed, long_spear_cb.button_pressed, shield_cb.button_pressed)
 
-func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
-	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow, soldier_count)
+func _request_draft(use_horse: bool, use_spear: bool, use_bow: bool, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY, use_armour: bool = false, use_sword: bool = false, use_long_spear: bool = false, use_shield: bool = false):
+	rpc_id(1, "request_draft_army", use_horse, use_spear, use_bow, soldier_count, use_armour, use_sword, use_long_spear, use_shield)
 
 ## ---------------------------------------------------------------------------------------------
 ## Orders: formation-level, tiny and reliable, tick-scheduled. Client -> server request, server
@@ -2412,7 +2438,7 @@ func _server_rotate_army(aid: String, delta_angle: float):
 	_schedule_order(OrderKind.ROTATE, {"aid": aid, "delta": delta_angle})
 
 @rpc("any_peer", "reliable")
-func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY):
+func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY, use_armour: bool = false, use_sword: bool = false, use_long_spear: bool = false, use_shield: bool = false):
 	if not multiplayer.is_server() or game_over:
 		return
 	var sender_id = multiplayer.get_remote_sender_id()
@@ -2421,6 +2447,11 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	if sender_id not in GameState.players:
 		return
 	soldier_count = clampi(soldier_count, MIN_SOLDIERS_PER_ARMY, MAX_SOLDIERS_PER_ARMY)
+	var utype := _UnitSim.unit_type_for_loadout(use_horse, use_spear, use_bow, use_armour, use_sword, use_long_spear, use_shield)
+	if utype < 0:
+		print("TEST_DRAFT_FAIL: Player %d selection is not an exact recipe" % sender_id)
+		rpc_id(sender_id, "_client_draft_failed", "That selection is not a unit. Only an exact recipe produces soldiers.")
+		return
 	if not GameState.resources.has(sender_id):
 		GameState.resources[sender_id] = GameState.default_resources()
 	var res = GameState.resources[sender_id]
@@ -2430,18 +2461,28 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var need_horses = cost_units if use_horse else 0
 	var need_spears = cost_units if use_spear else 0
 	var need_bows = cost_units if use_bow else 0
-	if res.get("villagers", 0) < need_villagers \
-			or res.get("horses", 0) < need_horses \
-			or res.get("spears", 0) < need_spears \
-			or res.get("bows", 0) < need_bows:
-		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need vill=%d horse=%d spear=%d bow=%d)" % [
-			sender_id, need_villagers, need_horses, need_spears, need_bows
+	var need_armour = cost_units if use_armour else 0
+	var need_swords = cost_units if use_sword else 0
+	var need_long_spears = cost_units if use_long_spear else 0
+	if int(res.get("villagers", 0)) < need_villagers \
+			or int(res.get("horses", 0)) < need_horses \
+			or int(res.get("spears", 0)) < need_spears \
+			or int(res.get("bows", 0)) < need_bows \
+			or int(res.get("armour", 0)) < need_armour \
+			or int(res.get("sword", 0)) < need_swords \
+			or int(res.get("long_spear", 0)) < need_long_spears:
+		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need vill=%d horse=%d spear=%d bow=%d armour=%d sword=%d long_spear=%d)" % [
+			sender_id, need_villagers, need_horses, need_spears, need_bows, need_armour, need_swords, need_long_spears
 		])
+		rpc_id(sender_id, "_client_draft_failed", "Not enough resources.")
 		return
-	res["villagers"] -= need_villagers
-	res["horses"] -= need_horses
-	res["spears"] -= need_spears
-	res["bows"] -= need_bows
+	res["villagers"] = int(res.get("villagers", 0)) - need_villagers
+	res["horses"] = int(res.get("horses", 0)) - need_horses
+	res["spears"] = int(res.get("spears", 0)) - need_spears
+	res["bows"] = int(res.get("bows", 0)) - need_bows
+	res["armour"] = int(res.get("armour", 0)) - need_armour
+	res["sword"] = int(res.get("sword", 0)) - need_swords
+	res["long_spear"] = int(res.get("long_spear", 0)) - need_long_spears
 	var pid = sender_id
 	var pname = GameState.players[pid]["name"]
 	var idx = army_index_per_player.get(pid, 3)
@@ -2453,15 +2494,21 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var spawn_pos: Vector2 = edge.get("spawn", WEST_SPAWN)
 	var dir: float = float(edge.get("dir", 0.0))
 	var stop_pos: Vector2 = _onmap_entry_for(spawn_pos, str(edge.get("side", "west")))
-	var equipment = {"horse": use_horse, "spear": use_spear, "bow": use_bow, "soldiers": soldier_count}
+	var equipment = {
+		"horse": use_horse, "spear": use_spear, "bow": use_bow,
+		"armour": use_armour, "sword": use_sword, "long_spear": use_long_spear,
+		"soldiers": soldier_count,
+	}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)
+	if army == null:
+		return
 	armies.append(army)
 	# Spawn idle (reliable, ordered) and march via a normal scheduled order: the client has
 	# the army by the time the exec tick arrives, and both sims start the march on that tick.
 	rpc("_client_spawn_drafted_army", _serialize_one_army(army), _sim.tick)
 	_server_broadcast_move([aid], PackedFloat32Array([stop_pos.x, stop_pos.y]), PackedFloat32Array([dir]), PackedFloat32Array(), false)
 	_sync_capture_state()
-	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (horse=%s spear=%s bow=%s soldiers=%d)" % [aid, use_horse, use_spear, use_bow, soldier_count])
+	print("TEST_DRAFT_SUCCESS: Army '%s' drafted (type=%d horse=%s spear=%s bow=%s armour=%s sword=%s long_spear=%s soldiers=%d)" % [aid, utype, use_horse, use_spear, use_bow, use_armour, use_sword, use_long_spear, soldier_count])
 
 func _set_player_sides():
 	# Assign each player a start-position index by join order. Draft spawns off the
@@ -2828,9 +2875,16 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	var use_horse: bool = equipment.get("horse", false)
 	var use_spear: bool = equipment.get("spear", false)
 	var use_bow: bool = equipment.get("bow", false)
+	var use_armour: bool = equipment.get("armour", false)
+	var use_sword: bool = equipment.get("sword", false)
+	var use_long_spear: bool = equipment.get("long_spear", false)
+	var use_shield: bool = equipment.get("shield", false)
 	var is_dragon: bool = equipment.get("dragon", false)
 	var n: int = clampi(int(equipment.get("soldiers", DEFAULT_SOLDIERS_PER_ARMY)), 1, MAX_SOLDIERS_PER_ARMY)
-	var utype: int = _UnitSim.UnitType.DRAGON if is_dragon else _UnitSim.unit_type_for_equipment(use_horse, use_spear, use_bow)
+	var utype: int = _UnitSim.UnitType.DRAGON if is_dragon else _UnitSim.unit_type_for_loadout(use_horse, use_spear, use_bow, use_armour, use_sword, use_long_spear, use_shield)
+	if utype < 0:
+		push_error("Army '%s' equipment is not an exact recipe" % aid)
+		return null
 	var fc = _make_formation(aid, pid, pname, pos, dir, n, use_horse, use_spear, use_bow)
 	var first_id := _next_unit_id
 	_next_unit_id += n
@@ -2917,6 +2971,47 @@ func _spawn_capture_points():
 	print("TEST_CAPTURE_SPAWN: %d capture points spawned (%s)" % [_server_captures.size(), ", ".join(ids)])
 	rpc("_client_spawn_capture_points", _serialize_capture_points())
 
+func _spawn_chests() -> void:
+	_server_chests.clear()
+	for cfg in MapConfig.chests:
+		if typeof(cfg) != TYPE_DICTIONARY:
+			continue
+		_server_chests.append({
+			"id": str(cfg.get("id", "chest_%d" % _server_chests.size())),
+			"x": float(cfg.get("x", 0.0)),
+			"y": float(cfg.get("y", 0.0)),
+		})
+	print("TEST_CHEST_SPAWN: %d chests" % _server_chests.size())
+	rpc("_client_spawn_chests", _serialize_chests())
+
+func _serialize_chests() -> Array:
+	var data: Array = []
+	for c in _server_chests:
+		data.append({"id": c["id"], "x": c["x"], "y": c["y"]})
+	return data
+
+func _server_pickup_chests() -> void:
+	if _sim == null:
+		return
+	var i := _server_chests.size() - 1
+	while i >= 0:
+		var c: Dictionary = _server_chests[i]
+		var center := Vector2(float(c["x"]), float(c["y"]))
+		var uid: int = _sim.nearest_unit(center, CHEST_PICKUP_RADIUS, -1, true)
+		if uid >= 0:
+			var pid := int(_sim.owner_pid[uid])
+			if GameState.players.has(pid):
+				if not GameState.resources.has(pid):
+					GameState.resources[pid] = GameState.default_resources()
+				var keys: Array = GameState.RESOURCE_KEYS
+				var key: String = keys[randi() % keys.size()]
+				GameState.resources[pid][key] = int(GameState.resources[pid].get(key, 0)) + CHEST_LOOT_AMOUNT
+				print("TEST_CHEST_LOOT: %s gave %d %s to pid %d" % [c["id"], CHEST_LOOT_AMOUNT, key, pid])
+				_server_chests.remove_at(i)
+				rpc("_client_remove_chest", str(c["id"]))
+				_sync_capture_state()
+		i -= 1
+
 func _serialize_capture_points() -> Array:
 	var data := []
 	for c in _server_captures:
@@ -2939,11 +3034,9 @@ func _resource_dicts_equal(a: Dictionary, b: Dictionary) -> bool:
 		var rb = b[pid]
 		if not (ra is Dictionary) or not (rb is Dictionary):
 			return false
-		if int(ra.get("horses", 0)) != int(rb.get("horses", 0)) \
-				or int(ra.get("spears", 0)) != int(rb.get("spears", 0)) \
-				or int(ra.get("bows", 0)) != int(rb.get("bows", 0)) \
-				or int(ra.get("villagers", 0)) != int(rb.get("villagers", 0)):
-			return false
+		for key in GameState.RESOURCE_KEYS:
+			if int(ra.get(key, 0)) != int(rb.get(key, 0)):
+				return false
 	return true
 
 func _sync_capture_state():
@@ -3003,6 +3096,7 @@ func _get_closest_enemy_army(army) -> Node:
 func _server_capture_and_resources(delta: float):
 	if not multiplayer.is_server() or _sim == null:
 		return
+	_server_pickup_chests()
 	for c in _server_captures:
 		var nearby_pids := {}
 		var center = Vector2(c["x"], c["y"])
@@ -4087,6 +4181,56 @@ func _client_spawn_capture_points(data: Array):
 			_apply_fog_sprite(anchor.get_node("Sprite"), anchor.position.x, anchor.position.z, _capture_point_modulate(int(d.get("owner_pid", 0))))
 	print("TEST_CAPTURE_SPAWN: Client received %d capture points" % data.size())
 
+@rpc("authority", "reliable")
+func _client_spawn_chests(data: Array) -> void:
+	for d in data:
+		if typeof(d) != TYPE_DICTIONARY:
+			continue
+		var cid := str(d.get("id", ""))
+		if cid.is_empty() or _chest_nodes.has(cid):
+			continue
+		var anchor := _create_chest_sprite(d)
+		if anchor == null:
+			continue
+		add_child(anchor)
+		_chest_nodes[cid] = anchor
+	print("TEST_CHEST_SPAWN: Client received %d chests" % data.size())
+
+func _create_chest_sprite(d: Dictionary) -> Node3D:
+	var tex := _load_image_texture(CHEST_TEXTURE_PATH)
+	if tex == null:
+		push_error("Treasure chest texture missing")
+		return null
+	var anchor := Node3D.new()
+	var gx := float(d["x"])
+	var gz := float(d["y"])
+	anchor.position = Vector3(gx, get_ground_height_at(gx, gz), gz)
+	anchor.name = "Chest_%s" % d["id"]
+	var sprite := Sprite3D.new()
+	sprite.name = "Sprite"
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sprite.shaded = false
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	var tex_h := float(tex.get_height())
+	var pixel_size := CHEST_SPRITE_WORLD_HEIGHT / tex_h
+	sprite.pixel_size = pixel_size
+	sprite.position.y = tex_h * pixel_size * 0.5
+	anchor.add_child(sprite)
+	return anchor
+
+@rpc("authority", "reliable")
+func _client_remove_chest(chest_id: String) -> void:
+	var node: Node = _chest_nodes.get(chest_id, null)
+	if node != null and is_instance_valid(node):
+		node.queue_free()
+	_chest_nodes.erase(chest_id)
+
+@rpc("authority", "reliable")
+func _client_draft_failed(reason: String) -> void:
+	if _draft_status != null:
+		_draft_status.text = reason
+
 @rpc("authority", "unreliable")
 func _client_update_capture(cp_data: Array, res_data: Dictionary):
 	for d in cp_data:
@@ -4129,17 +4273,11 @@ func _update_topbar_local(cp_data: Array, res_data):
 		return
 	var my_pid = multiplayer.get_unique_id()
 	var cp_counts := _count_owned_cps_by_type(cp_data, my_pid)
-	var my_horses := 0
-	var my_spears := 0
-	var my_bows := 0
-	var my_villagers := 0
+	var my_res: Dictionary = {}
 	if res_data is Dictionary:
 		var res = res_data.get(my_pid, res_data.get(str(my_pid), null))
 		if res is Dictionary:
-			my_horses = res.get("horses", 0)
-			my_spears = res.get("spears", 0)
-			my_bows = res.get("bows", 0)
-			my_villagers = res.get("villagers", 0)
+			my_res = res
 	var player_name = GameState.local_player_name
 	if player_name == "":
 		player_name = "Unknown Player"
@@ -4153,10 +4291,7 @@ func _update_topbar_local(cp_data: Array, res_data):
 		cp_counts["Blacksmith"],
 		cp_counts["Village"],
 		cp_counts["Archery"],
-		my_horses,
-		my_spears,
-		my_bows,
-		my_villagers,
+		my_res,
 		player_name,
 		player_color,
 	)
@@ -4170,6 +4305,8 @@ func _client_spawn_drafted_army(army_data: Dictionary, server_tick: int = -1):
 	var army = _client_spawn_one_army(army_data, "")
 	if army == null:
 		return
+	if int(army_data.get("pid", -1)) == multiplayer.get_unique_id() and _selection_bar != null:
+		_selection_bar.hide_draft_panel()
 	print("TEST_DRAFT_SUCCESS: Client received drafted army '%s' (soldiers=%d)" % [army.army_id, army.soldier_count()])
 	_refresh_selection_bar()
 

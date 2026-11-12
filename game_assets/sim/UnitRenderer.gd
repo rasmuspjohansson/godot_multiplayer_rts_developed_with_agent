@@ -338,7 +338,7 @@ func _configure_sheet(g: Group, color: String, unit_type: String) -> void:
 	var base_h := FOOT_HEIGHT
 	if unit_type == "dragon":
 		base_h = DRAGON_HEIGHT / 3.0 # size_mul 9: three times the previous dragon sprite
-	elif unit_type in ["knight", "bauer_horse_archer"]:
+	elif unit_type in ["knight", "bauer_horse_archer", "knight_with_long_spear"]:
 		base_h = HORSE_HEIGHT
 	g.mat.set_shader_parameter("base_height", base_h)
 	g.mat.set_shader_parameter("anim_speed", _anim_speed)

@@ -46,6 +46,7 @@ run_test_map Valleys test_map_balance.gd
 run_test_map XL test_vegetation.gd
 run_test test_spatial_hash.gd
 run_test test_unit_sim.gd
+run_test test_chests.gd
 run_test test_move_sync.gd
 run_test test_facing_flip.gd
 run_test test_sim_determinism.gd

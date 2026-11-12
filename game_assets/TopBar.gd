@@ -2,6 +2,7 @@ extends CanvasLayer
 
 var label_left: Label = null
 var _player_label: Label = null
+var _resource_counts: Dictionary = {}
 var _menu_button: Button = null
 var _settings_panel: PanelContainer = null
 var _settings_vbox: VBoxContainer = null
@@ -23,7 +24,7 @@ func _ready() -> void:
 	label_left.name = "TopBarLabelLeft"
 	label_left.offset_left = 10
 	label_left.offset_top = 5
-	label_left.offset_right = 900
+	label_left.offset_right = 240
 	label_left.offset_bottom = 30
 	label_left.add_theme_font_size_override("font_size", 16)
 	label_left.add_theme_color_override("font_color", Color.WHITE)
@@ -75,8 +76,35 @@ func _ready() -> void:
 	_settings_vbox.add_theme_constant_override("separation", 8)
 	margin.add_child(_settings_vbox)
 
+	var res_box := HBoxContainer.new()
+	res_box.name = "ResourceRow"
+	res_box.offset_left = 250
+	res_box.offset_top = 4
+	res_box.offset_right = 980
+	res_box.offset_bottom = 32
+	res_box.add_theme_constant_override("separation", 8)
+	res_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(res_box)
+	for key in GameState.RESOURCE_KEYS:
+		var icon := TextureRect.new()
+		icon.name = "Icon_" + key
+		icon.custom_minimum_size = Vector2(24, 24)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.texture = _load_resource_icon(key)
+		icon.tooltip_text = key
+		res_box.add_child(icon)
+		var count := Label.new()
+		count.name = "Count_" + key
+		count.text = "0"
+		count.add_theme_font_size_override("font_size", 16)
+		count.add_theme_color_override("font_color", Color.WHITE)
+		res_box.add_child(count)
+		_resource_counts[key] = count
+
 	label_left.move_to_front()
 	right_box.move_to_front()
+	res_box.move_to_front()
 
 func settings_vbox() -> VBoxContainer:
 	return _settings_vbox
@@ -85,23 +113,27 @@ func _on_menu_pressed() -> void:
 	if _settings_panel != null:
 		_settings_panel.visible = not _settings_panel.visible
 
+func _load_resource_icon(key: String) -> Texture2D:
+	var path := "res://images/resources/%s.png" % key
+	var img := Image.new()
+	if img.load(path) == OK:
+		return ImageTexture.create_from_image(img)
+	return null
+
 func update_display(
 	stables_count: int,
 	blacksmith_count: int,
 	village_count: int,
 	archery_count: int,
-	horses: int,
-	spears: int,
-	bows: int,
-	villagers: int,
+	resources: Dictionary,
 	player_name: String,
 	player_color: Color = Color.WHITE,
 ) -> void:
 	if label_left:
-		label_left.text = (
-			"Stab:%d Blk:%d Vill:%d Arch:%d  H:%d S:%d B:%d V:%d"
-			% [stables_count, blacksmith_count, village_count, archery_count, horses, spears, bows, villagers]
-		)
+		label_left.text = "Stab:%d Blk:%d Vill:%d Arch:%d" % [stables_count, blacksmith_count, village_count, archery_count]
+	for key in _resource_counts:
+		var count: Label = _resource_counts[key]
+		count.text = str(int(resources.get(key, 0)))
 	if _player_label:
 		_player_label.text = "Player: %s" % player_name
 		_player_label.add_theme_color_override("font_color", player_color)

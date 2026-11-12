@@ -8,11 +8,18 @@ const PLAYER_COLORS: Array = [
 	Color.PURPLE
 ]
 
+const RESOURCE_KEYS: Array[String] = [
+	"villagers", "horses", "spears", "bows", "armour", "sword", "long_spear", "shield",
+]
 const STARTING_RESOURCES := {
 	"horses": 10,
 	"spears": 10,
 	"bows": 10,
 	"villagers": 10,
+	"armour": 0,
+	"sword": 0,
+	"long_spear": 0,
+	"shield": 0,
 }
 
 var players := {}

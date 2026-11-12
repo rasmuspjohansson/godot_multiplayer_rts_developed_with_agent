@@ -1,6 +1,7 @@
 extends RefCounted
 ## Paths and loaders for AI-generated sprite sheets and static spearman fallbacks.
 
+const UnitSim := preload("res://sim/UnitSim.gd")
 const TEAM_COLOR_FOLDERS: Array[String] = ["red", "blue", "green", "orange", "purple"]
 const AI_SPRITES_ROOT := "res://AI_generated_sprites"
 const STATIC_SPEARMAN_REL := "spearman/spearman.png"
@@ -19,21 +20,20 @@ static func color_folder_for_peer(peer_id: int) -> String:
 	return "blue"
 
 static func unit_type_for_equipment(has_horse: bool, has_spear: bool, has_bow: bool = false) -> String:
-	if has_horse and has_bow:
-		return "bauer_horse_archer"
-	if has_bow:
-		return "bowman"
-	if has_horse:
-		return "knight"
-	if has_spear:
-		return "spearman"
-	return "clubman"
+	var t := UnitSim.unit_type_for_equipment(has_horse, has_spear, has_bow)
+	return UnitSim.unit_type_name(t) if t >= 0 else "clubman"
 
 static func is_neutral_owner(peer_id: int) -> bool:
 	return peer_id == NEUTRAL_DRAGON_OWNER_ID
 
 static func ai_sprite_folder(color: String, unit_type: String, action: String) -> String:
-	return "%s/%s/%s/%s" % [AI_SPRITES_ROOT, color, unit_type, action]
+	var primary := "%s/%s/%s/%s" % [AI_SPRITES_ROOT, color, unit_type, action]
+	if FileAccess.file_exists(primary.path_join("spritesheet.png")):
+		return primary
+	var forge := "%s/blue_agent_sprite_forge/%s/%s" % [AI_SPRITES_ROOT, unit_type, action]
+	if FileAccess.file_exists(forge.path_join("spritesheet.png")):
+		return forge
+	return primary
 
 static func static_spearman_image_path(color: String) -> String:
 	return "res://images/%s/%s" % [color, STATIC_SPEARMAN_REL]

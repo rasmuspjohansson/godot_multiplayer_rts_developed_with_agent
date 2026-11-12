@@ -54,6 +54,39 @@
     "ranged": false,
     "horse": false
   },
+  "armored_swordsman": {
+    "hp": 100,
+    "attack": 13,
+    "defense": 4,
+    "range": 30,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "bowman_with_armour": {
+    "hp": 100,
+    "attack": 6,
+    "defense": 4,
+    "range": 120,
+    "speed": 10,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": true,
+    "horse": false
+  },
+  "knight_with_long_spear": {
+    "hp": 200,
+    "attack": 10,
+    "defense": 2,
+    "range": 30,
+    "speed": 23.333333333333332,
+    "radius": 6.5,
+    "half_height": 14,
+    "ranged": false,
+    "horse": true
+  },
   "dragon": {
     "hp": 600,
     "attack": 56,

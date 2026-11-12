@@ -1,19 +1,17 @@
 # TODO
 
-Ideas and open tasks.
-
-
-
-
 ## Open
-fixa demo2.
-viktigaste:fler sorters trupper, , height advantage, flanking, kavalerichock. sprangmars. 
+1. make more kinds of units ,
+2.  and treashure chests with the weapons they need. (no capture points for these)
+3. stoens in treasure chests can build wall segments. (recrout , check stone+ number, draw line , scalable from one side only. )
 
 
-stamina and speed , tired over time and depending on march-state(run marcg  )
-height influcence .
+fixa demo2. it takes to long time to load. 
+
+
+viktigaste:fler sorters trupper, ,  flanking, cavalerichock-should make enemy fly into the air.  
+
 more kinds of soldiers: helmet, armour,many kinds of armour,  shield,hourse armour,,   length of spear. 
-kavaleri-chock, flanknign.
   
 ablity to strengthen a position. 
 ability to dig and modulate ground. dangerous if this makes it to dfensive. 
