@@ -1,9 +1,9 @@
 # TODO
 
 ## Open
+0. generate all units sprites from the source iamges. also create the othercolour versions! . 
 1. make more kinds of units ,
-2.  and treashure chests with the weapons they need. (no capture points for these)
-3. stoens in treasure chests can build wall segments. (recrout , check stone+ number, draw line , scalable from one side only. )
+2. make walls that use resource stones.  in treasure chests can build wall segments. (recrout , check stone+ number, draw line , scalable from one side only. )
 
 
 fixa demo2. it takes to long time to load. 

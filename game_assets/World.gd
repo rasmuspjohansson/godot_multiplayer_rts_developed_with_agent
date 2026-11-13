@@ -102,6 +102,9 @@ const CP_SPRITE_WORLD_HEIGHT := 80.0
 const CHEST_PICKUP_RADIUS := 40.0
 const CHEST_LOOT_AMOUNT := 10
 const CHEST_SPRITE_WORLD_HEIGHT := 48.0
+const LOOT_ICON_WORLD_HEIGHT := 36.0
+const LOOT_FLOAT_RISE := 48.0
+const LOOT_FLOAT_SECONDS := 1.0
 const CHEST_TEXTURE_PATH := "res://images/background/treasure_chest.png"
 ## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
 const CAPTURE_SYNC_BATCH_SIZE := 6
@@ -1076,6 +1079,13 @@ func _apply_fog_to_props() -> void:
 		if sprite == null or node == null:
 			continue
 		_apply_fog_sprite(sprite, node.position.x, node.position.z, _capture_point_modulate(int(cp.get("owner_pid", 0))))
+	for cid in _chest_nodes.keys():
+		var anchor: Node3D = _chest_nodes[cid]
+		if anchor == null or not is_instance_valid(anchor):
+			continue
+		var chest_sprite := anchor.get_node_or_null("Sprite")
+		if chest_sprite is Sprite3D:
+			_apply_fog_sprite(chest_sprite, anchor.position.x, anchor.position.z, Color.WHITE)
 
 func _apply_fog_sprite(sprite: Sprite3D, x: float, z: float, base: Color) -> void:
 	var shade: float = _fog.light_at(x, z)
@@ -2778,7 +2788,13 @@ func _spawn_map_dragons() -> Array:
 		var pos := Vector2(float(cfg.get("x", MapConfig.width * 0.5)), float(cfg.get("y", MapConfig.height * 0.5)))
 		var color := str(cfg.get("color", "red"))
 		var aid := "neutral_dragon_%d" % i
-		var army = _create_army(aid, UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID, "Dragon", pos, 0.0, {"dragon": true, "soldiers": 1, "color": color})
+		var unit_name := str(cfg.get("unit", "dragon"))
+		var army = _create_army(aid, UNIT_SPRITE_PATHS.NEUTRAL_DRAGON_OWNER_ID, "Dragon", pos, 0.0, {
+			"dragon": unit_name != "dragon_2",
+			"unit": unit_name,
+			"soldiers": 1,
+			"color": color,
+		})
 		armies.append(army)
 		_map_dragons.append(army)
 		print("TEST_MAP_DRAGON_SPAWN: dragon %d at (%d,%d) aggro=%.0f attack=%.0f" % [
@@ -2880,8 +2896,13 @@ func _create_army(aid: String, pid: int, pname: String, pos: Vector2, dir: float
 	var use_long_spear: bool = equipment.get("long_spear", false)
 	var use_shield: bool = equipment.get("shield", false)
 	var is_dragon: bool = equipment.get("dragon", false)
+	var named := str(equipment.get("unit", ""))
 	var n: int = clampi(int(equipment.get("soldiers", DEFAULT_SOLDIERS_PER_ARMY)), 1, MAX_SOLDIERS_PER_ARMY)
-	var utype: int = _UnitSim.UnitType.DRAGON if is_dragon else _UnitSim.unit_type_for_loadout(use_horse, use_spear, use_bow, use_armour, use_sword, use_long_spear, use_shield)
+	var utype: int = _UnitSim.unit_type_for_loadout(use_horse, use_spear, use_bow, use_armour, use_sword, use_long_spear, use_shield)
+	if named == "dragon_2":
+		utype = _UnitSim.UnitType.DRAGON_2
+	elif is_dragon or named == "dragon":
+		utype = _UnitSim.UnitType.DRAGON
 	if utype < 0:
 		push_error("Army '%s' equipment is not an exact recipe" % aid)
 		return null
@@ -3008,7 +3029,7 @@ func _server_pickup_chests() -> void:
 				GameState.resources[pid][key] = int(GameState.resources[pid].get(key, 0)) + CHEST_LOOT_AMOUNT
 				print("TEST_CHEST_LOOT: %s gave %d %s to pid %d" % [c["id"], CHEST_LOOT_AMOUNT, key, pid])
 				_server_chests.remove_at(i)
-				rpc("_client_remove_chest", str(c["id"]))
+				rpc("_client_remove_chest", str(c["id"]), key)
 				_sync_capture_state()
 		i -= 1
 
@@ -4194,6 +4215,12 @@ func _client_spawn_chests(data: Array) -> void:
 			continue
 		add_child(anchor)
 		_chest_nodes[cid] = anchor
+		var sprite := anchor.get_node_or_null("Sprite")
+		if sprite is Sprite3D:
+			if _fog != null:
+				_apply_fog_sprite(sprite, anchor.position.x, anchor.position.z, Color.WHITE)
+			else:
+				sprite.visible = true
 	print("TEST_CHEST_SPAWN: Client received %d chests" % data.size())
 
 func _create_chest_sprite(d: Dictionary) -> Node3D:
@@ -4216,15 +4243,41 @@ func _create_chest_sprite(d: Dictionary) -> Node3D:
 	var pixel_size := CHEST_SPRITE_WORLD_HEIGHT / tex_h
 	sprite.pixel_size = pixel_size
 	sprite.position.y = tex_h * pixel_size * 0.5
+	sprite.visible = false
 	anchor.add_child(sprite)
 	return anchor
 
 @rpc("authority", "reliable")
-func _client_remove_chest(chest_id: String) -> void:
+func _client_remove_chest(chest_id: String, resource_key: String) -> void:
 	var node: Node = _chest_nodes.get(chest_id, null)
-	if node != null and is_instance_valid(node):
+	var origin := Vector3.ZERO
+	var have_origin := false
+	if node is Node3D and is_instance_valid(node):
+		origin = (node as Node3D).global_position
+		have_origin = true
 		node.queue_free()
 	_chest_nodes.erase(chest_id)
+	if have_origin:
+		_show_loot_icon(origin, resource_key)
+
+func _show_loot_icon(origin: Vector3, resource_key: String) -> void:
+	var tex := _load_image_texture("res://images/resources/%s.png" % resource_key)
+	if tex == null:
+		return
+	var sprite := Sprite3D.new()
+	sprite.name = "Loot_%s" % resource_key
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+	sprite.shaded = false
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	var tex_h := maxf(float(tex.get_height()), 1.0)
+	var pixel_size := LOOT_ICON_WORLD_HEIGHT / tex_h
+	sprite.pixel_size = pixel_size
+	sprite.position = origin + Vector3(0.0, tex_h * pixel_size * 0.5, 0.0)
+	add_child(sprite)
+	var tween := create_tween()
+	tween.tween_property(sprite, "position:y", sprite.position.y + LOOT_FLOAT_RISE, LOOT_FLOAT_SECONDS)
+	tween.tween_callback(sprite.queue_free)
 
 @rpc("authority", "reliable")
 func _client_draft_failed(reason: String) -> void:

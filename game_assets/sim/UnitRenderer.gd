@@ -136,7 +136,7 @@ func add_unit(id: int, color: String, unit_type: String) -> void:
 	_phase_of[id] = randf() * 10.0
 	_dead_since[id] = 0.0
 	_selected[id] = 0
-	_size_mul[id] = 9.0 if unit_type == "dragon" else 1.0
+	_size_mul[id] = 9.0 if unit_type in ["dragon", "dragon_2"] else 1.0
 	_last_key[id] = -1
 	_static[id] = 0
 	_collapsed[id] = 0
@@ -336,9 +336,9 @@ func _configure_sheet(g: Group, color: String, unit_type: String) -> void:
 	g.mat.set_shader_parameter("feet", info["feet"])
 	g.mat.set_shader_parameter("row_scale", info["row_scale"])
 	var base_h := FOOT_HEIGHT
-	if unit_type == "dragon":
+	if unit_type in ["dragon", "dragon_2"]:
 		base_h = DRAGON_HEIGHT / 3.0 # size_mul 9: three times the previous dragon sprite
-	elif unit_type in ["knight", "bauer_horse_archer", "knight_with_long_spear"]:
+	elif unit_type in ["knight", "bauer_horse_archer", "knight_with_long_spear", "mounted_knight_with_shield_and_sword", "mounted_knight_with_armour_shield_and_lance"]:
 		base_h = HORSE_HEIGHT
 	g.mat.set_shader_parameter("base_height", base_h)
 	g.mat.set_shader_parameter("anim_speed", _anim_speed)

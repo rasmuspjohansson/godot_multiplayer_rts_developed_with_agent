@@ -54,7 +54,8 @@
     {
       "color": "red",
       "x": 164.0,
-      "y": 185.0
+      "y": 185.0,
+      "unit": "dragon_2"
     },
     {
       "color": "red",

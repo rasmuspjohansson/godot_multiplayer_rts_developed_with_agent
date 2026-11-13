@@ -87,6 +87,72 @@
     "ranged": false,
     "horse": true
   },
+  "swordsman_with_shield_and_sword": {
+    "hp": 100,
+    "attack": 13,
+    "defense": 2,
+    "range": 30,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "armoured_swordsman_with_shield_and_sword": {
+    "hp": 100,
+    "attack": 13,
+    "defense": 4,
+    "range": 30,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "mounted_knight_with_shield_and_sword": {
+    "hp": 200,
+    "attack": 10,
+    "defense": 2,
+    "range": 22,
+    "speed": 23.333333333333332,
+    "radius": 6.5,
+    "half_height": 14,
+    "ranged": false,
+    "horse": true
+  },
+  "mounted_knight_with_armour_shield_and_lance": {
+    "hp": 200,
+    "attack": 10,
+    "defense": 4,
+    "range": 30,
+    "speed": 23.333333333333332,
+    "radius": 6.5,
+    "half_height": 14,
+    "ranged": false,
+    "horse": true
+  },
+  "armoured_soldier_with_long_pike": {
+    "hp": 100,
+    "attack": 13,
+    "defense": 4,
+    "range": 30,
+    "speed": 11.11111111111111,
+    "radius": 4.5,
+    "half_height": 11,
+    "ranged": false,
+    "horse": false
+  },
+  "dragon_2": {
+    "hp": 600,
+    "attack": 56,
+    "defense": 10,
+    "range": 106,
+    "speed": 15,
+    "radius": 54,
+    "half_height": 99,
+    "ranged": false,
+    "horse": false
+  },
   "dragon": {
     "hp": 600,
     "attack": 56,

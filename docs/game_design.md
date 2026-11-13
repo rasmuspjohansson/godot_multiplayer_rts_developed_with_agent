@@ -47,7 +47,7 @@ Bonuses, all applied on top of the stored attack or speed:
 - Types: **Stables** give horses, **Blacksmith** spears, **Village** villagers, **Archery** bows. They start unowned.
 - A point is captured when only one player's units are within its radius (120). If several players are present, it is contested and nothing changes. Owned points can be taken over by the same rule.
 - An owned point produces **1** resource every **6 seconds**.
-- Each player starts with 10 horses, 10 spears, 10 bows and 10 villagers. The top bar shows owned point counts and the inventory.
+- Each player starts with 10 of every resource: villagers, horses, spears, bows, armour, swords, long spears, and shields. The top bar shows owned point counts and the inventory.
 
 ### Fog of war
 - Each player sees a circle around their own armies, extending 160 units past the outermost living soldier. The mask is on the map, so turning the camera does not move it.

@@ -25,11 +25,18 @@ func _ready():
 	print("Args: ", args)
 	auto_test = "--auto-test" in args
 	GameState.spawn_map_dragons = "--dragons" in args
-	for a in args:
-		if str(a).begins_with("--stress-units="):
-			GameState.stress_units_per_player = maxi(0, int(str(a).split("=")[1]))
-		elif str(a).begins_with("--match-timeout="):
-			GameState.match_timeout_seconds = maxf(0.0, float(str(a).split("=")[1]))
+	for i in range(args.size()):
+		var a := str(args[i])
+		if a.begins_with("--stress-units="):
+			GameState.stress_units_per_player = maxi(0, int(a.split("=")[1]))
+		elif a.begins_with("--match-timeout="):
+			GameState.match_timeout_seconds = maxf(0.0, float(a.split("=")[1]))
+		elif a.begins_with("--resources="):
+			GameState.starting_resource_amount = maxi(0, int(a.split("=")[1]))
+		elif a == "--resources" and i + 1 < args.size():
+			GameState.starting_resource_amount = maxi(0, int(str(args[i + 1])))
+	if GameState.starting_resource_amount >= 0:
+		print("TEST_STARTING_RESOURCES: %d of each" % GameState.starting_resource_amount)
 	if GameState.selected_map == "":
 		GameState.selected_map = MapConfig.map_size
 

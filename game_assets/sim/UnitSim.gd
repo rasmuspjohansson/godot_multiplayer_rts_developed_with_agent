@@ -7,7 +7,7 @@ const SpatialHash := preload("res://sim/SpatialHash.gd")
 const Formation := preload("res://sim/FormationController.gd")
 const ArrowTrajectory := preload("res://ArrowTrajectory.gd")
 
-enum UnitType { CLUBMAN, SPEARMAN, KNIGHT, BOWMAN, HORSE_ARCHER, DRAGON, ARMORED_SWORDSMAN, ARMORED_BOWMAN, KNIGHT_LONG_SPEAR }
+enum UnitType { CLUBMAN, SPEARMAN, KNIGHT, BOWMAN, HORSE_ARCHER, DRAGON, ARMORED_SWORDSMAN, ARMORED_BOWMAN, KNIGHT_LONG_SPEAR, SWORDSMAN_SHIELD, ARMOURED_SWORDSMAN_SHIELD, MOUNTED_KNIGHT_SHIELD, MOUNTED_LANCE_KNIGHT, ARMOURED_PIKE, DRAGON_2 }
 
 const SIM_DT := 0.05
 const F_ALIVE := 1
@@ -235,7 +235,7 @@ func setup(p_walkability, p_map_w: float, p_map_h: float, authority: bool) -> vo
 		_wk_rows = int(gd.rows)
 		_wk_inv_step = 1.0 / float(gd.step)
 
-## -1 when the checked boxes are not exactly one recipe. Shield is never part of a recipe.
+## -1 when the checked boxes are not exactly one recipe. Shield only matches the recipes that include it.
 static func unit_type_for_loadout(horse: bool, spear: bool, bow: bool, armour: bool = false, sword: bool = false, long_spear: bool = false, shield: bool = false) -> int:
 	var bits := 0
 	if horse:
@@ -269,6 +269,16 @@ static func unit_type_for_loadout(horse: bool, spear: bool, bow: bool, armour: b
 			return UnitType.ARMORED_BOWMAN
 		33:
 			return UnitType.KNIGHT_LONG_SPEAR
+		80:
+			return UnitType.SWORDSMAN_SHIELD
+		88:
+			return UnitType.ARMOURED_SWORDSMAN_SHIELD
+		81:
+			return UnitType.MOUNTED_KNIGHT_SHIELD
+		40:
+			return UnitType.ARMOURED_PIKE
+		105:
+			return UnitType.MOUNTED_LANCE_KNIGHT
 		_:
 			return -1
 
@@ -285,6 +295,12 @@ static func unit_type_name(t: int) -> String:
 		UnitType.ARMORED_SWORDSMAN: return "armored_swordsman"
 		UnitType.ARMORED_BOWMAN: return "bowman_with_armour"
 		UnitType.KNIGHT_LONG_SPEAR: return "knight_with_long_spear"
+		UnitType.SWORDSMAN_SHIELD: return "swordsman_with_shield_and_sword"
+		UnitType.ARMOURED_SWORDSMAN_SHIELD: return "armoured_swordsman_with_shield_and_sword"
+		UnitType.MOUNTED_KNIGHT_SHIELD: return "mounted_knight_with_shield_and_sword"
+		UnitType.MOUNTED_LANCE_KNIGHT: return "mounted_knight_with_armour_shield_and_lance"
+		UnitType.ARMOURED_PIKE: return "armoured_soldier_with_long_pike"
+		UnitType.DRAGON_2: return "dragon_2"
 		_: return "clubman"
 
 static func speed_for_type(t: int) -> float:
@@ -1934,8 +1950,9 @@ func _perform_attack(i: int, t: int) -> void:
 		return
 	_ensure_rules()
 	var atk := attack[i]
-	var knight_like := utype[i] == UnitType.KNIGHT or utype[i] == UnitType.KNIGHT_LONG_SPEAR
-	if (utype[i] == UnitType.SPEARMAN or utype[i] == UnitType.KNIGHT_LONG_SPEAR) and (flags[t] & F_HORSE) != 0:
+	var knight_like := utype[i] == UnitType.KNIGHT or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.MOUNTED_KNIGHT_SHIELD or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT
+	var spear_like := utype[i] == UnitType.SPEARMAN or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.ARMOURED_PIKE or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT
+	if spear_like and (flags[t] & F_HORSE) != 0:
 		atk += _spear_vs_horse_attack
 	if knight_like and (flags[t] & F_HORSE) == 0 and utype[t] != UnitType.SPEARMAN:
 		atk += _knight_vs_unmounted_attack

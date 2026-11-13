@@ -5,7 +5,7 @@
   "action_description": "Move cycle (loopable)",
   "veo_prompt": "Side view, 2D game character animation, facing right. Animation of this exact spearman. He walks with a natural marching walk cycle: alternating steps, subtle torso bob, spear held steady. No combat, no attacks, no running sprint\u2014only walking. CRITICAL for looping: the motion must return to the same pose and foot placement at the end as at the start, so the clip can tile seamlessly. Camera locked; character stays centered; no lateral travel that drifts off frame. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying.",
   "green_screen": true,
-  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/spearman/move/spritesheet.png",
+  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/game_assets/AI_generated_sprites/blue/spearman/move/spritesheet.png",
   "source_video": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/spearman/move/video.mp4",
   "layout": "horizontal_strip",
   "frame_width": 256,

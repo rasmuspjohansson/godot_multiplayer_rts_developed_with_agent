@@ -31,7 +31,7 @@ REMOTE_DEBUG=false
 REMOTE_DEBUG_URI="tcp://127.0.0.1:6007"
 SERVER_WINDOW=false
 MAP_SIZE="S"
-# Forwarded to server and clients (e.g. --stress-units=1000, --match-timeout=300, --dragons).
+# Forwarded to server and clients (e.g. --stress-units=1000, --match-timeout=300, --dragons, --resources=50).
 PASSTHROUGH_ARGS=()
 
 usage() {
@@ -51,6 +51,8 @@ Options:
                             by default in auto-test; human games always spawn them).
   --match-timeout=SECONDS   Auto-test match cap in seconds (default: 120).
   --stress-units=N          Add armies until each player has N soldiers (e.g. 1000).
+  --resources=N, --resources N
+                            Starting amount of every resource (default: 10).
   --server-window           Run the server with a visible window instead of headless.
   --remote-debug            Connect to the Godot editor debugger (tcp://127.0.0.1:6007).
   --remote-debug-uri=URI    Same, with a custom URI (e.g. tcp://127.0.0.1:6007).
@@ -62,6 +64,7 @@ Environment:
 Examples:
   ./run_test.sh
   ./run_test.sh --map demo --dragons
+  ./run_test.sh --map demo --dragons --resources=50
   ./run_test.sh --map Valleys
   ./run_test.sh --map XL --no-test
 EOF
@@ -88,6 +91,15 @@ while [ $i -lt ${#args[@]} ]; do
       ;;
     --dragons)
       PASSTHROUGH_ARGS+=("$arg")
+      ;;
+    --resources=*)
+      PASSTHROUGH_ARGS+=("$arg")
+      ;;
+    --resources)
+      if [ $((i + 1)) -lt ${#args[@]} ]; then
+        i=$((i + 1))
+        PASSTHROUGH_ARGS+=("--resources=${args[$i]}")
+      fi
       ;;
     --map)
       if [ $((i + 1)) -lt ${#args[@]} ]; then

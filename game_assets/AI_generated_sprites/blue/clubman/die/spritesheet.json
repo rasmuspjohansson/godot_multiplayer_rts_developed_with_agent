@@ -5,7 +5,7 @@
   "action_description": "Death (one-shot)",
   "veo_prompt": "Side view, 2D game character animation, facing right. Animation of this exact clubman. He is struck and quietly collapses on the spot: knees buckle, he falls, the club drops beside him. Undramatic death: the character simply crumples and falls down on the spot, then lies still. Animation plays once from standing through the fall to lying motionless on the ground, holding the final dead pose until the end of the clip. No looping; no dramatic flips, launches, or exaggerated throes. Camera locked; character stays centered; no lateral travel that drifts off frame. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying.",
   "green_screen": true,
-  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/clubman/die/spritesheet.png",
+  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/game_assets/AI_generated_sprites/blue/clubman/die/spritesheet.png",
   "source_video": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/clubman/die/video.mp4",
   "layout": "horizontal_strip",
   "frame_width": 256,

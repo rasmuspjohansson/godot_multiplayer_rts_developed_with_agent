@@ -5,7 +5,7 @@
   "action_description": "Move cycle (loopable)",
   "veo_prompt": "Side view, 2D game character animation of this exact mounted knight. The horse gallops in place facing right with a calm, controlled, steady gallop cycle: rhythmic leg strides, subtle rider movement, sword held steady. Not a wild or frantic sprint. No combat, no turning. CRITICAL for looping: the motion must return to the exact same pose and foot placement at the end as at the start, matching the very first frame. Camera locked; character stays centered; no lateral travel that drifts off frame; no zoom. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying.",
   "green_screen": true,
-  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/knight/move/spritesheet.png",
+  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/game_assets/AI_generated_sprites/blue/knight/move/spritesheet.png",
   "source_video": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/knight/move/video.mp4",
   "layout": "horizontal_strip",
   "frame_width": 256,

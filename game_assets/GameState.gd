@@ -16,10 +16,10 @@ const STARTING_RESOURCES := {
 	"spears": 10,
 	"bows": 10,
 	"villagers": 10,
-	"armour": 0,
-	"sword": 0,
-	"long_spear": 0,
-	"shield": 0,
+	"armour": 10,
+	"sword": 10,
+	"long_spear": 10,
+	"shield": 10,
 }
 
 var players := {}
@@ -37,9 +37,16 @@ var stress_units_per_player: int = 0
 var match_timeout_seconds: float = 120.0
 ## CLI `--dragons`: spawn map dragons even during auto-test (default off for stable CI).
 var spawn_map_dragons: bool = false
+## CLI `--resources=N`: starting count of every resource. Negative keeps STARTING_RESOURCES.
+var starting_resource_amount: int = -1
 
-static func default_resources() -> Dictionary:
-	return STARTING_RESOURCES.duplicate()
+func default_resources() -> Dictionary:
+	if starting_resource_amount < 0:
+		return STARTING_RESOURCES.duplicate()
+	var out := {}
+	for key in RESOURCE_KEYS:
+		out[key] = starting_resource_amount
+	return out
 
 func reset_match_state():
 	resources.clear()

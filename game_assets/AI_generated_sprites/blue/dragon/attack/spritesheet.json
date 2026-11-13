@@ -5,7 +5,7 @@
   "action_description": "Attack cycle (loopable)",
   "veo_prompt": "Side view, 2D game character animation, facing right. Animation of this exact dragon. Short attack sequence in place: rears its head back, then breathes a burst of fire to the right, then closes its jaws and returns to its stance. All attacks are aimed toward the right side of the frame, the direction the character faces. Keep the dragon centered; the flame extends toward the right edge. CRITICAL for looping: the motion must return to the same pose and foot placement at the end as at the start, so the clip can tile seamlessly. Camera locked; character stays centered; no lateral travel that drifts off frame. Flat, uniform chroma green screen background only; no floor texture, no shadows, no props; crisp edges for keying.",
   "green_screen": true,
-  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/dragon/attack/spritesheet.png",
+  "sprite_sheet": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/game_assets/AI_generated_sprites/blue/dragon/attack/spritesheet.png",
   "source_video": "/home/rasmus/projects/godot_multiplayer_rts_developed_with_agent/AI_generated_sprites/blue/dragon/attack/video.mp4",
   "layout": "horizontal_strip",
   "frame_width": 256,
