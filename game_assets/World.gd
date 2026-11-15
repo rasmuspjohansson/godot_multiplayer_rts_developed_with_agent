@@ -2448,12 +2448,12 @@ func _server_rotate_army(aid: String, delta_angle: float):
 	_schedule_order(OrderKind.ROTATE, {"aid": aid, "delta": delta_angle})
 
 @rpc("any_peer", "reliable")
-func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY, use_armour: bool = false, use_sword: bool = false, use_long_spear: bool = false, use_shield: bool = false):
+func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false, soldier_count: int = DEFAULT_SOLDIERS_PER_ARMY, use_armour: bool = false, use_sword: bool = false, use_long_spear: bool = false, use_shield: bool = false, as_peer: int = 0):
 	if not multiplayer.is_server() or game_over:
 		return
 	var sender_id = multiplayer.get_remote_sender_id()
 	if sender_id == 0:
-		sender_id = 1
+		sender_id = as_peer if as_peer != 0 else 1
 	if sender_id not in GameState.players:
 		return
 	soldier_count = clampi(soldier_count, MIN_SOLDIERS_PER_ARMY, MAX_SOLDIERS_PER_ARMY)
@@ -2474,15 +2474,17 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var need_armour = cost_units if use_armour else 0
 	var need_swords = cost_units if use_sword else 0
 	var need_long_spears = cost_units if use_long_spear else 0
+	var need_shields = cost_units if use_shield else 0
 	if int(res.get("villagers", 0)) < need_villagers \
 			or int(res.get("horses", 0)) < need_horses \
 			or int(res.get("spears", 0)) < need_spears \
 			or int(res.get("bows", 0)) < need_bows \
 			or int(res.get("armour", 0)) < need_armour \
 			or int(res.get("sword", 0)) < need_swords \
-			or int(res.get("long_spear", 0)) < need_long_spears:
-		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need vill=%d horse=%d spear=%d bow=%d armour=%d sword=%d long_spear=%d)" % [
-			sender_id, need_villagers, need_horses, need_spears, need_bows, need_armour, need_swords, need_long_spears
+			or int(res.get("long_spear", 0)) < need_long_spears \
+			or int(res.get("shield", 0)) < need_shields:
+		print("TEST_DRAFT_FAIL: Player %d insufficient resources (need vill=%d horse=%d spear=%d bow=%d armour=%d sword=%d long_spear=%d shield=%d)" % [
+			sender_id, need_villagers, need_horses, need_spears, need_bows, need_armour, need_swords, need_long_spears, need_shields
 		])
 		rpc_id(sender_id, "_client_draft_failed", "Not enough resources.")
 		return
@@ -2493,6 +2495,7 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	res["armour"] = int(res.get("armour", 0)) - need_armour
 	res["sword"] = int(res.get("sword", 0)) - need_swords
 	res["long_spear"] = int(res.get("long_spear", 0)) - need_long_spears
+	res["shield"] = int(res.get("shield", 0)) - need_shields
 	var pid = sender_id
 	var pname = GameState.players[pid]["name"]
 	var idx = army_index_per_player.get(pid, 3)
@@ -2506,7 +2509,7 @@ func request_draft_army(use_horse: bool, use_spear: bool, use_bow: bool = false,
 	var stop_pos: Vector2 = _onmap_entry_for(spawn_pos, str(edge.get("side", "west")))
 	var equipment = {
 		"horse": use_horse, "spear": use_spear, "bow": use_bow,
-		"armour": use_armour, "sword": use_sword, "long_spear": use_long_spear,
+		"armour": use_armour, "sword": use_sword, "long_spear": use_long_spear, "shield": use_shield,
 		"soldiers": soldier_count,
 	}
 	var army = _create_army(aid, pid, pname, spawn_pos, dir, equipment)

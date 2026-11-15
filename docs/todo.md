@@ -1,7 +1,7 @@
 # TODO
 
 ## Open
-0. generate all units sprites from the source iamges. also create the othercolour versions! . 
+0. verfiy all new kind of units can spawn. 
 1. make more kinds of units ,
 2. make walls that use resource stones.  in treasure chests can build wall segments. (recrout , check stone+ number, draw line , scalable from one side only. )
 
