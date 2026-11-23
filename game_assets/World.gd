@@ -1236,10 +1236,9 @@ func add_water() -> void:
 	print("TEST_WATER_BUILT: lakes=%d cells=%d" % [basins.size(), total_cells])
 
 func _build_background() -> void:
-	# Painted horizon backdrop along the z=0 map edge (the side furthest from
-	# the camera). The quad stands vertically, bottom flush with the ground,
-	# width = MapConfig.width + 2*MARGIN so it slightly overshoots the west/east
-	# corners, height proportional to the source image aspect.
+	# Painted horizon on every map edge. Each quad stands vertically, bottom
+	# flush with y=0, and its front faces the map. Back faces are culled, so a
+	# camera outside that edge (looking at the back) does not see it.
 	var path := "res://images/background/background.png"
 	var tex: Texture2D = null
 	var img := Image.new()
@@ -1262,25 +1261,37 @@ func _build_background() -> void:
 		push_warning("Background image has invalid dimensions")
 		return
 	const MARGIN: float = 20.0
-	var panel_w: float = MapConfig.width + 2.0 * MARGIN
-	var panel_h: float = panel_w * (src_h / src_w)
+	var aspect: float = src_h / src_w
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = tex
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.cull_mode = BaseMaterial3D.CULL_BACK
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-	var quad := QuadMesh.new()
-	quad.size = Vector2(panel_w, panel_h)
-	var bg := MeshInstance3D.new()
-	bg.name = "Background"
-	bg.mesh = quad
-	bg.material_override = mat
-	# Sit one unit behind the map edge so we never z-fight with the ground
-	# mesh; centered on X, lifted so the bottom edge touches y=0.
-	bg.position = Vector3(MapConfig.width * 0.5, panel_h * 0.5, -1.0)
-	bg.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(bg)
-	print("TEST_BACKGROUND_BUILT: w=%.1f h=%.1f at z=-1" % [panel_w, panel_h])
+	# One unit outside the playable edge. Local +Z is the visible face; yaw
+	# turns that face toward the interior. Span is the edge length.
+	var edges: Array[Dictionary] = [
+		{"span": MapConfig.width, "pos": Vector3(MapConfig.width * 0.5, 0.0, -1.0), "yaw": 0.0},
+		{"span": MapConfig.width, "pos": Vector3(MapConfig.width * 0.5, 0.0, MapConfig.height + 1.0), "yaw": PI},
+		{"span": MapConfig.height, "pos": Vector3(-1.0, 0.0, MapConfig.height * 0.5), "yaw": PI * 0.5},
+		{"span": MapConfig.height, "pos": Vector3(MapConfig.width + 1.0, 0.0, MapConfig.height * 0.5), "yaw": -PI * 0.5},
+	]
+	var root := Node3D.new()
+	root.name = "Background"
+	for edge in edges:
+		var panel_w: float = float(edge["span"]) + 2.0 * MARGIN
+		var panel_h: float = panel_w * aspect
+		var quad := QuadMesh.new()
+		quad.size = Vector2(panel_w, panel_h)
+		var panel := MeshInstance3D.new()
+		panel.mesh = quad
+		panel.material_override = mat
+		var pos: Vector3 = edge["pos"]
+		panel.position = Vector3(pos.x, panel_h * 0.5, pos.z)
+		panel.rotation.y = float(edge["yaw"])
+		panel.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(panel)
+	add_child(root)
+	print("TEST_BACKGROUND_BUILT: edges=%d" % edges.size())
 
 func _setup_selection_overlay():
 	var layer := CanvasLayer.new()
