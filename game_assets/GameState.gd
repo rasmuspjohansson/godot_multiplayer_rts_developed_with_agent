@@ -20,7 +20,7 @@ const STARTING_RESOURCES := {
 	"sword": 10,
 	"long_spear": 10,
 	"shield": 10,
-	"stones": 1,
+	"stones": 10,
 }
 
 var players := {}

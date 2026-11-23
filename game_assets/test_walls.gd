@@ -14,8 +14,8 @@ func _fail(msg: String) -> void:
 func _begin() -> void:
 	var gs = root.get_node("GameState")
 	var stock: Dictionary = gs.default_resources()
-	if int(stock.get("stones", -1)) != 1:
-		_fail("expected 1 starting stone, got %s" % str(stock.get("stones")))
+	if int(stock.get("stones", -1)) != 10:
+		_fail("expected 10 starting stones, got %s" % str(stock.get("stones")))
 		return
 	if int(stock.get("villagers", -1)) != 10:
 		_fail("villagers should stay at 10")
@@ -101,8 +101,12 @@ func _begin() -> void:
 	if w._terrain_grid_height_at(foot_at.x, foot_at.y) > foot_before + 1.0:
 		_fail("ridge base should be past the palisade and back at ground level")
 		return
-	if w.is_walkable_at(mid.x, mid.y):
+	var fence_x: float = mid.x - (_WallBuilder.FLAT_HALF - 0.5)
+	if w.is_walkable_at(fence_x, mid.y):
 		_fail("palisade did not block the crest")
+		return
+	if absf(w._walls[0].sections[0].node.position.x - fence_x) > 1.0:
+		_fail("palisade is not against the steep face")
 		return
 	if not w.is_walkable_at(mid.x + _WallBuilder.FLAT_HALF + 40.0, mid.y):
 		_fail("gentle side should stay walkable")
@@ -117,7 +121,7 @@ func _begin() -> void:
 	if not is_equal_approx(w._terrain_grid_height_at(mid.x, mid.y), crest_y):
 		_fail("ridge was removed with the palisade")
 		return
-	if not w.is_walkable_at(mid.x, mid.y):
+	if not w.is_walkable_at(fence_x, mid.y):
 		_fail("opened section is still blocked")
 		return
 

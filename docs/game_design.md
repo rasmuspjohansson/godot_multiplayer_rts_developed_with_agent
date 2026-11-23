@@ -42,13 +42,13 @@ Bonuses, all applied on top of the stored attack or speed:
 - The draft panel is opened from the bottom bar. Check **Horse**, **Spear** and/or **Bow**, pick the soldier count, then **Create army**.
 - Cost: **10 villagers** per army, plus **10** of each checked equipment.
 - The new army spawns off the player's map edge and walks in.
-- **Create wall**, in the same panel, spends stones. Click a start on the ground, then an end. One stone builds one palisade section, and the preview stops when the stones run out. The ridge has a level top under the whole palisade, a low ramp on the back, and a steeper face on the front (the left of the line from the first click to the second). The sloping base reaches further out than the palisade line. Palisades block that crest until a non-ranged unit has stood in reach for 5 seconds. The pictures then disappear and the ridge stays, so units can cross.
+- **Create wall**, in the same panel, spends stones. Click a start on the ground, then an end. One stone builds one palisade section, and the preview stops when the stones run out. The ridge has a level top, a low ramp on the back, and a steeper face on the front (the left of the line from the first click to the second). The palisade stands on that flat top where the steep face begins. The sloping base reaches further out than the palisade line. Palisades block that crest until a non-ranged unit has stood in reach for 5 seconds. The pictures then disappear and the ridge stays, so units can cross.
 
 ### Capture points and resources
 - Types: **Stables** give horses, **Blacksmith** spears, **Village** villagers, **Archery** bows. They start unowned.
 - A point is captured when only one player's units are within its radius (120). If several players are present, it is contested and nothing changes. Owned points can be taken over by the same rule.
 - An owned point produces **1** resource every **6 seconds**.
-- Each player starts with 10 of every resource except stones: villagers, horses, spears, bows, armour, swords, long spears, and shields. Stones start at 1. The top bar shows owned point counts and the inventory.
+- Each player starts with 10 of every resource: villagers, horses, spears, bows, armour, swords, long spears, shields, and stones. The top bar shows owned point counts and the inventory.
 - Treasure chests grant 10 of one random resource, and that resource can be stones.
 
 ### Fog of war

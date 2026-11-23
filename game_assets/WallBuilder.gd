@@ -103,10 +103,9 @@ static func section_lips(start: Vector2, end: Vector2, index: int, section_len: 
 	var b: Vector2 = start + dir * section_len * float(index + 1)
 	if b.distance_to(start) > length:
 		b = end
-	# The palisade stands on the flat crest, on the line the player drew.
-	# The ridge base spreads past that line on both sides.
-	var lip_a: Vector2 = a
-	var lip_b: Vector2 = b
+	# Sit on the flat, against the steep face, so no level ground is left in front of the fence.
+	var lip_a: Vector2 = a + front * (FLAT_HALF - 0.5)
+	var lip_b: Vector2 = b + front * (FLAT_HALF - 0.5)
 	return {
 		"a": a,
 		"b": b,
