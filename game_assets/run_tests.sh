@@ -48,6 +48,7 @@ run_test test_spatial_hash.gd
 run_test test_unit_sim.gd
 run_test test_all_unit_sprites.gd
 run_test test_chests.gd
+run_test test_walls.gd
 run_test test_move_sync.gd
 run_test test_facing_flip.gd
 run_test test_sim_determinism.gd

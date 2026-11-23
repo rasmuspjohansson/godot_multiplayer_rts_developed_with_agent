@@ -87,6 +87,8 @@ const _VegetationBuilder = preload("res://VegetationBuilder.gd")
 const _ArrowProjectile = preload("res://ArrowProjectile.gd")
 const LAKES_WATER_TEXTURE_PATH := "res://images/background/lakes_water.png"
 const _WaterBuilder = preload("res://WaterBuilder.gd")
+const _WallBuilder = preload("res://WallBuilder.gd")
+const WALL_STEEP_SHADER := preload("res://shaders/wall_steep.gdshader")
 const CP_STABLES_TEXTURE_PATH := "res://images/background/stable.png"
 const CP_BLACKSMITH_TEXTURE_PATH := "res://images/background/blacksmith2.png"
 const CP_VILLAGE_TEXTURE_PATH := "res://images/capture_points/village/village.png"
@@ -106,6 +108,8 @@ const LOOT_ICON_WORLD_HEIGHT := 36.0
 const LOOT_FLOAT_RISE := 48.0
 const LOOT_FLOAT_SECONDS := 1.0
 const CHEST_TEXTURE_PATH := "res://images/background/treasure_chest.png"
+const PALISADE_FRONT_PATH := "res://images/walls/palisade_front.png"
+const PALISADE_BACK_PATH := "res://images/walls/palisade_back.png"
 ## Capture points per _client_update_capture RPC tick (XL has 11 CPs).
 const CAPTURE_SYNC_BATCH_SIZE := 6
 
@@ -119,6 +123,17 @@ var army_index_per_player := {}
 var _server_captures: Array = []
 var _server_chests: Array = []
 var _chest_nodes: Dictionary = {}
+var _walls: Array = []
+var _next_wall_id := 0
+var _wall_root: Node3D
+var _wall_preview: Node3D
+var _wall_placing := false
+var _wall_have_start := false
+var _wall_start := Vector2.ZERO
+var _palisade_front: Texture2D
+var _palisade_back: Texture2D
+var _palisade_section_len := 60.0
+var _wall_steep_mats: Array = []
 
 var _camera: Camera3D
 var _camera_pivot: Node3D
@@ -496,6 +511,7 @@ func _ready():
 		ground_collision.collision_layer = 2
 		ground_collision.collision_mask = 0
 	_build_terrain()
+	_ensure_palisade_textures()
 	add_water()
 	_build_walkability()
 	_build_vegetation()
@@ -840,11 +856,26 @@ func _build_terrain() -> void:
 	_terrain_cols = cols
 	_terrain_rows = rows
 	_terrain_step = step
+	_sync_height_grids()
+	_upload_terrain_mesh(true)
+	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d craters, %d valley_polygons" % [
+		cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size(),
+		MapConfig._spline_ridges.size(), MapConfig._plateaus.size(), MapConfig._plateau_polygons.size(),
+		MapConfig._valleys.size(), MapConfig._craters.size(), MapConfig._valley_polygons.size()
+	])
+
+
+func _sync_height_grids() -> void:
 	if _unit_renderer != null:
-		_unit_renderer.set_height_grid(heights, cols, rows, step)
+		_unit_renderer.set_height_grid(_terrain_heights, _terrain_cols, _terrain_rows, _terrain_step)
 	if _sim != null:
-		_sim.set_height_grid(heights, cols, rows, step)
-	# Build the visual ArrayMesh.
+		_sim.set_height_grid(_terrain_heights, _terrain_cols, _terrain_rows, _terrain_step)
+
+func _upload_terrain_mesh(configure_lighting: bool) -> void:
+	var heights := _terrain_heights
+	var cols := _terrain_cols
+	var rows := _terrain_rows
+	var step := _terrain_step
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var uvs := PackedVector2Array()
@@ -859,7 +890,6 @@ func _build_terrain() -> void:
 			var y := heights[j * cols + i]
 			verts[j * cols + i] = Vector3(x, y, z)
 			uvs[j * cols + i] = Vector2(float(i) / float(maxi(cols - 1, 1)), float(j) / float(maxi(rows - 1, 1)))
-			# Finite-difference normal (cheap; forward/backward at edges).
 			var i0: int = max(i - 1, 0)
 			var i1: int = min(i + 1, cols - 1)
 			var j0: int = max(j - 1, 0)
@@ -904,16 +934,11 @@ func _build_terrain() -> void:
 	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var ground := get_node_or_null("Ground")
 	if ground is MeshInstance3D:
-		# ArrayMesh vertices are in world-space, so drop the translation the
-		# placeholder PlaneMesh used.
 		ground.transform = Transform3D.IDENTITY
 		ground.mesh = array_mesh
 		ground.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		# Clear any stale scene-level override so the mesh's own surface
-		# material is used.
 		ground.set_surface_override_material(0, null)
-	# Build collision from the same mesh surface as the visual ground.
 	var terrain_shape: Shape3D = array_mesh.create_trimesh_shape()
 	var gc := get_node_or_null("GroundCollision")
 	if gc is StaticBody3D:
@@ -923,12 +948,8 @@ func _build_terrain() -> void:
 			shape_node.shape = terrain_shape
 			shape_node.transform = Transform3D.IDENTITY
 	_recompute_max_terrain_height()
-	_configure_map_lighting()
-	print("TEST_TERRAIN_BUILT: %dx%d samples, step=%d, %d hills, %d ridges, %d spline_ridges, %d plateaus, %d plateau_polygons, %d valleys, %d craters, %d valley_polygons" % [
-		cols, rows, int(step), MapConfig._hills.size(), MapConfig._ridges.size(),
-		MapConfig._spline_ridges.size(), MapConfig._plateaus.size(), MapConfig._plateau_polygons.size(),
-		MapConfig._valleys.size(), MapConfig._craters.size(), MapConfig._valley_polygons.size()
-	])
+	if configure_lighting:
+		_configure_map_lighting()
 
 func _load_ground_texture() -> Texture2D:
 	return _load_image_texture(GROUND_TEXTURE_PATH)
@@ -991,7 +1012,7 @@ func _apply_ground_walkability_visual() -> void:
 			var idx: int = j * _terrain_cols + i
 			if idx >= colors.size():
 				continue
-			colors[idx].a = 1.0 if _walkability.is_walkable_cell(i, j) else 0.0
+			colors[idx].a = 1.0 if _walkability.is_terrain_walkable_cell(i, j) else 0.0
 	arrays[Mesh.ARRAY_COLOR] = colors
 	var array_mesh := ArrayMesh.new()
 	array_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
@@ -1010,17 +1031,26 @@ func _apply_ground_walkability_visual() -> void:
 	ground.set_surface_override_material(0, null)
 
 func _bind_fog_material() -> void:
-	if _ground_mat == null:
-		return
-	_ground_mat.set_shader_parameter("map_size", Vector2(MapConfig.width, MapConfig.height))
+	var fog_tex: Texture2D
+	var fog_enabled := 0.0
 	if _fog != null and _fog.texture != null:
-		_ground_mat.set_shader_parameter("fog_tex", _fog.texture)
-		_ground_mat.set_shader_parameter("fog_enabled", 1.0)
-		return
-	var blank := Image.create(1, 1, false, Image.FORMAT_RGBA8)
-	blank.fill(Color(1, 1, 1, 1))
-	_ground_mat.set_shader_parameter("fog_tex", ImageTexture.create_from_image(blank))
-	_ground_mat.set_shader_parameter("fog_enabled", 0.0)
+		fog_tex = _fog.texture
+		fog_enabled = 1.0
+	else:
+		var blank := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+		blank.fill(Color(1, 1, 1, 1))
+		fog_tex = ImageTexture.create_from_image(blank)
+	var map_size := Vector2(MapConfig.width, MapConfig.height)
+	if _ground_mat != null:
+		_ground_mat.set_shader_parameter("map_size", map_size)
+		_ground_mat.set_shader_parameter("fog_tex", fog_tex)
+		_ground_mat.set_shader_parameter("fog_enabled", fog_enabled)
+	for mat in _wall_steep_mats:
+		if mat == null:
+			continue
+		mat.set_shader_parameter("map_size", map_size)
+		mat.set_shader_parameter("fog_tex", fog_tex)
+		mat.set_shader_parameter("fog_enabled", fog_enabled)
 
 ## Friendly armies stamp a disc. The radius reaches SIGHT past the outermost living soldier.
 func _update_fog() -> void:
@@ -1086,6 +1116,17 @@ func _apply_fog_to_props() -> void:
 		var chest_sprite := anchor.get_node_or_null("Sprite")
 		if chest_sprite is Sprite3D:
 			_apply_fog_sprite(chest_sprite, anchor.position.x, anchor.position.z, Color.WHITE)
+	for wall in _walls:
+		for sec in wall.sections:
+			if not sec.alive:
+				continue
+			var node: Node = sec.get("node", null)
+			if node == null or not is_instance_valid(node):
+				continue
+			var at: Vector3 = (node as Node3D).position
+			for child in node.get_children():
+				if child is Sprite3D:
+					_apply_fog_sprite(child, at.x, at.z, Color.WHITE)
 
 func _apply_fog_sprite(sprite: Sprite3D, x: float, z: float, base: Color) -> void:
 	var shade: float = _fog.light_at(x, z)
@@ -2038,6 +2079,11 @@ func _build_draft_controls(panel: PanelContainer) -> void:
 	_draft_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_draft_status.custom_minimum_size = Vector2(240, 0)
 	vbox.add_child(_draft_status)
+	var wall_btn := Button.new()
+	wall_btn.name = "CreateWallBtn"
+	wall_btn.text = "Create wall"
+	wall_btn.pressed.connect(_on_create_wall_pressed)
+	vbox.add_child(wall_btn)
 
 func _on_draft_create_pressed(horse_cb: CheckBox, spear_cb: CheckBox, bow_cb: CheckBox, armour_cb: CheckBox, sword_cb: CheckBox, long_spear_cb: CheckBox, shield_cb: CheckBox):
 	var count := DEFAULT_SOLDIERS_PER_ARMY
@@ -3220,6 +3266,7 @@ func _physics_process(delta: float):
 			# client starts the match with a backlog it has to skip (see _flush_pending_march).
 			return
 		_server_capture_and_resources(delta)
+		_advance_wall_sections(delta)
 		_update_aggressive_armies(delta)
 		_update_map_dragon_ai(delta)
 		_step_sim(delta)
@@ -3813,6 +3860,8 @@ func _commit_group_formation_line_3d(line_start: Vector2, line_end: Vector2):
 	rpc_id(1, "_server_order_move", ids, dests, facings, widths, _is_attack_move_mode())
 
 func _handle_world3d_mouse_extended(event: InputEvent):
+	if _wall_placing and _handle_wall_place_input(event):
+		return
 	var my_id := multiplayer.get_unique_id()
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -3888,6 +3937,9 @@ func _handle_world3d_mouse_extended(event: InputEvent):
 				_update_formation_ghosts_3d(_rmb_press_ground, cur)
 
 func _handle_key(event: InputEventKey):
+	if _wall_placing and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
+		_cancel_wall_place()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if _selection_bar != null:
 			if event.keycode == KEY_M:
@@ -4393,3 +4445,417 @@ func get_my_armies() -> Array:
 		if army.owner_id == my_id and not army.is_routed:
 			result.append(army)
 	return result
+
+
+func _on_create_wall_pressed() -> void:
+	_ensure_palisade_textures()
+	_wall_placing = true
+	_wall_have_start = false
+	_clear_wall_preview()
+	if _draft_status != null:
+		_draft_status.text = "Click the start of the wall. Right-click cancels."
+
+func _cancel_wall_place() -> void:
+	_wall_placing = false
+	_wall_have_start = false
+	_clear_wall_preview()
+
+func _clear_wall_preview() -> void:
+	if _wall_preview == null:
+		return
+	for child in _wall_preview.get_children():
+		child.queue_free()
+
+func _handle_wall_place_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if not mb.pressed:
+			return false
+		if mb.button_index == MOUSE_BUTTON_RIGHT:
+			_cancel_wall_place()
+			return true
+		if mb.button_index != MOUSE_BUTTON_LEFT:
+			return false
+		var hit := _raycast_ground_at_screen(mb.position)
+		if hit == Vector3.ZERO:
+			return true
+		var xz := Vector2(hit.x, hit.z)
+		if not _wall_have_start:
+			_wall_have_start = true
+			_wall_start = xz
+			if _draft_status != null:
+				_draft_status.text = "Click the end of the wall."
+			return true
+		rpc_id(1, "request_build_wall", _wall_start.x, _wall_start.y, xz.x, xz.y)
+		_cancel_wall_place()
+		return true
+	if event is InputEventMouseMotion and _wall_have_start:
+		var mm := event as InputEventMouseMotion
+		var aim_hit := _raycast_ground_at_screen(mm.position)
+		if aim_hit != Vector3.ZERO:
+			_update_wall_preview(Vector2(aim_hit.x, aim_hit.z))
+		return true
+	return false
+
+func _local_stone_count() -> int:
+	var pid := multiplayer.get_unique_id()
+	if GameState.resources.has(pid):
+		return int(GameState.resources[pid].get("stones", 0))
+	return int(GameState.default_resources().get("stones", 0))
+
+func _update_wall_preview(aim: Vector2) -> void:
+	_clear_wall_preview()
+	_ensure_palisade_textures()
+	var planned: Dictionary = _WallBuilder.plan(_wall_start, aim, _local_stone_count(), _palisade_section_len)
+	if not planned.ok:
+		if _draft_status != null:
+			_draft_status.text = "One stone builds one wall section."
+		return
+	if _wall_preview == null:
+		_wall_preview = Node3D.new()
+		_wall_preview.name = "WallPreview"
+		add_child(_wall_preview)
+	var start: Vector2 = planned.start
+	var end: Vector2 = planned.end
+	for i in range(int(planned.count)):
+		var lips: Dictionary = _WallBuilder.section_lips(start, end, i, _palisade_section_len)
+		_wall_preview.add_child(_make_section_node(lips, 0.55))
+	if _draft_status != null:
+		_draft_status.text = "Sections: %d. One stone each. Click to build." % int(planned.count)
+
+func _ensure_palisade_textures() -> void:
+	if _palisade_front == null:
+		_palisade_front = _load_image_texture(PALISADE_FRONT_PATH)
+	if _palisade_back == null:
+		_palisade_back = _load_image_texture(PALISADE_BACK_PATH)
+	var tw := 1792.0
+	var th := 524.0
+	if _palisade_front != null:
+		tw = float(_palisade_front.get_width())
+		th = float(_palisade_front.get_height())
+	_palisade_section_len = _WallBuilder.section_length(tw, th)
+
+func _ensure_wall_root() -> Node3D:
+	if _wall_root == null or not is_instance_valid(_wall_root):
+		_wall_root = Node3D.new()
+		_wall_root.name = "Walls"
+		add_child(_wall_root)
+	return _wall_root
+
+func _make_palisade_sprite(tex: Texture2D, facing: Vector2) -> Sprite3D:
+	var sprite := Sprite3D.new()
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	sprite.shaded = false
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+	sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	var tex_h := 1.0
+	if tex != null:
+		tex_h = maxf(float(tex.get_height()), 1.0)
+	sprite.pixel_size = _WallBuilder.PALISADE_WORLD_HEIGHT / tex_h
+	var z_axis := Vector3(facing.x, 0.0, facing.y)
+	if z_axis.length_squared() < 0.0001:
+		z_axis = Vector3(0, 0, 1)
+	z_axis = z_axis.normalized()
+	var x_axis := Vector3.UP.cross(z_axis).normalized()
+	sprite.basis = Basis(x_axis, Vector3.UP, z_axis)
+	sprite.position = z_axis * 0.45
+	sprite.position.y = _WallBuilder.PALISADE_WORLD_HEIGHT * 0.5
+	return sprite
+
+func _make_section_node(lips: Dictionary, alpha: float, crest_y: float = -1.0) -> Node3D:
+	var mid: Vector2 = lips.mid
+	var ground_y: float = crest_y if crest_y >= 0.0 else _terrain_grid_height_at(mid.x, mid.y)
+	var node := Node3D.new()
+	node.position = Vector3(mid.x, ground_y, mid.y)
+	var front: Vector2 = lips.front
+	if _palisade_front != null:
+		var front_sprite := _make_palisade_sprite(_palisade_front, front)
+		front_sprite.name = "Front"
+		front_sprite.modulate.a = alpha
+		node.add_child(front_sprite)
+	if _palisade_back != null:
+		var back_sprite := _make_palisade_sprite(_palisade_back, -front)
+		back_sprite.name = "Back"
+		back_sprite.modulate.a = alpha
+		node.add_child(back_sprite)
+	return node
+
+func _wall_segment_placeable(start: Vector2, end: Vector2) -> bool:
+	var length := start.distance_to(end)
+	var steps := maxi(int(ceil(length / 10.0)), 1)
+	for i in range(steps + 1):
+		var point: Vector2 = start.lerp(end, float(i) / float(steps))
+		if point.x < 0.0 or point.y < 0.0 or point.x > MapConfig.width or point.y > MapConfig.height:
+			return false
+		if not is_walkable_at(point.x, point.y):
+			return false
+	return true
+
+func _wall_sample_bounds(start: Vector2, end: Vector2) -> Dictionary:
+	var reach := _WallBuilder.reach()
+	var min_x := minf(start.x, end.x) - reach
+	var max_x := maxf(start.x, end.x) + reach
+	var min_z := minf(start.y, end.y) - reach
+	var max_z := maxf(start.y, end.y) + reach
+	return {
+		"i0": clampi(int(floor(min_x / _terrain_step)), 0, _terrain_cols - 1),
+		"i1": clampi(int(ceil(max_x / _terrain_step)), 0, _terrain_cols - 1),
+		"j0": clampi(int(floor(min_z / _terrain_step)), 0, _terrain_rows - 1),
+		"j1": clampi(int(ceil(max_z / _terrain_step)), 0, _terrain_rows - 1),
+	}
+
+func _wall_crest_y(start: Vector2, end: Vector2) -> float:
+	var bounds: Dictionary = _wall_sample_bounds(start, end)
+	var highest := -1.0e9
+	var found := false
+	for j in range(int(bounds.j0), int(bounds.j1) + 1):
+		for i in range(int(bounds.i0), int(bounds.i1) + 1):
+			var point := Vector2(float(i) * _terrain_step, float(j) * _terrain_step)
+			var frame: Dictionary = _WallBuilder._frame(point, start, end)
+			if not frame.ok:
+				continue
+			if _WallBuilder.lateral_factor(float(frame.signed)) < 1.0:
+				continue
+			if _WallBuilder.along_factor(float(frame.along), float(frame.length)) < 1.0:
+				continue
+			highest = maxf(highest, _terrain_heights[j * _terrain_cols + i])
+			found = true
+	if not found:
+		highest = _terrain_grid_height_at((start.x + end.x) * 0.5, (start.y + end.y) * 0.5)
+	return highest + _WallBuilder.PEAK
+
+func _stamp_wall_heights(start: Vector2, end: Vector2) -> float:
+	var crest_y := _wall_crest_y(start, end)
+	var bounds: Dictionary = _wall_sample_bounds(start, end)
+	for j in range(int(bounds.j0), int(bounds.j1) + 1):
+		for i in range(int(bounds.i0), int(bounds.i1) + 1):
+			var idx := j * _terrain_cols + i
+			var point := Vector2(float(i) * _terrain_step, float(j) * _terrain_step)
+			var ground_y: float = _terrain_heights[idx]
+			var delta := _WallBuilder.added_height(point, start, end, ground_y, crest_y)
+			if delta <= 0.0:
+				continue
+			_terrain_heights[idx] = ground_y + delta
+	return crest_y
+
+func _rebuild_movement_grid() -> void:
+	if _walkability == null or _terrain_heights.is_empty():
+		return
+	var cfg := MapConfig.get_walkability()
+	_walkability.build(
+		_terrain_heights,
+		_terrain_cols,
+		_terrain_rows,
+		_terrain_step,
+		_water_basins,
+		cfg.max_slope_deg
+	)
+	_reapply_wall_blocks()
+	_apply_ground_walkability_visual()
+
+func _reapply_wall_blocks() -> void:
+	if _walkability == null:
+		return
+	var cells: Array = []
+	for wall in _walls:
+		for sec in wall.sections:
+			if not sec.alive:
+				continue
+			cells.append_array(_WallBuilder.cells_near_segment(
+				sec.lip_a, sec.lip_b, _terrain_cols, _terrain_rows, _terrain_step, _WallBuilder.BLOCK_RADIUS
+			))
+	_walkability.apply_blocked_cells(cells)
+	if _sim != null:
+		_sim.refresh_walk_grid()
+
+func _build_steep_overlay(start: Vector2, end: Vector2, crest_y: float) -> MeshInstance3D:
+	var seg := end - start
+	var length := seg.length()
+	if length < 1.0:
+		return null
+	var dir := seg / length
+	var front := _WallBuilder.left_normal(dir)
+	var sample := 4.0
+	var count := maxi(int(ceil(length / sample)), 1)
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var indices := PackedInt32Array()
+	for s in range(count + 1):
+		var along := minf(float(s) * sample, length)
+		var base := start + dir * along
+		var lip := base + front * _WallBuilder.FLAT_HALF
+		var toe := base + front * (_WallBuilder.FLAT_HALF + _WallBuilder.STEEP_WIDTH)
+		verts.append(Vector3(lip.x, crest_y + 0.2, lip.y))
+		verts.append(Vector3(toe.x, _terrain_grid_height_at(toe.x, toe.y) + 0.3, toe.y))
+		var u := along / 16.0
+		uvs.append(Vector2(u, 0.0))
+		uvs.append(Vector2(u, 1.0))
+	for s in range(count):
+		var i := s * 2
+		indices.append(i)
+		indices.append(i + 1)
+		indices.append(i + 2)
+		indices.append(i + 2)
+		indices.append(i + 1)
+		indices.append(i + 3)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var inst := MeshInstance3D.new()
+	inst.name = "SteepFace"
+	inst.mesh = mesh
+	inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mat := ShaderMaterial.new()
+	mat.shader = WALL_STEEP_SHADER
+	var steep := _load_steep_hills_texture()
+	if steep != null:
+		mat.set_shader_parameter("steep_tex", steep)
+	_wall_steep_mats.append(mat)
+	inst.material_override = mat
+	_bind_fog_material()
+	return inst
+
+func _apply_built_wall(wall_id: int, owner: int, start: Vector2, end: Vector2) -> void:
+	_ensure_palisade_textures()
+	var length := start.distance_to(end)
+	var count := maxi(int(round(length / _palisade_section_len)), 1)
+	var crest_y := _stamp_wall_heights(start, end)
+	_upload_terrain_mesh(false)
+	_sync_height_grids()
+	var sections: Array = []
+	for i in range(count):
+		var lips: Dictionary = _WallBuilder.section_lips(start, end, i, _palisade_section_len)
+		sections.append({
+			"index": i,
+			"alive": true,
+			"timer": 0.0,
+			"lip_a": lips.lip_a,
+			"lip_b": lips.lip_b,
+			"node": null,
+		})
+	var wall := {
+		"id": wall_id,
+		"owner": owner,
+		"start": start,
+		"end": end,
+		"sections": sections,
+	}
+	_walls.append(wall)
+	_rebuild_movement_grid()
+	var root := _ensure_wall_root()
+	var anchor := Node3D.new()
+	anchor.name = "Wall_%d" % wall_id
+	root.add_child(anchor)
+	var steep := _build_steep_overlay(start, end, crest_y)
+	if steep != null:
+		anchor.add_child(steep)
+	for sec in sections:
+		var lips: Dictionary = _WallBuilder.section_lips(start, end, int(sec.index), _palisade_section_len)
+		var node := _make_section_node(lips, 1.0, crest_y)
+		node.name = "Section_%d" % int(sec.index)
+		anchor.add_child(node)
+		sec.node = node
+	print("TEST_WALL_BUILT: id=%d owner=%d sections=%d length=%.1f" % [wall_id, owner, count, length])
+
+func _remove_wall_section(wall_id: int, index: int) -> void:
+	for wall in _walls:
+		if int(wall.id) != wall_id:
+			continue
+		for sec in wall.sections:
+			if int(sec.index) != index or not sec.alive:
+				continue
+			sec.alive = false
+			var node: Node = sec.node
+			if node != null and is_instance_valid(node):
+				node.queue_free()
+			sec.node = null
+			_reapply_wall_blocks()
+			print("TEST_WALL_SECTION_REMOVED: id=%d index=%d" % [wall_id, index])
+			return
+
+func _section_under_melee(sec: Dictionary, owner: int) -> bool:
+	if _sim == null:
+		return false
+	var cap := _WallBuilder.MELEE_REACH_CAP
+	for i in range(_sim.count):
+		if not _sim.is_alive(i):
+			continue
+		if (_sim.flags[i] & _UnitSim.F_RANGED) != 0:
+			continue
+		if int(_sim.owner_pid[i]) == owner:
+			continue
+		var reach := minf(float(_sim.attack_range[i]), cap)
+		var pos := Vector2(_sim.pos_x[i], _sim.pos_z[i])
+		if _WallBuilder.distance_to_segment(pos, sec.lip_a, sec.lip_b) <= reach:
+			return true
+	return false
+
+func _advance_wall_sections(delta: float) -> void:
+	if _sim == null or _walls.is_empty():
+		return
+	var dt := minf(maxf(delta, 0.0), 0.1)
+	var broken: Array = []
+	for wall in _walls:
+		var owner := int(wall.owner)
+		for sec in wall.sections:
+			if not sec.alive:
+				continue
+			if _section_under_melee(sec, owner):
+				sec.timer = float(sec.timer) + dt
+			if float(sec.timer) + 0.001 >= _WallBuilder.BREAK_SECONDS:
+				broken.append([int(wall.id), int(sec.index)])
+	for pair in broken:
+		_remove_wall_section(int(pair[0]), int(pair[1]))
+		if _multiplayer_active():
+			rpc("_client_remove_wall_section", int(pair[0]), int(pair[1]))
+
+@rpc("any_peer", "reliable")
+func request_build_wall(x1: float, z1: float, x2: float, z2: float) -> void:
+	if not multiplayer.is_server() or game_over:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = 1
+	if sender not in GameState.players:
+		return
+	_ensure_palisade_textures()
+	if not GameState.resources.has(sender):
+		GameState.resources[sender] = GameState.default_resources()
+	var stones := int(GameState.resources[sender].get("stones", 0))
+	var planned: Dictionary = _WallBuilder.plan(Vector2(x1, z1), Vector2(x2, z2), stones, _palisade_section_len)
+	if not planned.ok:
+		rpc_id(sender, "_client_wall_failed", "One stone builds one wall section.")
+		return
+	var start: Vector2 = planned.start
+	var end: Vector2 = planned.end
+	if not _wall_segment_placeable(start, end):
+		rpc_id(sender, "_client_wall_failed", "Cannot build a wall there.")
+		return
+	GameState.resources[sender]["stones"] = stones - int(planned.count)
+	_sync_capture_state()
+	_next_wall_id += 1
+	print("TEST_WALL_PAID: pid=%d stones=%d sections=%d" % [sender, stones - int(planned.count), int(planned.count)])
+	_apply_built_wall(_next_wall_id, sender, start, end)
+	rpc("_client_add_wall", _next_wall_id, sender, start.x, start.y, end.x, end.y)
+
+@rpc("authority", "reliable")
+func _client_add_wall(wall_id: int, owner: int, x1: float, z1: float, x2: float, z2: float) -> void:
+	if multiplayer.is_server():
+		return
+	_apply_built_wall(wall_id, owner, Vector2(x1, z1), Vector2(x2, z2))
+
+@rpc("authority", "reliable")
+func _client_remove_wall_section(wall_id: int, index: int) -> void:
+	if multiplayer.is_server():
+		return
+	_remove_wall_section(wall_id, index)
+
+@rpc("authority", "reliable")
+func _client_wall_failed(reason: String) -> void:
+	if _draft_status != null:
+		_draft_status.text = reason

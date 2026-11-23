@@ -7,7 +7,7 @@ const SpatialHash := preload("res://sim/SpatialHash.gd")
 const Formation := preload("res://sim/FormationController.gd")
 const ArrowTrajectory := preload("res://ArrowTrajectory.gd")
 
-enum UnitType { CLUBMAN, SPEARMAN, KNIGHT, BOWMAN, HORSE_ARCHER, DRAGON, ARMORED_SWORDSMAN, ARMORED_BOWMAN, KNIGHT_LONG_SPEAR, SWORDSMAN_SHIELD, ARMOURED_SWORDSMAN_SHIELD, MOUNTED_KNIGHT_SHIELD, MOUNTED_LANCE_KNIGHT, ARMOURED_PIKE, DRAGON_2 }
+enum UnitType { CLUBMAN, SPEARMAN, KNIGHT, BOWMAN, HORSE_ARCHER, DRAGON, ARMORED_SWORDSMAN, ARMORED_BOWMAN, KNIGHT_LONG_SPEAR, SWORDSMAN_SHIELD, ARMOURED_SWORDSMAN_SHIELD, MOUNTED_KNIGHT_SHIELD, MOUNTED_LANCE_KNIGHT, ARMOURED_PIKE, DRAGON_2, SHIELDED_SPEARMAN, ARMOURED_SPEARMAN, ARMOURED_SPEARMAN_SHIELD, PIKEMAN, SHIELDED_PIKEMAN, ARMOURED_PIKEMAN_SHIELD, SHIELDED_BOWMAN, ARMOURED_BOWMAN_SHIELD, ARMOURED_HORSE_ARCHER, ARMOURED_KNIGHT, ARMOURED_KNIGHT_SHIELD, SHIELDED_LANCER, ARMOURED_LANCER }
 
 const SIM_DT := 0.05
 const F_ALIVE := 1
@@ -235,6 +235,16 @@ func setup(p_walkability, p_map_w: float, p_map_h: float, authority: bool) -> vo
 		_wk_rows = int(gd.rows)
 		_wk_inv_step = 1.0 / float(gd.step)
 
+func refresh_walk_grid() -> void:
+	_wk_cols = 0
+	_wk_bytes = PackedByteArray()
+	if walkability != null and walkability.has_method("grid_data"):
+		var gd: Dictionary = walkability.grid_data()
+		_wk_bytes = gd.bytes
+		_wk_cols = int(gd.cols)
+		_wk_rows = int(gd.rows)
+		_wk_inv_step = 1.0 / float(gd.step)
+
 ## -1 when the checked boxes are not exactly one recipe. Shield only matches the recipes that include it.
 static func unit_type_for_loadout(horse: bool, spear: bool, bow: bool, armour: bool = false, sword: bool = false, long_spear: bool = false, shield: bool = false) -> int:
 	var bits := 0
@@ -279,6 +289,32 @@ static func unit_type_for_loadout(horse: bool, spear: bool, bow: bool, armour: b
 			return UnitType.ARMOURED_PIKE
 		105:
 			return UnitType.MOUNTED_LANCE_KNIGHT
+		66:
+			return UnitType.SHIELDED_SPEARMAN
+		10:
+			return UnitType.ARMOURED_SPEARMAN
+		74:
+			return UnitType.ARMOURED_SPEARMAN_SHIELD
+		32:
+			return UnitType.PIKEMAN
+		96:
+			return UnitType.SHIELDED_PIKEMAN
+		104:
+			return UnitType.ARMOURED_PIKEMAN_SHIELD
+		68:
+			return UnitType.SHIELDED_BOWMAN
+		76:
+			return UnitType.ARMOURED_BOWMAN_SHIELD
+		13:
+			return UnitType.ARMOURED_HORSE_ARCHER
+		25:
+			return UnitType.ARMOURED_KNIGHT
+		89:
+			return UnitType.ARMOURED_KNIGHT_SHIELD
+		97:
+			return UnitType.SHIELDED_LANCER
+		41:
+			return UnitType.ARMOURED_LANCER
 		_:
 			return -1
 
@@ -301,6 +337,19 @@ static func unit_type_name(t: int) -> String:
 		UnitType.MOUNTED_LANCE_KNIGHT: return "mounted_knight_with_armour_shield_and_lance"
 		UnitType.ARMOURED_PIKE: return "armoured_soldier_with_long_pike"
 		UnitType.DRAGON_2: return "dragon_2"
+		UnitType.SHIELDED_SPEARMAN: return "shielded_spearman"
+		UnitType.ARMOURED_SPEARMAN: return "armoured_spearman"
+		UnitType.ARMOURED_SPEARMAN_SHIELD: return "armoured_spearman_with_shield"
+		UnitType.PIKEMAN: return "pikeman"
+		UnitType.SHIELDED_PIKEMAN: return "shielded_pikeman"
+		UnitType.ARMOURED_PIKEMAN_SHIELD: return "armoured_pikeman_with_shield"
+		UnitType.SHIELDED_BOWMAN: return "shielded_bowman"
+		UnitType.ARMOURED_BOWMAN_SHIELD: return "armoured_bowman_with_shield"
+		UnitType.ARMOURED_HORSE_ARCHER: return "armoured_horse_archer"
+		UnitType.ARMOURED_KNIGHT: return "armoured_knight"
+		UnitType.ARMOURED_KNIGHT_SHIELD: return "armoured_knight_with_sword_and_shield"
+		UnitType.SHIELDED_LANCER: return "shielded_lancer"
+		UnitType.ARMOURED_LANCER: return "armoured_lancer"
 		_: return "clubman"
 
 static func speed_for_type(t: int) -> float:
@@ -1950,11 +1999,12 @@ func _perform_attack(i: int, t: int) -> void:
 		return
 	_ensure_rules()
 	var atk := attack[i]
-	var knight_like := utype[i] == UnitType.KNIGHT or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.MOUNTED_KNIGHT_SHIELD or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT
-	var spear_like := utype[i] == UnitType.SPEARMAN or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.ARMOURED_PIKE or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT
+	var knight_like := utype[i] == UnitType.KNIGHT or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.MOUNTED_KNIGHT_SHIELD or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT or utype[i] == UnitType.ARMOURED_KNIGHT or utype[i] == UnitType.ARMOURED_KNIGHT_SHIELD or utype[i] == UnitType.SHIELDED_LANCER or utype[i] == UnitType.ARMOURED_LANCER
+	var spear_like := utype[i] == UnitType.SPEARMAN or utype[i] == UnitType.KNIGHT_LONG_SPEAR or utype[i] == UnitType.ARMOURED_PIKE or utype[i] == UnitType.MOUNTED_LANCE_KNIGHT or utype[i] == UnitType.SHIELDED_SPEARMAN or utype[i] == UnitType.ARMOURED_SPEARMAN or utype[i] == UnitType.ARMOURED_SPEARMAN_SHIELD or utype[i] == UnitType.PIKEMAN or utype[i] == UnitType.SHIELDED_PIKEMAN or utype[i] == UnitType.ARMOURED_PIKEMAN_SHIELD or utype[i] == UnitType.SHIELDED_LANCER or utype[i] == UnitType.ARMOURED_LANCER
+	var spear_foot := utype[t] == UnitType.SPEARMAN or utype[t] == UnitType.SHIELDED_SPEARMAN or utype[t] == UnitType.ARMOURED_SPEARMAN or utype[t] == UnitType.ARMOURED_SPEARMAN_SHIELD or utype[t] == UnitType.PIKEMAN or utype[t] == UnitType.SHIELDED_PIKEMAN or utype[t] == UnitType.ARMOURED_PIKEMAN_SHIELD or utype[t] == UnitType.ARMOURED_PIKE
 	if spear_like and (flags[t] & F_HORSE) != 0:
 		atk += _spear_vs_horse_attack
-	if knight_like and (flags[t] & F_HORSE) == 0 and utype[t] != UnitType.SPEARMAN:
+	if knight_like and (flags[t] & F_HORSE) == 0 and not spear_foot:
 		atk += _knight_vs_unmounted_attack
 	if knight_like and _charge_cd[i] <= 0.0 and _travel_speed[i] >= speed[i] * _knight_charge_min_speed_ratio:
 		atk += _knight_charge_attack

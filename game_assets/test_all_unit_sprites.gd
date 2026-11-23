@@ -17,6 +17,19 @@ const RECIPES: Array = [
 	[true, false, false, false, true, false, true, 11],
 	[false, false, false, true, false, true, false, 13],
 	[true, false, false, true, false, true, true, 12],
+	[false, true, false, false, false, false, true, 15],
+	[false, true, false, true, false, false, false, 16],
+	[false, true, false, true, false, false, true, 17],
+	[false, false, false, false, false, true, false, 18],
+	[false, false, false, false, false, true, true, 19],
+	[false, false, false, true, false, true, true, 20],
+	[false, false, true, false, false, false, true, 21],
+	[false, false, true, true, false, false, true, 22],
+	[true, false, true, true, false, false, false, 23],
+	[true, false, false, true, true, false, false, 24],
+	[true, false, false, true, true, false, true, 25],
+	[true, false, false, false, false, true, true, 26],
+	[true, false, false, true, false, true, false, 27],
 ]
 
 var _UnitSim
@@ -76,8 +89,9 @@ func _begin() -> void:
 				_fail("drafted %s but spawned type %s" % [expect_name, _UnitSim.unit_type_name(world._sim.utype[uid])])
 				return
 			drafted.append({"color": color, "type": expect_name, "army": army})
-		if int(gs.resources[pid].get("villagers", 0)) != 870:
-			_fail("player %d villagers left=%s after ordering every formation, expected 870" % [pid, str(gs.resources[pid].get("villagers", 0))])
+		var villagers_left := 1000 - RECIPES.size() * 10
+		if int(gs.resources[pid].get("villagers", 0)) != villagers_left:
+			_fail("player %d villagers left=%s after ordering every formation, expected %d" % [pid, str(gs.resources[pid].get("villagers", 0)), villagers_left])
 			return
 	var dragon = world._create_army("neutral_dragon", 0, "Dragon", Vector2(300, 300), 0.0, {"dragon": true, "soldiers": 1})
 	var dragon_2 = world._create_army("neutral_dragon_2", 0, "Dragon2", Vector2(420, 300), 0.0, {"unit": "dragon_2", "soldiers": 1})

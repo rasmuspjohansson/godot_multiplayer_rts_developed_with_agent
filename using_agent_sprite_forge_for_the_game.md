@@ -1,5 +1,7 @@
 # Using Agent Sprite Forge for this game
 
+The command that creates a unit is `orchestrator/run_pipeline.py`. See `../orchestrator/README.md`. Attack styles are `sword`, `spear`, `lance`, and `bow`.
+
 Sprite sheets for a unit are one video clip per action, cut into the horizontal strip the game already plays. The stills in `source_art/images/` are the master art. The pipeline does not redraw them.
 
 ## Keys and models
@@ -170,4 +172,4 @@ python -m rts_pipeline.generate_unit \
 
 `--actions` on a unit that already has a plan only runs actions that were in that plan. The first command for a unit should list every action you want.
 
-Profiles live in `rts_pipeline/profiles/`. `attack_style` is `sword` or `dragon`. The dragon profile’s `idle_extra` is the wing sentence above.
+Profiles live in `rts_pipeline/profiles/`. `attack_style` is `sword`, `spear`, `lance`, `bow`, or `dragon`. The dragon profile’s `idle_extra` is the wing sentence above.

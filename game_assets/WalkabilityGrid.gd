@@ -4,6 +4,8 @@ extends RefCounted
 const _WaterBuilder = preload("res://WaterBuilder.gd")
 
 var _walkable: PackedByteArray = PackedByteArray()
+## Slope and water only. Palisade blocks punch holes in `_walkable` without repainting the ground.
+var _base: PackedByteArray = PackedByteArray()
 var _cols: int = 0
 var _rows: int = 0
 var _step: float = 20.0
@@ -30,7 +32,28 @@ func build(
 	for basin in water_basins:
 		_apply_water_basin(basin)
 		_apply_water_basin_polygon(basin)
+	_base = _walkable.duplicate()
 	_build_astar()
+
+## Movement grid returns to slope/water, then the given cells become impassable.
+func apply_blocked_cells(cells: Array) -> void:
+	if _base.size() != _walkable.size():
+		_base = _walkable.duplicate()
+	for idx in range(_walkable.size()):
+		_walkable[idx] = _base[idx]
+	for cell in cells:
+		var c: Vector2i = cell
+		if c.x < 0 or c.y < 0 or c.x >= _cols or c.y >= _rows:
+			continue
+		_walkable[c.y * _cols + c.x] = 0
+	_build_astar()
+
+func is_terrain_walkable_cell(i: int, j: int) -> bool:
+	if i < 0 or j < 0 or i >= _cols or j >= _rows:
+		return false
+	if _base.is_empty():
+		return is_walkable_cell(i, j)
+	return _base[j * _cols + i] != 0
 
 func walkable_count() -> int:
 	var n := 0

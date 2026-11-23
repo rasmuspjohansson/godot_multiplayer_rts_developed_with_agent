@@ -163,5 +163,57 @@
     "half_height": 99,
     "ranged": false,
     "horse": false
+  },
+  "shielded_spearman": {
+    "hp": 100, "attack": 13, "defense": 2, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "armoured_spearman": {
+    "hp": 100, "attack": 13, "defense": 4, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "armoured_spearman_with_shield": {
+    "hp": 100, "attack": 13, "defense": 4, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "pikeman": {
+    "hp": 100, "attack": 13, "defense": 2, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "shielded_pikeman": {
+    "hp": 100, "attack": 13, "defense": 2, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "armoured_pikeman_with_shield": {
+    "hp": 100, "attack": 13, "defense": 4, "range": 30, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": false, "horse": false
+  },
+  "shielded_bowman": {
+    "hp": 100, "attack": 6, "defense": 2, "range": 120, "speed": 11.11111111111111,
+    "radius": 4.5, "half_height": 11, "ranged": true, "horse": false
+  },
+  "armoured_bowman_with_shield": {
+    "hp": 100, "attack": 6, "defense": 4, "range": 120, "speed": 10,
+    "radius": 4.5, "half_height": 11, "ranged": true, "horse": false
+  },
+  "armoured_horse_archer": {
+    "hp": 200, "attack": 6, "defense": 4, "range": 120, "speed": 23.333333333333332,
+    "radius": 6.5, "half_height": 14, "ranged": true, "horse": true
+  },
+  "armoured_knight": {
+    "hp": 200, "attack": 10, "defense": 4, "range": 22, "speed": 23.333333333333332,
+    "radius": 6.5, "half_height": 14, "ranged": false, "horse": true
+  },
+  "armoured_knight_with_sword_and_shield": {
+    "hp": 200, "attack": 10, "defense": 4, "range": 22, "speed": 23.333333333333332,
+    "radius": 6.5, "half_height": 14, "ranged": false, "horse": true
+  },
+  "shielded_lancer": {
+    "hp": 200, "attack": 10, "defense": 2, "range": 30, "speed": 23.333333333333332,
+    "radius": 6.5, "half_height": 14, "ranged": false, "horse": true
+  },
+  "armoured_lancer": {
+    "hp": 200, "attack": 10, "defense": 4, "range": 30, "speed": 23.333333333333332,
+    "radius": 6.5, "half_height": 14, "ranged": false, "horse": true
   }
 }

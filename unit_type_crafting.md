@@ -86,6 +86,71 @@ The master picture is the source art the sprite sheets are made from.
       <td><img src="source_art/images/blue/Mounted_knight_with_armour_shield_and_lance/Mounted_knight_with_armour_shield_and_lancer.png" width="96" alt="mounted lance knight"></td>
     </tr>
     <tr>
+      <td>Shielded spearman</td>
+      <td>×</td><td></td><td>×</td><td></td><td></td><td></td><td></td><td>×</td>
+      <td><img src="source_art/images/blue/shielded_spearman/shielded_spearman.png" width="96" alt="shielded spearman"></td>
+    </tr>
+    <tr>
+      <td>Armoured spearman</td>
+      <td>×</td><td></td><td>×</td><td></td><td>×</td><td></td><td></td><td></td>
+      <td><img src="source_art/images/blue/armoured_spearman/armoured_spearman.png" width="96" alt="armoured spearman"></td>
+    </tr>
+    <tr>
+      <td>Armoured spearman with shield</td>
+      <td>×</td><td></td><td>×</td><td></td><td>×</td><td></td><td></td><td>×</td>
+      <td><img src="source_art/images/blue/armoured_spearman_with_shield/armoured_spearman_with_shield.png" width="96" alt="armoured spearman with shield"></td>
+    </tr>
+    <tr>
+      <td>Pikeman</td>
+      <td>×</td><td></td><td></td><td></td><td></td><td></td><td>×</td><td></td>
+      <td><img src="source_art/images/blue/pikeman/pikeman.png" width="96" alt="pikeman"></td>
+    </tr>
+    <tr>
+      <td>Shielded pikeman</td>
+      <td>×</td><td></td><td></td><td></td><td></td><td></td><td>×</td><td>×</td>
+      <td><img src="source_art/images/blue/shielded_pikeman/shielded_pikeman.png" width="96" alt="shielded pikeman"></td>
+    </tr>
+    <tr>
+      <td>Armoured pikeman with shield</td>
+      <td>×</td><td></td><td></td><td></td><td>×</td><td></td><td>×</td><td>×</td>
+      <td><img src="source_art/images/blue/armoured_pikeman_with_shield/armoured_pikeman_with_shield.png" width="96" alt="armoured pikeman with shield"></td>
+    </tr>
+    <tr>
+      <td>Shielded bowman</td>
+      <td>×</td><td></td><td></td><td>×</td><td></td><td></td><td></td><td>×</td>
+      <td><img src="source_art/images/blue/shielded_bowman/shielded_bowman.png" width="96" alt="shielded bowman"></td>
+    </tr>
+    <tr>
+      <td>Armoured bowman with shield</td>
+      <td>×</td><td></td><td></td><td>×</td><td>×</td><td></td><td></td><td>×</td>
+      <td><img src="source_art/images/blue/armoured_bowman_with_shield/armoured_bowman_with_shield.png" width="96" alt="armoured bowman with shield"></td>
+    </tr>
+    <tr>
+      <td>Armoured horse archer</td>
+      <td>×</td><td>×</td><td></td><td>×</td><td>×</td><td></td><td></td><td></td>
+      <td><img src="source_art/images/blue/armoured_horse_archer/armoured_horse_archer.png" width="96" alt="armoured horse archer"></td>
+    </tr>
+    <tr>
+      <td>Armoured knight</td>
+      <td>×</td><td>×</td><td></td><td></td><td>×</td><td>×</td><td></td><td></td>
+      <td><img src="source_art/images/blue/armoured_knight/armoured_knight.png" width="96" alt="armoured knight"></td>
+    </tr>
+    <tr>
+      <td>Armoured knight with sword and shield</td>
+      <td>×</td><td>×</td><td></td><td></td><td>×</td><td>×</td><td></td><td>×</td>
+      <td><img src="source_art/images/blue/armoured_knight_with_sword_and_shield/armoured_knight_with_sword_and_shield.png" width="96" alt="armoured knight with sword and shield"></td>
+    </tr>
+    <tr>
+      <td>Shielded lancer</td>
+      <td>×</td><td>×</td><td></td><td></td><td></td><td></td><td>×</td><td>×</td>
+      <td><img src="source_art/images/blue/shielded_lancer/shielded_lancer.png" width="96" alt="shielded lancer"></td>
+    </tr>
+    <tr>
+      <td>Armoured lancer</td>
+      <td>×</td><td>×</td><td></td><td></td><td>×</td><td></td><td>×</td><td></td>
+      <td><img src="source_art/images/blue/armoured_lancer/armoured_lancer.png" width="96" alt="armoured lancer"></td>
+    </tr>
+    <tr>
       <td>Dragon</td>
       <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
       <td><img src="source_art/images/blue/dragon/dragon.png" width="96" alt="dragon"></td>

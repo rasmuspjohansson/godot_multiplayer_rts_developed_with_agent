@@ -3,7 +3,7 @@
 ## Open
 0. verfiy all new kind of units can spawn. 
 1. make more kinds of units ,
-2. make walls that use resource stones.  in treasure chests can build wall segments. (recrout , check stone+ number, draw line , scalable from one side only. )
+2. Walls that cost stones are in. Chests can drop stones. One stone builds one section, climbable from the gentle side only while the palisade stands.
 
 
 fixa demo2. it takes to long time to load. 
